@@ -1,0 +1,95 @@
+:where(a, button, [tabindex]):focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--color-gold) 72%, white);
+  outline-offset: 3px;
+}
+
+.pointer-surface {
+  isolation: isolate;
+}
+
+.pointer-surface::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    420px circle at var(--pointer-x, 50%) var(--pointer-y, 50%),
+    rgba(190, 229, 212, 0.14),
+    transparent 58%
+  );
+  transition: opacity 240ms ease;
+}
+
+.pointer-surface:hover::after {
+  opacity: 1;
+}
+.pointer-surface > * {
+  position: relative;
+  z-index: 1;
+}
+
+.module-item,
+.pipeline,
+.surface,
+.metric,
+.kanban-card,
+.agenda .surface {
+  transition:
+    transform 220ms ease,
+    border-color 220ms ease,
+    box-shadow 220ms ease;
+}
+
+.module-item:hover,
+.pipeline:hover,
+.surface:hover,
+.metric:hover,
+.kanban-card:hover,
+.agenda .surface:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--color-forest) 24%, var(--color-line));
+  box-shadow: 0 9px 24px rgba(23, 63, 56, 0.08);
+}
+
+.primary,
+.secondary,
+.link-button,
+.menu-button,
+.search-results button,
+.sidebar nav button {
+  transition:
+    background-color 180ms ease,
+    border-color 180ms ease,
+    color 180ms ease,
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+@media (hover: none) {
+  .surface:hover,
+  .metric:hover,
+  .kanban-card:hover,
+  .agenda .surface:hover {
+    transform: none;
+    box-shadow: none;
+  }
+}
+
+.nav-item:active,
+.ui-button:active {
+  transform: translateY(1px);
+}
+
+@media (hover: none) {
+  .pointer-surface::after {
+    display: none;
+  }
+  .module-item:hover,
+  .pipeline:hover {
+    transform: none;
+    box-shadow: none;
+  }
+}

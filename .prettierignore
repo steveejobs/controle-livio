@@ -1,0 +1,7 @@
+node_modules
+dist
+.next
+coverage
+package-lock.json
+packages/db/prisma/migrations
+apps/web/next-env.d.ts

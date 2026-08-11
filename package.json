@@ -1,0 +1,59 @@
+{
+  "name": "livio-legal-crm",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Fundação segura e multiempresa para um CRM jurídico.",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "npm": ">=10.0.0"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/ui && npm run build -w @livio/api && npm run build -w @livio/web",
+    "build:packages": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/ui",
+    "dev": "npm run build:packages && concurrently -n api,web -c blue,magenta \"npm run dev -w @livio/api\" \"npm run dev -w @livio/web\"",
+    "dev:api": "npm run build:packages && npm run dev -w @livio/api",
+    "dev:web": "npm run build -w @livio/ui && npm run dev -w @livio/web",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint . --max-warnings=0",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run build:packages && npm run typecheck -w @livio/api && npm run typecheck -w @livio/web",
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:format": "prisma format --schema packages/db/prisma/schema.prisma",
+    "db:validate": "prisma validate --schema packages/db/prisma/schema.prisma",
+    "supabase:start": "supabase start",
+    "supabase:stop": "supabase stop",
+    "supabase:status": "supabase status",
+    "test:supabase": "node tools/supabase/rls.test.mjs",
+    "db:migrate:dev": "node tools/supabase/safety.mjs local-reset && supabase db reset",
+    "db:migrate:deploy": "node tools/supabase/safety.mjs remote-migrate && supabase db push --linked",
+    "db:migrate:status": "supabase migration list --linked",
+    "db:studio": "node tools/supabase/safety.mjs database-tool && prisma studio --schema packages/db/prisma/schema.prisma",
+    "db:seed:local": "node tools/supabase/safety.mjs local-reset && supabase db reset",
+    "bootstrap:admin": "tsx tools/supabase/bootstrap-admin.ts",
+    "postinstall": "npm run db:generate"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.35.0",
+    "@next/eslint-plugin-next": "^16.3.0",
+    "@types/node": "^24.3.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^9.35.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.2",
+    "supabase": "^2.112.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.42.0"
+  },
+  "overrides": {
+    "@nestjs/swagger": {
+      "js-yaml": "5.2.3"
+    }
+  }
+}

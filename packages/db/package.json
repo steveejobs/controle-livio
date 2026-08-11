@@ -1,0 +1,31 @@
+{
+  "name": "@livio/db",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "prisma"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "db:generate": "prisma generate",
+    "db:format": "prisma format",
+    "db:validate": "prisma validate",
+    "db:migrate:dev": "npm --prefix ../.. run db:migrate:dev",
+    "db:migrate:deploy": "npm --prefix ../.. run db:migrate:deploy",
+    "db:migrate:status": "npm --prefix ../.. run db:migrate:status",
+    "db:studio": "prisma studio",
+    "db:seed": "npm --prefix ../.. run db:seed"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.16.2"
+  },
+  "devDependencies": {
+    "@livio/shared": "*",
+    "prisma": "^6.16.2",
+    "tsx": "^4.20.6"
+  }
+}

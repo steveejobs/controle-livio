@@ -1,0 +1,5 @@
+/* Ponto único de entrada para o sistema visual da web. */
+@import './tokens.css';
+@import './motion.css';
+@import './interactions.css';
+@import './product-shell.css';
