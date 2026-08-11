@@ -11,6 +11,10 @@ const baseEnvironmentSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 
+const booleanEnvironmentValue = z
+  .union([z.boolean(), z.enum(['true', 'false'])])
+  .transform((value) => value === true || value === 'true');
+
 export const apiEnvironmentSchema = baseEnvironmentSchema
   .extend({
     API_PORT: z.coerce.number().int().min(1).max(65_535).default(3001),
@@ -37,11 +41,11 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     MAX_DOCUMENT_SIZE_MB: z.coerce.number().int().min(1).max(100).default(20),
     SMTP_HOST: z.string().min(1).optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
-    SMTP_SECURE: z.coerce.boolean().default(true),
+    SMTP_SECURE: booleanEnvironmentValue.default(true),
     SMTP_USER: z.string().min(1).optional(),
     SMTP_PASSWORD: z.string().min(1).optional(),
     SMTP_FROM: z.string().email().optional(),
-    TRUST_PROXY: z.coerce.boolean().default(false),
+    TRUST_PROXY: booleanEnvironmentValue.default(false),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   })
   .superRefine((environment, context) => {
@@ -100,12 +104,55 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
         message: 'SUPABASE_URL deve corresponder ao project ref confirmado',
       });
     }
+    if (environment.NODE_ENV === 'production') {
+      if (!['staging', 'production'].includes(environment.SUPABASE_ENVIRONMENT ?? '')) {
+        context.addIssue({
+          code: 'custom',
+          path: ['SUPABASE_ENVIRONMENT'],
+          message: 'Runtime de produção exige ambiente Supabase staging ou production',
+        });
+      }
+      if (
+        !environment.SUPABASE_PROJECT_REF ||
+        environment.SUPABASE_PROJECT_REF !== environment.CONFIRM_SUPABASE_PROJECT_REF
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['CONFIRM_SUPABASE_PROJECT_REF'],
+          message: 'Runtime de produção exige project ref confirmado',
+        });
+      }
+      if (
+        origins.some((origin) => {
+          try {
+            const url = new URL(origin);
+            return url.protocol !== 'https:' || localHosts.has(url.hostname);
+          } catch {
+            return true;
+          }
+        })
+      ) {
+        context.addIssue({
+          code: 'custom',
+          path: ['CORS_ORIGINS'],
+          message: 'Runtime de produção exige origens HTTPS não locais',
+        });
+      }
+      const authRedirect = new URL(environment.SUPABASE_AUTH_REDIRECT_URL);
+      if (authRedirect.protocol !== 'https:' || localHosts.has(authRedirect.hostname)) {
+        context.addIssue({
+          code: 'custom',
+          path: ['SUPABASE_AUTH_REDIRECT_URL'],
+          message: 'Runtime de produção exige redirect HTTPS não local',
+        });
+      }
+    }
   });
 
 export type ApiEnvironment = z.infer<typeof apiEnvironmentSchema>;
 
 export function parseApiEnvironment(values: Record<string, unknown>): ApiEnvironment {
-  return apiEnvironmentSchema.parse(values);
+  return apiEnvironmentSchema.parse({ ...values, API_PORT: values.API_PORT ?? values.PORT });
 }
 
 export function parseCorsOrigins(value: string): string[] {

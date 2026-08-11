@@ -49,9 +49,6 @@ async function main() {
   }
 
   const email = required('BOOTSTRAP_ADMIN_EMAIL').trim().toLowerCase();
-  const password = required('BOOTSTRAP_ADMIN_PASSWORD');
-  if (password.length < 12)
-    throw new Error('Bootstrap bloqueado: senha deve ter ao menos 12 caracteres');
   const fullName = required('BOOTSTRAP_ADMIN_NAME').trim();
   const organizationName = required('BOOTSTRAP_ORGANIZATION_NAME').trim();
   const organizationSlug = required('BOOTSTRAP_ORGANIZATION_SLUG').trim();
@@ -68,6 +65,9 @@ async function main() {
     if (listed.error) throw listed.error;
     authUserId = listed.data.users.find((user) => user.email?.toLowerCase() === email)?.id;
     if (!authUserId) {
+      const password = required('BOOTSTRAP_ADMIN_PASSWORD');
+      if (password.length < 12)
+        throw new Error('Bootstrap bloqueado: senha deve ter ao menos 12 caracteres');
       const created = await supabase.auth.admin.createUser({
         email,
         password,
@@ -80,107 +80,107 @@ async function main() {
       createdAuthUser = true;
     }
 
-    await prisma.$transaction(async (transaction) => {
-      const organization = await transaction.organization.upsert({
-        where: { slug: organizationSlug },
-        create: {
-          slug: organizationSlug,
-          legalName: organizationName,
-          tradeName: organizationName,
-        },
-        update: { legalName: organizationName, tradeName: organizationName, status: 'ACTIVE' },
-      });
-      await transaction.profile.upsert({
-        where: { id: authUserId! },
-        create: { id: authUserId!, email, fullName },
-        update: { email, fullName },
-      });
-      for (const resource of permissionResources) {
-        for (const action of permissionActions) {
-          await transaction.permission.upsert({
-            where: {
-              organizationId_resource_action: { organizationId: organization.id, resource, action },
-            },
-            create: { organizationId: organization.id, resource, action },
-            update: {},
-          });
-        }
-      }
-      const role = await transaction.role.upsert({
-        where: { organizationId_key: { organizationId: organization.id, key: 'administrator' } },
-        create: {
-          organizationId: organization.id,
-          key: 'administrator',
-          name: 'Administrador',
-          isSystem: true,
-        },
-        update: { name: 'Administrador', isSystem: true },
-      });
-      const permissions = await transaction.permission.findMany({
-        where: { organizationId: organization.id },
-      });
-      const adminCodes = new Set(initialRolePermissions.administrator);
-      for (const permission of permissions) {
-        if (!adminCodes.has(`${permission.resource}:${permission.action}` as never)) continue;
-        await transaction.rolePermission.upsert({
-          where: {
-            organizationId_roleId_permissionId: {
+    await prisma.$transaction(
+      async (transaction) => {
+        const organization = await transaction.organization.upsert({
+          where: { slug: organizationSlug },
+          create: {
+            slug: organizationSlug,
+            legalName: organizationName,
+            tradeName: organizationName,
+          },
+          update: { legalName: organizationName, tradeName: organizationName, status: 'ACTIVE' },
+        });
+        await transaction.profile.upsert({
+          where: { id: authUserId! },
+          create: { id: authUserId!, email, fullName },
+          update: { email, fullName },
+        });
+        await transaction.permission.createMany({
+          data: permissionResources.flatMap((resource) =>
+            permissionActions.map((action) => ({
+              organizationId: organization.id,
+              resource,
+              action,
+            })),
+          ),
+          skipDuplicates: true,
+        });
+        const role = await transaction.role.upsert({
+          where: { organizationId_key: { organizationId: organization.id, key: 'administrator' } },
+          create: {
+            organizationId: organization.id,
+            key: 'administrator',
+            name: 'Administrador',
+            isSystem: true,
+          },
+          update: { name: 'Administrador', isSystem: true },
+        });
+        const permissions = await transaction.permission.findMany({
+          where: { organizationId: organization.id },
+        });
+        const adminCodes = new Set(initialRolePermissions.administrator);
+        await transaction.rolePermission.createMany({
+          data: permissions
+            .filter((permission) =>
+              adminCodes.has(`${permission.resource}:${permission.action}` as never),
+            )
+            .map((permission) => ({
               organizationId: organization.id,
               roleId: role.id,
               permissionId: permission.id,
+            })),
+          skipDuplicates: true,
+        });
+        const user = await transaction.user.upsert({
+          where: { organizationId_email: { organizationId: organization.id, email } },
+          create: {
+            authUserId,
+            organizationId: organization.id,
+            email,
+            passwordHash: null,
+            fullName,
+            status: 'ACTIVE',
+          },
+          update: { authUserId, passwordHash: null, fullName, status: 'ACTIVE', deletedAt: null },
+        });
+        const membership = await transaction.organizationMember.upsert({
+          where: {
+            organizationId_profileId: { organizationId: organization.id, profileId: authUserId! },
+          },
+          create: {
+            organizationId: organization.id,
+            profileId: authUserId!,
+            userId: user.id,
+            status: 'ACTIVE',
+          },
+          update: { userId: user.id, status: 'ACTIVE' },
+        });
+        await transaction.userRole.upsert({
+          where: {
+            organizationId_userId_roleId: {
+              organizationId: organization.id,
+              userId: user.id,
+              roleId: role.id,
             },
           },
-          create: { organizationId: organization.id, roleId: role.id, permissionId: permission.id },
+          create: { organizationId: organization.id, userId: user.id, roleId: role.id },
           update: {},
         });
-      }
-      const user = await transaction.user.upsert({
-        where: { organizationId_email: { organizationId: organization.id, email } },
-        create: {
-          authUserId,
-          organizationId: organization.id,
-          email,
-          passwordHash: null,
-          fullName,
-          status: 'ACTIVE',
-        },
-        update: { authUserId, passwordHash: null, fullName, status: 'ACTIVE', deletedAt: null },
-      });
-      const membership = await transaction.organizationMember.upsert({
-        where: {
-          organizationId_profileId: { organizationId: organization.id, profileId: authUserId! },
-        },
-        create: {
-          organizationId: organization.id,
-          profileId: authUserId!,
-          userId: user.id,
-          status: 'ACTIVE',
-        },
-        update: { userId: user.id, status: 'ACTIVE' },
-      });
-      await transaction.userRole.upsert({
-        where: {
-          organizationId_userId_roleId: {
-            organizationId: organization.id,
-            userId: user.id,
-            roleId: role.id,
+        await transaction.organizationMemberRole.upsert({
+          where: {
+            organizationId_membershipId_roleId: {
+              organizationId: organization.id,
+              membershipId: membership.id,
+              roleId: role.id,
+            },
           },
-        },
-        create: { organizationId: organization.id, userId: user.id, roleId: role.id },
-        update: {},
-      });
-      await transaction.organizationMemberRole.upsert({
-        where: {
-          organizationId_membershipId_roleId: {
-            organizationId: organization.id,
-            membershipId: membership.id,
-            roleId: role.id,
-          },
-        },
-        create: { organizationId: organization.id, membershipId: membership.id, roleId: role.id },
-        update: {},
-      });
-    });
+          create: { organizationId: organization.id, membershipId: membership.id, roleId: role.id },
+          update: {},
+        });
+      },
+      { maxWait: 10_000, timeout: 60_000 },
+    );
     process.stdout.write('Bootstrap concluído: organização e administrador estão vinculados.\n');
   } catch (error) {
     if (createdAuthUser && authUserId) await supabase.auth.admin.deleteUser(authUserId, true);

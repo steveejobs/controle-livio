@@ -13,11 +13,12 @@ coerentes; a API falha no startup sem configuração obrigatória.
 
 ## Estado do projeto cloud configurado
 
-Em 2026-08-09, o projeto Supabase remoto informado no ambiente foi inicializado com as quatro
-migrations oficiais. Ele contém o schema e as policies, mas permanece sem usuários Auth, objetos de
-Storage ou seed. Antes de receber dados reais, o ambiente precisa ser classificado explicitamente em
-`SUPABASE_ENVIRONMENT`, receber o primeiro administrador pelo bootstrap e ter SMTP/redirects revisados.
-Essa inicialização não torna o projeto automaticamente um ambiente de produção.
+Em 2026-08-11, o projeto Supabase remoto informado no ambiente contém as quatro migrations oficiais,
+um usuário Auth confirmado e a organização `bandeira` com membership administrativa. Permanece sem
+objetos de Storage ou seed remoto. Signup público foi desabilitado e a senha mínima foi elevada para
+12 caracteres, mas Site URL, redirects e SMTP ainda dependem do domínio/remetente finais. O ambiente
+precisa ser classificado explicitamente no deploy; esse provisionamento não o torna automaticamente
+produção.
 
 ## Safeguards
 

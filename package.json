@@ -29,7 +29,7 @@
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",
     "supabase:status": "supabase status",
-    "test:supabase": "node tools/supabase/rls.test.mjs",
+    "test:supabase": "node --env-file-if-exists=.env tools/supabase/rls.test.mjs",
     "db:migrate:dev": "node tools/supabase/safety.mjs local-reset && supabase db reset",
     "db:migrate:deploy": "node tools/supabase/safety.mjs remote-migrate && supabase db push --linked",
     "db:migrate:status": "supabase migration list --linked",

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ProductBrand } from '../../components/product-brand';
-import { ApiError, api, resetApiSession } from '../../lib/api';
+import { ApiError, api, downloadApiFile, resetApiSession } from '../../lib/api';
 import { createSupabaseBrowserClient } from '../../lib/supabase/client';
 
 type Page<T> = { items: T[]; total: number };
@@ -894,12 +894,22 @@ function Calendar() {
 function Reports() {
   const [report, setReport] = useState('aging');
   const { data, error, reload } = useLoad<unknown>(`/reports/${report}`);
-  const exportCsv = () => {
-    window.open(
-      `${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/v1'}/reports/${report}/export.csv`,
-      '_blank',
-      'noopener,noreferrer',
-    );
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<ApiError>();
+  const exportCsv = async () => {
+    setExporting(true);
+    setExportError(undefined);
+    try {
+      await downloadApiFile(`/reports/${report}/export.csv`, `livio-${report}.csv`);
+    } catch (caught) {
+      setExportError(
+        caught instanceof ApiError
+          ? caught
+          : new ApiError(0, 'Não foi possível baixar o relatório.'),
+      );
+    } finally {
+      setExporting(false);
+    }
   };
   return (
     <section>
@@ -907,8 +917,8 @@ function Reports() {
         title="Relatorios"
         description="Os resultados mantem a base contabil explicita informada pela API."
         action={
-          <button className="secondary" onClick={exportCsv}>
-            Exportar CSV
+          <button className="secondary" disabled={exporting} onClick={() => void exportCsv()}>
+            {exporting ? 'Exportando...' : 'Exportar CSV'}
           </button>
         }
       />
@@ -926,7 +936,7 @@ function Reports() {
           </select>
         </label>
       </div>
-      <Notice error={error} onRetry={reload} />
+      <Notice error={exportError ?? error} onRetry={exportError ? undefined : reload} />
       {!data && !error ? (
         <Loading />
       ) : data ? (

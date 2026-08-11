@@ -77,10 +77,10 @@ e permissões e nunca imprime senha ou token.
 3. `20260807180000_supabase_auth_rls.sql` — vínculo Auth inicial, RLS e bucket privado;
 4. `20260809120000_auth_memberships_hardening.sql` — profiles, memberships, Auth definitivo e hardening RLS/Storage.
 
-Estado cloud em 2026-08-09: as quatro migrations acima foram aplicadas ao projeto Supabase remoto
-configurado, que estava vazio. A verificação posterior encontrou 39 tabelas com RLS habilitada e
-forçada, 141 policies, bucket privado, zero objetos e zero usuários Auth. Nenhum seed foi aplicado
-remotamente. O primeiro administrador ainda deve ser criado com `npm run bootstrap:admin`.
+Estado cloud em 2026-08-11: as quatro migrations acima estão aplicadas no projeto Supabase remoto. A
+verificação encontrou 39 tabelas com RLS habilitada e forçada, 141 policies, bucket privado e zero
+objetos. A organização `bandeira` e seu primeiro administrador foram vinculados pelo bootstrap; nenhum
+seed foi aplicado remotamente.
 
 O histórico Prisma em `packages/db/prisma/migrations` é arquivo imutável e não é executado. Para um
 remoto confirmado, apenas após validar localmente:
@@ -116,3 +116,8 @@ do Supabase, domínio remetente, SPF/DKIM/DMARC e redirects permitidos.
 Backup do Database e retenção/backup dos objetos de Storage são planos separados. Uma restauração deve
 ocorrer primeiro em projeto isolado, reaplicar/validar RLS, memberships, tenant triggers, checks
 financeiros, bucket privado e hashes dos documentos antes de qualquer promoção.
+
+## Publicação
+
+Web e API são serviços separados e precisam de URLs HTTPS próprias. O roteiro de variáveis, ordem de
+publicação, health checks e gate de promoção está em [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).

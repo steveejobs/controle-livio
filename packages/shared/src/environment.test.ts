@@ -48,4 +48,37 @@ describe('Supabase environment boundary', () => {
     });
     expect(parsed.SUPABASE_LOCAL).toBe(true);
   });
+
+  it('parses explicit false boolean values without enabling proxy trust', () => {
+    const parsed = parseApiEnvironment({ ...base, TRUST_PROXY: 'false', SMTP_SECURE: 'false' });
+    expect(parsed.TRUST_PROXY).toBe(false);
+    expect(parsed.SMTP_SECURE).toBe(false);
+  });
+
+  it('accepts the conventional provider PORT when API_PORT is absent', () => {
+    const withoutApiPort = Object.fromEntries(
+      Object.entries(base).filter(([key]) => key !== 'API_PORT'),
+    );
+    expect(parseApiEnvironment({ ...withoutApiPort, PORT: '8080' }).API_PORT).toBe(8080);
+  });
+
+  it('requires HTTPS origins, redirect and a confirmed project in production runtime', () => {
+    expect(() =>
+      parseApiEnvironment({
+        ...base,
+        NODE_ENV: 'production',
+        SUPABASE_ENVIRONMENT: 'production',
+      }),
+    ).toThrow();
+
+    expect(
+      parseApiEnvironment({
+        ...base,
+        NODE_ENV: 'production',
+        SUPABASE_ENVIRONMENT: 'staging',
+        CORS_ORIGINS: 'https://app.example.com',
+        SUPABASE_AUTH_REDIRECT_URL: 'https://app.example.com/auth/confirm',
+      }).SUPABASE_ENVIRONMENT,
+    ).toBe('staging');
+  });
 });

@@ -5,9 +5,9 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev -p 3000",
-    "start": "next start -p 3000",
+    "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run"
   },
   "dependencies": {
     "@livio/shared": "*",

@@ -1,6 +1,6 @@
 # Contexto vivo do projeto Lívio
 
-Última atualização: 2026-08-09
+Última atualização: 2026-08-11
 
 ## Estado atual
 
@@ -25,8 +25,10 @@ Storage e RLS são a única plataforma persistente. NestJS mantém regras críti
 - `bootstrap:admin` provisiona Auth, profile, organização, membership, role e permissões com safeguards.
 - `test:supabase` cobre isolamento A/B, roles, nota interna, insert/update/delete cruzado e Storage.
 - O projeto Supabase remoto configurado foi inicializado a partir do zero com o histórico oficial. A
-  inspeção posterior confirmou 39 tabelas públicas com RLS habilitada e forçada, 141 policies, bucket
-  `legal-documents` privado, zero objetos e zero usuários Auth.
+  inspeção de 2026-08-11 confirmou 39 tabelas públicas com RLS habilitada e forçada, 141 policies,
+  bucket `legal-documents` privado e zero objetos. O usuário Auth confirmado agora está vinculado à
+  organização `bandeira`, com profile, usuário operacional, membership ativa, papel Administrador e
+  126 permissões.
 
 ## Migrations oficiais
 
@@ -44,14 +46,46 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 
 ## Validação desta etapa
 
+- Auditoria de prontidão repetida em 2026-08-11 sobre instalação limpa por `npm ci`: format check,
+  lint, TypeScript agregado, Prisma validate, 19 testes da API, 8 testes shared e builds completos de
+  shared/db/ui/API/Next passaram. `npm audit --omit=dev` encontrou zero vulnerabilidades conhecidas.
+- O primeiro typecheck da auditoria falhou porque os junctions locais de `node_modules/@livio/*`
+  apontavam para uma cópia antiga do repositório. `npm ci` recriou os links para o checkout atual e a
+  esteira passou; um ambiente de CI limpo continua necessário para tornar essa reprodução automática.
+- Smoke dos artefatos compilados passou: API `live`/`ready` responderam `ok` contra o Database remoto
+  e a página Next respondeu HTTP 200. Rota privada sem Bearer respondeu 401 com envelope seguro, sem
+  stack trace; origem CORS não confiável não recebeu `Access-Control-Allow-Origin`.
+- A inspeção remota somente leitura confirmou as quatro migrations oficiais, 39/39 tabelas com RLS
+  habilitada e forçada, 141 policies, bucket privado, zero objetos e zero hashes de senha legados.
+- O bootstrap remoto vinculou o usuário Auth confirmado à organização `bandeira`. A primeira tentativa
+  excedeu o timeout padrão e foi integralmente revertida; inserts idempotentes em lote e timeout remoto
+  explícito foram adicionados, e a repetição concluiu. Login real, `/auth/me` e `/admin/users` passaram;
+  a API resolveu 126 permissões e `users:manage`.
+- Signup público foi desabilitado e a senha mínima remota foi elevada para 12 caracteres. Site URL
+  ainda é HTTP local, não há redirect allowlist nem custom SMTP porque domínio/remetente não foram
+  informados. A credencial administrativa atual precisa ser rotacionada antes da abertura pública.
+- A URL pública da API agora é obrigatória no build Next e carregada explicitamente da raiz/plataforma.
+  A web recebeu CSP, HSTS, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` e
+  `X-Content-Type-Options`; smoke confirmou HTTP 200 e todos esses headers.
+- A exportação CSV usa o cliente autenticado, baixa o Blob sem expor token em URL e possui estados de
+  progresso/erro. O endpoint protegido respondeu 200 em smoke autenticado.
+- `test:supabase` foi executado e abortou pelo safeguard de URL local. Docker/Podman continuam
+  indisponíveis, portanto a prova local real de RLS/Storage permanece pendente nesta máquina. O script
+  agora carrega `.env` opcionalmente e o workflow `Quality` sobe Supabase descartável para executá-lo.
+- CI versionado executa instalação limpa, format, lint, TypeScript, 19 testes API, 11 shared, 2 web,
+  Prisma validate, build e um job separado de RLS/Storage. O workflow só será comprovado no GitHub
+  depois do push. O roteiro agnóstico de provedor está em `docs/DEPLOYMENT.md`.
+- Rate limit distribuído, antimalware, telemetria/alertas e ensaio de backup/restauração continuam
+  ausentes.
+
 - Prisma format/generate: passou.
 - Lint e TypeScript agregado: passaram após a migração de Auth.
 - Docker não está instalado/disponível nesta máquina; portanto `supabase start`, reset, seed e testes
   RLS/Storage reais ainda não foram executados aqui. Os scripts estão versionados, mas a fundação só
   pode ser declarada verde após essa execução em máquina/CI com Docker.
 - Validação final após a última alteração de código: format check, lint, TypeScript agregado, Prisma
-  validate, 19 testes da API, 8 testes shared e builds completos de shared/db/ui/API/Next passaram.
-  A web ainda não possui testes próprios e encerra por `--passWithNoTests`.
+  validate, 19 testes da API, 11 testes shared, 2 testes web e builds completos de
+  shared/db/ui/API/Next passaram.
 - A inspeção cloud posterior às migrations confirmou as quatro versões no histórico, 39/39 tabelas com
   RLS forçada, nenhuma tabela pública sem RLS, 141 policies e nenhum hash de senha legado.
 - O build final foi repetido depois do ajuste de configuração pública do frontend e passou. O Next
@@ -75,12 +109,15 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 ## Riscos restantes
 
 - Executar `test:supabase` em Docker/Supabase local; a máquina atual ainda não possui Docker/Podman.
-- Provisionar a primeira organização e o primeiro administrador. O remoto continua sem usuários porque
-  nome, slug, nome do administrador, e-mail e senha inicial não foram definidos, e credenciais não são
-  inventadas nem gravadas no Git.
+- Rotacionar a credencial administrativa atual antes da abertura pública.
+- Trocar Site URL/redirects do Auth para o domínio HTTPS final, configurar custom SMTP e validar
+  convite, login, refresh e recuperação em staging.
+- Informar `NEXT_PUBLIC_API_URL`, CORS e redirects reais no provedor e validar os headers no domínio
+  final.
 - Publicar web e API em um provedor de hospedagem, configurar domínio/HTTPS e variáveis do ambiente de
   deploy; esta execução preparou e validou os artefatos, mas não recebeu um destino de deploy.
 - Validar custom SMTP, redirects e templates em staging.
 - Adicionar scanner antimalware, rate limit distribuído, telemetria e alertas antes de produção.
 - Ensaiar backup/restauração separados de Database e Storage.
-- Testes E2E de browser continuam pendentes; esta etapa não implementa novos fluxos financeiros.
+- Confirmar o workflow `Quality`, inclusive RLS/Storage, após o primeiro push. Testes E2E de browser
+  continuam pendentes; esta etapa não implementa novos fluxos financeiros.

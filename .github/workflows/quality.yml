@@ -1,0 +1,61 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  application:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://postgres.projectref123:placeholder@aws-0-region.pooler.supabase.com:6543/postgres
+      NEXT_PUBLIC_API_URL: https://api.example.invalid/v1
+      NEXT_PUBLIC_SUPABASE_URL: https://projectref123.supabase.co
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-public-anon-key-placeholder
+      SUPABASE_URL: https://projectref123.supabase.co
+      SUPABASE_ANON_KEY: ci-public-anon-key-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-placeholder
+      SUPABASE_ENVIRONMENT: staging
+      SUPABASE_PROJECT_REF: projectref123
+      CONFIRM_SUPABASE_PROJECT_REF: projectref123
+      SUPABASE_LOCAL: 'false'
+      SUPABASE_AUTH_REDIRECT_URL: https://app.example.invalid/auth/confirm
+      CORS_ORIGINS: https://app.example.invalid
+      STORAGE_BUCKET: legal-documents
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run db:validate
+      - run: npm run build
+
+  supabase-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx supabase start
+      - name: Test RLS and Storage isolation
+        shell: bash
+        run: |
+          eval "$(npx supabase status -o env)"
+          SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" npm run test:supabase
