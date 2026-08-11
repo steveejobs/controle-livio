@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/ui && npm run build -w @livio/api && npm run build -w @livio/web",
+    "build:web": "npm run build -w @livio/shared && npm run build -w @livio/ui && npm run build -w @livio/web",
     "build:packages": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/ui",
     "dev": "npm run build:packages && concurrently -n api,web -c blue,magenta \"npm run dev -w @livio/api\" \"npm run dev -w @livio/web\"",
     "dev:api": "npm run build:packages && npm run dev -w @livio/api",

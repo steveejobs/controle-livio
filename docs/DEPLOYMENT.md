@@ -63,6 +63,20 @@ Variáveis de build obrigatórias:
 Esses três valores são públicos por definição e ficam no bundle. Service role, conexão PostgreSQL e
 tokens de infraestrutura nunca pertencem ao serviço web.
 
+### Vercel
+
+Crie o projeto Vercel somente para a web com estas configurações:
+
+- Framework Preset: `Next.js`;
+- Root Directory: `apps/web`;
+- Include source files outside of the Root Directory: habilitado;
+- Build e Install Command: mantenha os valores detectados de `apps/web/vercel.json`;
+- Output Directory: padrão do Next.js (`.next`).
+
+Não selecione `apps/api` como Root Directory do projeto web. A API NestJS usa processo Node contínuo
+e deve ser publicada como serviço separado em uma plataforma compatível; a web aponta para ela por
+`NEXT_PUBLIC_API_URL`.
+
 ## Gate de promoção
 
 Antes de promover staging para produção:
