@@ -65,7 +65,7 @@ tokens de infraestrutura nunca pertencem ao serviço web.
 
 ### Vercel
 
-Crie o projeto Vercel somente para a web com estas configurações:
+Crie dois projetos Vercel ligados ao mesmo repositório. Para a web:
 
 - Framework Preset: `Next.js`;
 - Root Directory: `apps/web`;
@@ -73,9 +73,20 @@ Crie o projeto Vercel somente para a web com estas configurações:
 - Build e Install Command: mantenha os valores detectados de `apps/web/vercel.json`;
 - Output Directory: padrão do Next.js (`.next`).
 
-Não selecione `apps/api` como Root Directory do projeto web. A API NestJS usa processo Node contínuo
-e deve ser publicada como serviço separado em uma plataforma compatível; a web aponta para ela por
-`NEXT_PUBLIC_API_URL`.
+Para a API:
+
+- Framework Preset: `NestJS`;
+- Root Directory: `apps/api`;
+- Include source files outside of the Root Directory: habilitado;
+- Build e Install Command: mantenha os valores de `apps/api/vercel.json`;
+- Output Directory: vazio, para o preset NestJS produzir uma única Vercel Function;
+- Fluid compute: habilitado.
+
+O projeto da API precisa receber todas as variáveis server-side listadas acima. Nele,
+`CORS_ORIGINS` recebe a URL HTTPS da web e `SUPABASE_AUTH_REDIRECT_URL` recebe essa URL seguida de
+`/auth/confirm`. Depois do primeiro deploy da API, use a URL HTTPS dela na variável
+`NEXT_PUBLIC_API_URL` do projeto web, acrescentando `/v1`. Não selecione `apps/api` no projeto web nem
+`apps/web` no projeto API.
 
 ## Gate de promoção
 

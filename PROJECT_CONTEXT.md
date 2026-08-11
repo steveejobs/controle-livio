@@ -75,10 +75,11 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - CI versionado executa instalação limpa, format, lint, TypeScript, 19 testes API, 11 shared, 2 web,
   Prisma validate, build e um job separado de RLS/Storage. O workflow só será comprovado no GitHub
   depois do push. O roteiro agnóstico de provedor está em `docs/DEPLOYMENT.md`.
-- O primeiro deploy Vercel apontou incorretamente para `apps/api` e executou `nest build` sem compilar
-  os pacotes internos, causando erros em cascata de `@livio/shared`/`@livio/db`. `apps/web/vercel.json`
-  e `build:web` agora compilam apenas as dependências da web na ordem correta. Na Vercel, o Root
-  Directory deve ser `apps/web`; a API permanece um serviço Node separado.
+- Os primeiros deploys Vercel da API executaram `nest build` isoladamente, sem compilar os pacotes
+  internos, causando erros em cascata de `@livio/shared`/`@livio/db`. A configuração passou a declarar
+  explicitamente os presets `nextjs` e `nestjs`, com projetos separados em `apps/web` e `apps/api` e
+  builds ordenados `build:web`/`build:api`. A API usa o suporte nativo da Vercel a NestJS como uma
+  única Function com Fluid compute; ambos os projetos incluem fontes externas ao Root Directory.
 - Rate limit distribuído, antimalware, telemetria/alertas e ensaio de backup/restauração continuam
   ausentes.
 
