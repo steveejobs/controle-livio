@@ -19,3 +19,5 @@ packages/db/prisma/dev.db*
 packages/db/prisma/generated/
 supabase/.branches/
 supabase/.temp/
+
+.vercel

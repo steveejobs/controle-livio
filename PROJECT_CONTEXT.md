@@ -1,6 +1,6 @@
 # Contexto vivo do projeto Lívio
 
-Última atualização: 2026-08-11
+Última atualização: 2026-08-12
 
 ## Estado atual
 
@@ -62,8 +62,9 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   explícito foram adicionados, e a repetição concluiu. Login real, `/auth/me` e `/admin/users` passaram;
   a API resolveu 126 permissões e `users:manage`.
 - Signup público foi desabilitado e a senha mínima remota foi elevada para 12 caracteres. Site URL
-  ainda é HTTP local, não há redirect allowlist nem custom SMTP porque domínio/remetente não foram
-  informados. A credencial administrativa atual precisa ser rotacionada antes da abertura pública.
+  e redirect allowlist do Auth agora apontam para a web HTTPS publicada na Vercel. Custom SMTP ainda
+  não foi configurado. A credencial administrativa atual precisa ser rotacionada antes da abertura
+  pública.
 - A URL pública da API agora é obrigatória no build Next e carregada explicitamente da raiz/plataforma.
   A web recebeu CSP, HSTS, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy` e
   `X-Content-Type-Options`; smoke confirmou HTTP 200 e todos esses headers.
@@ -80,6 +81,19 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   explicitamente os presets `nextjs` e `nestjs`, com projetos separados em `apps/web` e `apps/api` e
   builds ordenados `build:web`/`build:api`. A API usa o suporte nativo da Vercel a NestJS como uma
   única Function com Fluid compute; ambos os projetos incluem fontes externas ao Root Directory.
+- O crash `FUNCTION_INVOCATION_FAILED` do deploy de 2026-08-12 foi reproduzido nos logs como Prisma
+  `P1001`: a Function tentava o endpoint direto IPv6 do Database Supabase. `DATABASE_URL` de runtime
+  passou a usar Supavisor transaction mode na porta 6543, com `pgbouncer=true&connection_limit=1`;
+  `/v1/health/live` e `/v1/health/ready` responderam HTTP 200 no deploy corrigido.
+- A Vercel agora possui dois projetos reais: `controle-livio` para `apps/api` e `controle-livio-web`
+  para `apps/web`, ambos conectados ao mesmo repositório. A web respondeu HTTP 200 com headers de
+  segurança e a API confirmou CORS para sua origem. A raiz da API responde 404 normal, sem crash.
+- Os installs Vercel incluem dependências de build mesmo com `NODE_ENV=production`; `.vercelignore`
+  impede upload de `.env*`, `chaves` e metadados locais. O Next usa o adaptador nativo da Vercel com
+  tracing a partir da raiz do monorepo, sem forçar artefato `standalone`.
+- Logs HTTP passaram a redigir token OIDC, assinatura de proxy e `forwarded` da Vercel. A validação
+  final repetiu format check, lint, TypeScript, Prisma validate, 19 testes API, 11 shared, 2 web e os
+  builds completos; todos passaram.
 - Rate limit distribuído, antimalware, telemetria/alertas e ensaio de backup/restauração continuam
   ausentes.
 
@@ -115,13 +129,10 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 
 - Executar `test:supabase` em Docker/Supabase local; a máquina atual ainda não possui Docker/Podman.
 - Rotacionar a credencial administrativa atual antes da abertura pública.
-- Trocar Site URL/redirects do Auth para o domínio HTTPS final, configurar custom SMTP e validar
-  convite, login, refresh e recuperação em staging.
-- Informar `NEXT_PUBLIC_API_URL`, CORS e redirects reais no provedor e validar os headers no domínio
-  final.
-- Publicar web e API em um provedor de hospedagem, configurar domínio/HTTPS e variáveis do ambiente de
-  deploy; esta execução preparou e validou os artefatos, mas não recebeu um destino de deploy.
-- Validar custom SMTP, redirects e templates em staging.
+- Configurar custom SMTP e validar convite, login, refresh, recuperação e templates no staging
+  publicado; Site URL e redirect HTTPS já estão configurados.
+- Definir domínios próprios, se exigidos pelo produto, e atualizar CORS, URL pública da API e
+  redirects antes da troca dos aliases `vercel.app`.
 - Adicionar scanner antimalware, rate limit distribuído, telemetria e alertas antes de produção.
 - Ensaiar backup/restauração separados de Database e Storage.
 - Confirmar o workflow `Quality`, inclusive RLS/Storage, após o primeiro push. Testes E2E de browser

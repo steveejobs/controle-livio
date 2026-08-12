@@ -31,7 +31,8 @@ Variáveis obrigatórias:
 
 - `NODE_ENV=production`;
 - `API_PORT` ou `PORT`, conforme a porta fornecida pela plataforma;
-- `DATABASE_URL` com SSL e pooler apropriado;
+- `DATABASE_URL` com SSL; em Vercel/serverless, use o Transaction pooler do Supabase (Supavisor,
+  porta `6543`) com `pgbouncer=true&connection_limit=1`, nunca o endpoint direto IPv6;
 - `SUPABASE_ENVIRONMENT=staging` ou `production`;
 - `SUPABASE_PROJECT_REF` e `CONFIRM_SUPABASE_PROJECT_REF` iguais;
 - `SUPABASE_LOCAL=false`;
@@ -73,6 +74,9 @@ Crie dois projetos Vercel ligados ao mesmo repositório. Para a web:
 - Build e Install Command: mantenha os valores detectados de `apps/web/vercel.json`;
 - Output Directory: padrão do Next.js (`.next`).
 
+A web usa o adaptador nativo Next.js da Vercel e declara a raiz do monorepo para output tracing; não
+force `output: standalone`, que é destinado ao empacotamento de self-host/Docker.
+
 Para a API:
 
 - Framework Preset: `NestJS`;
@@ -81,6 +85,10 @@ Para a API:
 - Build e Install Command: mantenha os valores de `apps/api/vercel.json`;
 - Output Directory: vazio, para o preset NestJS produzir uma única Vercel Function;
 - Fluid compute: habilitado.
+
+Os comandos de instalação versionados usam `npm ci --include=dev`: `NODE_ENV=production` não pode
+remover `typescript`/CLI de build antes da compilação. Arquivos `.env*`, `chaves` e metadados locais
+da Vercel são excluídos do upload por `.vercelignore`; configure os valores somente no projeto Vercel.
 
 O projeto da API precisa receber todas as variáveis server-side listadas acima. Nele,
 `CORS_ORIGINS` recebe a URL HTTPS da web e `SUPABASE_AUTH_REDIRECT_URL` recebe essa URL seguida de

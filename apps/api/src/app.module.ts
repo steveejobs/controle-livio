@@ -41,6 +41,10 @@ function generateRequestId(request: IncomingMessage): string {
           paths: [
             'req.headers.authorization',
             'req.headers.cookie',
+            'req.headers.forwarded',
+            'req.headers["x-vercel-oidc-token"]',
+            'req.headers["x-vercel-proxy-signature"]',
+            'req.headers["x-vercel-proxy-signature-ts"]',
             'req.body.password',
             'req.body.newPassword',
             'req.body.token',

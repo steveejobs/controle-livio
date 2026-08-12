@@ -98,7 +98,7 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  output: 'standalone',
+  outputFileTracingRoot: workspaceRoot,
   poweredByHeader: false,
   reactStrictMode: true,
   transpilePackages: ['@livio/ui', '@livio/shared'],
