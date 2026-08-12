@@ -22,6 +22,10 @@ O tenant vem de `organization_members`, nunca do body/query. A proteção combin
 Papéis de sistema: administrador, advogado, secretaria, financeiro e cliente. O código usa permissões
 centralizadas `recurso:ação`; não depende de `if role === admin` espalhado.
 
+O papel PostgreSQL `authenticated` recebe somente `SELECT`, `INSERT`, `UPDATE` e `DELETE` nas tabelas
+públicas. Isso permite que a requisição alcance o RLS, que continua negando por tenant, cliente e
+permissão; o papel não recebe `TRUNCATE`, `REFERENCES`, `TRIGGER` nem privilégios administrativos.
+
 ## Service role
 
 `SUPABASE_SERVICE_ROLE_KEY` é obrigatória somente no servidor para Storage administrativo, convites e

@@ -35,7 +35,8 @@ Storage e RLS são a única plataforma persistente. NestJS mantém regras críti
 1. `20260807134500_initial_foundation.sql`;
 2. `20260807170000_finance_document_links.sql`;
 3. `20260807180000_supabase_auth_rls.sql`;
-4. `20260809120000_auth_memberships_hardening.sql`.
+4. `20260809120000_auth_memberships_hardening.sql`;
+5. `20260812150000_authenticated_table_grants.sql`.
 
 `finance_document_links` foi auditada e preserva documento→contrato, documento→despesa,
 despesa→cliente, índices, FKs restritivas e tenant triggers. Em 2026-08-09, as quatro migrations foram
@@ -62,8 +63,10 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   com `getClaims`; a API Vercel foi fixada em `gru1` e leituras GET da web têm cache curto de 15 segundos
   isolado por token e organização, invalidado por mutações/logout. Isso reduz chamadas Auth remotas e
   recargas de dados sem relaxar tenant ou permissões.
-- Nenhuma migration foi criada ou aplicada: notificações, papéis, documentos, recebíveis e parcelas
-  reutilizam o modelo existente. O gate local após as mudanças passou em format check, lint, TypeScript
+- As funções de negócio reutilizam o modelo existente. A prova RLS no Supabase descartável revelou que
+  faltavam grants DML básicos para o papel `authenticated` alcançar as policies; a migration de grants
+  concede somente `SELECT`, `INSERT`, `UPDATE` e `DELETE`, sem `TRUNCATE` ou privilégios administrativos.
+  O gate local após as mudanças passou em format check, lint, TypeScript
   estrito, 41 testes automatizados, Prisma validate e builds completos da API e web. O artefato Next
   respondeu HTTP 200; a interface compacta foi inspecionada em 360/390 px e as novas seções usam o
   observer compartilhado com `opacity`/`transform` e reduced motion.
