@@ -7,6 +7,7 @@ import {
 import { Reflector } from '@nestjs/core';
 import type { PermissionCode } from '@livio/shared';
 import type { RequestWithActor } from '../common/request-with-actor';
+import { AUTHENTICATED_ROUTE_KEY } from './authenticated-route.decorator';
 import { PUBLIC_ROUTE_KEY } from './public.decorator';
 import { REQUIRED_PERMISSION_KEY } from './require-permission.decorator';
 
@@ -25,7 +26,15 @@ export class PermissionGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (!required) throw new ForbiddenException('Rota sem política de autorização definida');
+    if (!required) {
+      const authenticatedOnly = this.reflector.getAllAndOverride<boolean>(AUTHENTICATED_ROUTE_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      const { actor } = context.switchToHttp().getRequest<RequestWithActor>();
+      if (authenticatedOnly && actor) return true;
+      throw new ForbiddenException('Rota sem política de autorização definida');
+    }
 
     const { actor } = context.switchToHttp().getRequest<RequestWithActor>();
     if (!actor?.permissions.includes(required)) {

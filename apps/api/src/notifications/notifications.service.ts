@@ -27,6 +27,9 @@ export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async reconcileFinancialAlerts(actor: AuthenticatedActor) {
+    const clientScope = actor.clientId
+      ? Prisma.sql`AND r.client_id = ${actor.clientId}::uuid`
+      : Prisma.empty;
     const alerts = await this.prisma.$queryRaw<FinancialAlertRow[]>(Prisma.sql`
       WITH paid AS (
         SELECT pa.installment_id, SUM(pa.amount) AS amount
@@ -54,6 +57,7 @@ export class NotificationsService {
         AND i.status NOT IN ('PAID', 'CANCELLED', 'RENEGOTIATED')
         AND i.due_date <= CURRENT_DATE + INTERVAL '7 days'
         AND (i.amount + COALESCE(a.amount, 0) - COALESCE(p.amount, 0)) > 0
+        ${clientScope}
       ORDER BY i.due_date ASC`);
 
     const activeIds = new Set(alerts.map((alert) => alert.installment_id));
@@ -124,6 +128,111 @@ export class NotificationsService {
     };
   }
 
+  async reconcileTaskReminders(actor: AuthenticatedActor) {
+    const now = new Date();
+    const reminders = await this.prisma.taskReminder.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        status: 'PENDING',
+        remindAt: { lte: now },
+        task: {
+          deletedAt: null,
+          ...(actor.clientId ? { clientId: actor.clientId } : {}),
+          OR: [{ assigneeId: actor.userId }, { assigneeId: null, createdById: actor.userId }],
+        },
+      },
+      select: {
+        id: true,
+        remindAt: true,
+        task: { select: { id: true, title: true, dueAt: true } },
+      },
+      orderBy: { remindAt: 'asc' },
+      take: 100,
+    });
+    await this.prisma.$transaction(
+      reminders.flatMap((reminder) => [
+        this.prisma.notification.upsert({
+          where: { id: this.reminderId(actor.userId, reminder.id) },
+          create: {
+            id: this.reminderId(actor.userId, reminder.id),
+            organizationId: actor.organizationId,
+            userId: actor.userId,
+            channel: 'IN_APP',
+            status: 'SENT',
+            title: 'Lembrete de tarefa',
+            body: reminder.task.title,
+            link: `task:${reminder.task.id}`,
+            metadata: {
+              source: 'TASK_REMINDER',
+              taskId: reminder.task.id,
+              reminderId: reminder.id,
+              dueAt: reminder.task.dueAt?.toISOString() ?? null,
+            },
+            sentAt: now,
+          },
+          update: { title: 'Lembrete de tarefa', body: reminder.task.title },
+        }),
+        this.prisma.taskReminder.updateMany({
+          where: { id: reminder.id, organizationId: actor.organizationId, status: 'PENDING' },
+          data: { status: 'SENT', sentAt: now },
+        }),
+      ]),
+    );
+    return reminders.length;
+  }
+
+  async reconcileUserAlerts(actor: AuthenticatedActor) {
+    const [financial, taskReminders] = await Promise.all([
+      this.reconcileFinancialAlerts(actor),
+      this.reconcileTaskReminders(actor),
+    ]);
+    return { ...financial, taskReminders };
+  }
+
+  async reconcileAllFinancialAlerts() {
+    const recipients = await this.prisma.organizationMember.findMany({
+      where: {
+        status: 'ACTIVE',
+        user: { status: 'ACTIVE', deletedAt: null },
+        organization: { status: 'ACTIVE' },
+        roles: {
+          some: {
+            role: {
+              permissions: {
+                some: { permission: { resource: 'notifications', action: 'update' } },
+              },
+            },
+          },
+        },
+      },
+      select: {
+        id: true,
+        profileId: true,
+        organizationId: true,
+        userId: true,
+        clientId: true,
+      },
+    });
+    const results = await Promise.all(
+      recipients.map((recipient) =>
+        this.reconcileUserAlerts({
+          membershipId: recipient.id,
+          profileId: recipient.profileId,
+          organizationId: recipient.organizationId,
+          userId: recipient.userId,
+          ...(recipient.clientId ? { clientId: recipient.clientId } : {}),
+          permissions: ['notifications:view', 'notifications:update'],
+        }),
+      ),
+    );
+    return {
+      recipients: recipients.length,
+      active: results.reduce((total, result) => total + result.active, 0),
+      overdue: results.reduce((total, result) => total + result.overdue, 0),
+      taskReminders: results.reduce((total, result) => total + result.taskReminders, 0),
+    };
+  }
+
   async list(actor: AuthenticatedActor) {
     const items = await this.prisma.notification.findMany({
       where: { organizationId: actor.organizationId, userId: actor.userId },
@@ -146,6 +255,11 @@ export class NotificationsService {
     const hex = createHash('sha256')
       .update(`${userId}:${installmentId}:financial-due`)
       .digest('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+  }
+
+  private reminderId(userId: string, reminderId: string) {
+    const hex = createHash('sha256').update(`${userId}:${reminderId}:task-reminder`).digest('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
   }
 }

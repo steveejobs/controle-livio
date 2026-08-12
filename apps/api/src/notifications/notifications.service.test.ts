@@ -80,4 +80,94 @@ describe('alertas financeiros', () => {
     expect(update).not.toHaveProperty('status');
     expect(update).not.toHaveProperty('readAt');
   });
+
+  it('restringe a consulta financeira ao cliente vinculado à sessão', async () => {
+    const prisma = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+      notification: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        upsert: vi.fn(),
+      },
+    };
+    const service = new NotificationsService(prisma as never);
+    const clientId = '55555555-5555-4555-8555-555555555555';
+
+    await service.reconcileFinancialAlerts({ ...actor, clientId });
+
+    const query = prisma.$queryRaw.mock.calls[0]?.[0] as Prisma.Sql;
+    expect(query.strings.join(' ')).toContain('r.client_id');
+    expect(query.values).toContain(clientId);
+  });
+
+  it('reconcilia alertas de todos os destinatários ativos', async () => {
+    const prisma = {
+      organizationMember: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'membership',
+            profileId: 'profile',
+            organizationId: actor.organizationId,
+            userId: actor.userId,
+            clientId: null,
+          },
+        ]),
+      },
+      $queryRaw: vi.fn().mockResolvedValue([alert]),
+      $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+      notification: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        upsert: vi.fn().mockResolvedValue({}),
+      },
+      taskReminder: {
+        findMany: vi.fn().mockResolvedValue([]),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const service = new NotificationsService(prisma as never);
+
+    await expect(service.reconcileAllFinancialAlerts()).resolves.toEqual({
+      recipients: 1,
+      active: 1,
+      overdue: 1,
+      taskReminders: 0,
+    });
+  });
+
+  it('transforma lembrete vencido em notificação interna para o responsável', async () => {
+    const upsert = vi.fn().mockResolvedValue({});
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const prisma = {
+      taskReminder: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: '66666666-6666-4666-8666-666666666666',
+            remindAt: new Date('2026-08-12T11:00:00.000Z'),
+            task: {
+              id: '77777777-7777-4777-8777-777777777777',
+              title: 'Protocolar manifestação',
+              dueAt: new Date('2026-08-13T11:00:00.000Z'),
+            },
+          },
+        ]),
+        updateMany,
+      },
+      notification: { upsert },
+      $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+    };
+    const service = new NotificationsService(prisma as never);
+
+    await expect(service.reconcileTaskReminders(actor)).resolves.toBe(1);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          title: 'Lembrete de tarefa',
+          link: 'task:77777777-7777-4777-8777-777777777777',
+        }),
+      }),
+    );
+    expect(updateMany).toHaveBeenCalled();
+  });
 });

@@ -169,7 +169,8 @@ export class DocumentsService {
         where,
         ...pageWindow(query),
         include: {
-          versions: { where: { version: { equals: 1 } }, orderBy: { version: 'desc' }, take: 1 },
+          client: { select: { id: true, displayName: true } },
+          versions: { orderBy: { version: 'desc' }, take: 1 },
         },
         orderBy: { updatedAt: 'desc' },
       }),

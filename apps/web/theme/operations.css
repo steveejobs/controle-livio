@@ -26,6 +26,7 @@
 
 .form-grid input,
 .form-grid select,
+.form-grid textarea,
 .stack-form input,
 .stack-form select,
 .stack-form textarea,
@@ -49,6 +50,7 @@
 
 .form-grid input:focus,
 .form-grid select:focus,
+.form-grid textarea:focus,
 .stack-form input:focus,
 .stack-form select:focus,
 .stack-form textarea:focus,
@@ -58,6 +60,33 @@
   border-color: var(--color-forest);
   outline: 0;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-mint) 62%, transparent);
+}
+
+.form-grid textarea {
+  width: 100%;
+  min-height: 92px;
+  resize: vertical;
+}
+
+.form-actions,
+.matter-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.matter-controls label {
+  display: grid;
+  min-width: 140px;
+  gap: 5px;
+  color: var(--color-ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.expanded-cell {
+  padding: var(--space-4) !important;
+  background: var(--color-surface-soft);
 }
 
 .compact-action,
@@ -399,6 +428,11 @@
   }
 
   .summary-strip {
+    display: grid;
+  }
+
+  .form-actions,
+  .matter-controls {
     display: grid;
   }
 

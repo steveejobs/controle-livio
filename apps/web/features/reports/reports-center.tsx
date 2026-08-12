@@ -16,7 +16,7 @@ function cell(value: unknown, key: string) {
   return String(value);
 }
 
-export function ReportsCenter() {
+export function ReportsCenter({ permissions }: { permissions: readonly string[] }) {
   const [report, setReport] = useState('receivables-due');
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
@@ -44,9 +44,11 @@ export function ReportsCenter() {
             Consulte contas a receber e resultados por período, com exportação CSV autenticada.
           </span>
         </div>
-        <button className="secondary" onClick={() => void exportCsv()}>
-          Exportar CSV
-        </button>
+        {permissions.includes('reports:export') && (
+          <button className="secondary" onClick={() => void exportCsv()}>
+            Exportar CSV
+          </button>
+        )}
       </header>
       <div className="surface report-filters" data-reveal>
         <label>
@@ -59,6 +61,9 @@ export function ReportsCenter() {
             <option value="aging">Aging</option>
             <option value="cash-forecast">Previsão de caixa</option>
             <option value="partial-payments">Pagamentos parciais</option>
+            <option value="active-contracts">Contratos ativos</option>
+            <option value="revenue-by-lawyer">Receita por advogado</option>
+            <option value="revenue-by-service">Receita por serviço</option>
             <option value="delinquent-clients">Clientes inadimplentes</option>
             <option value="reconciliation">Conciliação</option>
           </select>

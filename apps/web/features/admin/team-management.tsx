@@ -14,14 +14,18 @@ type User = {
   roles?: Array<{ role: Role }>;
 };
 
-export function TeamManagement() {
+export function TeamManagement({ permissions }: { permissions: readonly string[] }) {
   const users = useApiData<User[]>('/admin/users');
-  const roles = useApiData<Role[]>('/admin/roles');
+  const canManageUsers = permissions.includes('users:manage');
+  const canViewRoles = permissions.includes('roles:view');
+  const canManageRoles = permissions.includes('roles:manage');
+  const roles = useApiData<Role[]>(canViewRoles ? '/admin/roles' : undefined);
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (
+      !canManageRoles ||
       !roles.data ||
       (roles.data.some(({ key }) => key === 'lawyer') &&
         roles.data.some(({ key }) => key === 'secretary'))
@@ -31,7 +35,40 @@ export function TeamManagement() {
       api<Role[]>('/admin/system-roles/reconcile', { method: 'POST' })
         .then(() => roles.reload())
         .catch(() => undefined);
-  }, [roles.data, roles.reload]);
+  }, [canManageRoles, roles.data, roles.reload]);
+
+  const setStatus = async (user: User) => {
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      await api(`/admin/users/${user.id}/status`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: user.status === 'ACTIVE' ? 'SUSPENDED' : 'ACTIVE' }),
+      });
+      setFeedback(user.status === 'ACTIVE' ? 'Usuário suspenso.' : 'Usuário reativado.');
+      users.reload();
+    } catch (caught) {
+      setFeedback(`Erro: ${caught instanceof ApiError ? caught.message : 'status não alterado'}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reconcile = async () => {
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      await api('/admin/system-roles/reconcile', { method: 'POST' });
+      setFeedback('Permissões padrão atualizadas.');
+      roles.reload();
+    } catch (caught) {
+      setFeedback(
+        `Erro: ${caught instanceof ApiError ? caught.message : 'permissões não atualizadas'}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -83,39 +120,41 @@ export function TeamManagement() {
           {feedback}
         </div>
       )}
-      <form className="surface form-grid" data-reveal onSubmit={create}>
-        <label>
-          Nome completo
-          <input required name="fullName" minLength={2} />
-        </label>
-        <label>
-          E-mail profissional
-          <input required name="email" type="email" />
-        </label>
-        <label>
-          Função
-          <select required name="roleId" defaultValue="">
-            <option value="" disabled>
-              Selecione
-            </option>
-            {operationalRoles.map((role) => (
-              <option key={role.id} value={role.id}>
-                {role.name}
+      {canManageUsers && canViewRoles && (
+        <form className="surface form-grid" data-reveal onSubmit={create}>
+          <label>
+            Nome completo
+            <input required name="fullName" minLength={2} />
+          </label>
+          <label>
+            E-mail profissional
+            <input required name="email" type="email" />
+          </label>
+          <label>
+            Função
+            <select required name="roleId" defaultValue="">
+              <option value="" disabled>
+                Selecione
               </option>
-            ))}
-          </select>
-        </label>
-        <div className="role-explainer">
-          <strong>Acesso por função</strong>
-          <span>
-            Advogado: clientes, processos, documentos e relatórios. Secretaria: cadastro, agenda,
-            documentos e operação, sem gestão financeira sensível.
-          </span>
-        </div>
-        <button className="primary form-wide" disabled={busy || !operationalRoles.length}>
-          {busy ? 'Enviando…' : 'Cadastrar e enviar convite'}
-        </button>
-      </form>
+              {operationalRoles.map((role) => (
+                <option key={role.id} value={role.id}>
+                  {role.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="role-explainer">
+            <strong>Acesso por função</strong>
+            <span>
+              Advogado: clientes, processos, documentos e relatórios. Secretaria: cadastro, agenda,
+              documentos e operação, sem gestão financeira sensível.
+            </span>
+          </div>
+          <button className="primary form-wide" disabled={busy || !operationalRoles.length}>
+            {busy ? 'Enviando…' : 'Cadastrar e enviar convite'}
+          </button>
+        </form>
+      )}
       {(users.error || roles.error) && (
         <div className="notice notice-error" role="alert">
           {users.error?.message || roles.error?.message}
@@ -136,6 +175,7 @@ export function TeamManagement() {
                 <th>E-mail</th>
                 <th>Função</th>
                 <th>Status</th>
+                {canManageUsers && <th>Ações</th>}
               </tr>
             </thead>
             <tbody>
@@ -147,12 +187,28 @@ export function TeamManagement() {
                   <td>
                     <span className="badge">{user.status}</span>
                   </td>
+                  {canManageUsers && (
+                    <td>
+                      <button
+                        className="table-action"
+                        disabled={busy}
+                        onClick={() => void setStatus(user)}
+                      >
+                        {user.status === 'ACTIVE' ? 'Suspender' : 'Reativar'}
+                      </button>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       </section>
+      {canManageRoles && (
+        <button className="secondary" disabled={busy} onClick={() => void reconcile()}>
+          Atualizar permissões padrão
+        </button>
+      )}
     </section>
   );
 }

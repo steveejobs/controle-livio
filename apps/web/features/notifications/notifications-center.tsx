@@ -16,20 +16,35 @@ type Notification = {
 };
 type NotificationPage = { items: Notification[]; unread: number };
 
-export function NotificationsCenter({ openClient }: { openClient: (id: string) => void }) {
+export function NotificationsCenter({
+  openClient,
+  openModule,
+  permissions,
+}: {
+  openClient: (id: string) => void;
+  openModule: (module: string) => void;
+  permissions: readonly string[];
+}) {
   const { data, error, reload } = useApiData<NotificationPage>('/notifications');
   const [reconciling, setReconciling] = useState(false);
+  const canUpdate = permissions.includes('notifications:update');
+  const canOpenClients = permissions.includes('clients:view');
   useEffect(() => {
+    if (!canUpdate) return;
     setReconciling(true);
     api('/notifications/reconcile', { method: 'POST' })
       .then(reload)
       .catch(() => undefined)
       .finally(() => setReconciling(false));
-  }, [reload]);
+  }, [canUpdate, reload]);
   const read = async (item: Notification) => {
-    if (item.status !== 'READ') await api(`/notifications/${item.id}/read`, { method: 'PATCH' });
+    if (item.status !== 'READ' && canUpdate)
+      await api(`/notifications/${item.id}/read`, { method: 'PATCH' });
     reload();
-    if (item.link?.startsWith('client:')) openClient(item.link.slice('client:'.length));
+    if (canOpenClients && item.link?.startsWith('client:'))
+      openClient(item.link.slice('client:'.length));
+    else if (item.link?.startsWith('client:')) openModule('portal');
+    if (permissions.includes('tasks:view') && item.link?.startsWith('task:')) openModule('tasks');
   };
   return (
     <section>
@@ -38,21 +53,24 @@ export function NotificationsCenter({ openClient }: { openClient: (id: string) =
           <p>Acompanhamento</p>
           <h1>Notificações</h1>
           <span>
-            Parcelas vencidas e próximas do vencimento, atualizadas a partir do financeiro.
+            Parcelas vencidas, próximos vencimentos e lembretes de tarefas em um só lugar.
           </span>
         </div>
-        <button
-          className="secondary"
-          disabled={reconciling}
-          onClick={() => {
-            setReconciling(true);
-            api('/notifications/reconcile', { method: 'POST' })
-              .then(reload)
-              .finally(() => setReconciling(false));
-          }}
-        >
-          {reconciling ? 'Atualizando…' : 'Atualizar alertas'}
-        </button>
+        {canUpdate && (
+          <button
+            className="secondary"
+            disabled={reconciling}
+            onClick={() => {
+              setReconciling(true);
+              api('/notifications/reconcile', { method: 'POST' })
+                .then(reload)
+                .catch(() => undefined)
+                .finally(() => setReconciling(false));
+            }}
+          >
+            {reconciling ? 'Atualizando…' : 'Atualizar alertas'}
+          </button>
+        )}
       </header>
       {error && (
         <div role="alert" className="notice notice-error">
@@ -90,8 +108,8 @@ export function NotificationsCenter({ openClient }: { openClient: (id: string) =
       </div>
       {data && !data.items.length && (
         <div className="empty">
-          <strong>Nenhum alerta financeiro</strong>
-          <span>As parcelas estão em dia ou ainda não há cobranças cadastradas.</span>
+          <strong>Nenhum alerta pendente</strong>
+          <span>As parcelas estão em dia e não há lembretes de tarefas vencidos.</span>
         </div>
       )}
     </section>

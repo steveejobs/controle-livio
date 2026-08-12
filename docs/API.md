@@ -28,6 +28,10 @@ organização, mas nunca concede acesso sem vínculo ativo. Não existe sessão/
 
 As rotas exatas, schemas e códigos de resposta devem ser consultados no OpenAPI gerado pelo código.
 
+`GET /v1/notifications/cron` é reservado ao agendador da infraestrutura. A rota exige o Bearer de
+`CRON_SECRET`, não aceita sessão de usuário como substituto e reconcilia parcelas e lembretes de
+tarefas por destinatário, organização e cliente vinculado.
+
 ## Financeiro
 
 `POST /finance/payments` exige `Idempotency-Key` (máximo 160 caracteres). Repetir chave e payload devolve o mesmo pagamento; repetir a chave com conteúdo diferente responde conflito. Valores monetários são strings decimais, por exemplo `"1250.0000"`, nunca números de ponto flutuante.

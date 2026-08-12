@@ -40,6 +40,8 @@ Variáveis obrigatórias:
 - `SUPABASE_AUTH_REDIRECT_URL` HTTPS;
 - `CORS_ORIGINS` com a origem HTTPS exata da web, sem wildcard;
 - `STORAGE_BUCKET=legal-documents`, `MAX_DOCUMENT_SIZE_MB` e `LOG_LEVEL`;
+- `CRON_SECRET` aleatório com pelo menos 32 caracteres para proteger a reconciliação diária de
+  parcelas vencidas e próximas do vencimento;
 - `TRUST_PROXY=true` somente quando a topologia do provedor possui um proxy confiável compatível.
 
 O health check deve usar `/v1/health/ready`; `/v1/health/live` prova somente o processo.
@@ -87,6 +89,8 @@ Para a API:
 - Fluid compute: habilitado.
 - Região da Function: `gru1`, versionada em `apps/api/vercel.json` para aproximar a API do projeto
   Supabase usado pela aplicação.
+- Cron diário: `GET /v1/notifications/cron` às 11:00 UTC (08:00 em Brasília), autenticado
+  automaticamente por `Authorization: Bearer $CRON_SECRET`. Sem o segredo, a rota falha fechada.
 
 Enquanto os aliases `vercel.app` forem usados, `controle-livio.vercel.app` identifica o projeto da
 API e `controle-livio-web.vercel.app` identifica a web. A raiz `/` da API possui redirecionamento

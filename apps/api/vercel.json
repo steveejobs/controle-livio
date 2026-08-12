@@ -17,5 +17,6 @@
       "permanent": true
     }
   ],
+  "crons": [{ "path": "/v1/notifications/cron", "schedule": "0 11 * * *" }],
   "fluid": true
 }

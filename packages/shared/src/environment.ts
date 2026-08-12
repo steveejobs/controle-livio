@@ -45,6 +45,7 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     SMTP_USER: z.string().min(1).optional(),
     SMTP_PASSWORD: z.string().min(1).optional(),
     SMTP_FROM: z.string().email().optional(),
+    CRON_SECRET: z.string().min(32).optional(),
     TRUST_PROXY: booleanEnvironmentValue.default(false),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   })

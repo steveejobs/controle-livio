@@ -37,6 +37,18 @@ type Payment = {
   method: string;
   client: Client;
 };
+type Expense = {
+  id: string;
+  description: string;
+  category: string;
+  amount: string;
+  currency: string;
+  status: string;
+  incurredAt: string;
+  dueDate?: string;
+  reimbursable: boolean;
+  client?: Client;
+};
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -56,14 +68,25 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
   const canCreateReceivable = permissions.includes('receivables:create');
   const canCreatePayment = permissions.includes('payments:create');
   const canViewPayments = permissions.includes('payments:view');
-  const clients = useApiData<Page<Client>>('/clients?pageSize=100');
+  const canApprovePayments = permissions.includes('payments:approve');
+  const canApproveReceivables = permissions.includes('receivables:approve');
+  const canCreateExpense = permissions.includes('expenses:create');
+  const canViewExpenses = permissions.includes('expenses:view');
+  const clients = useApiData<Page<Client>>(
+    permissions.includes('clients:view') ? '/clients?pageSize=100' : undefined,
+  );
   const receivables = useApiData<Page<Receivable>>('/finance/receivables?pageSize=100');
   const payments = useApiData<Page<Payment>>(
     canViewPayments ? '/finance/payments?pageSize=100' : undefined,
   );
-  const [mode, setMode] = useState<'receivable' | 'payment'>(
+  const expenses = useApiData<Page<Expense>>(
+    canViewExpenses ? '/finance/expenses?pageSize=100' : undefined,
+  );
+  const [mode, setMode] = useState<'receivable' | 'payment' | 'expense'>(
     canCreateReceivable ? 'receivable' : 'payment',
   );
+  const [adjusting, setAdjusting] = useState<string>();
+  const [reversing, setReversing] = useState<string>();
   const [selectedClient, setSelectedClient] = useState('');
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -95,6 +118,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
       setFeedback(success);
       receivables.reload();
       payments.reload();
+      expenses.reload();
       return true;
     } catch (caught) {
       setFeedback(
@@ -181,6 +205,67 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
     });
   };
 
+  const createExpense = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const target = event.currentTarget;
+    const form = new FormData(target);
+    void finish(
+      () =>
+        api('/finance/expenses', {
+          method: 'POST',
+          body: JSON.stringify({
+            clientId: form.get('clientId') || undefined,
+            description: form.get('description'),
+            category: form.get('category'),
+            amount: String(form.get('amount')).replace(',', '.'),
+            currency: 'BRL',
+            incurredAt: form.get('incurredAt'),
+            dueDate: form.get('dueDate') || undefined,
+            reimbursable: form.get('reimbursable') === 'on',
+          }),
+        }),
+      'Despesa cadastrada.',
+    ).then((ok) => {
+      if (ok) target.reset();
+    });
+  };
+
+  const addAdjustment = (event: FormEvent<HTMLFormElement>, installmentId: string) => {
+    event.preventDefault();
+    const target = event.currentTarget;
+    const form = new FormData(target);
+    void finish(
+      () =>
+        api(`/finance/installments/${installmentId}/adjustments`, {
+          method: 'POST',
+          body: JSON.stringify({
+            kind: form.get('kind'),
+            amount: String(form.get('amount')).replace(',', '.'),
+            reason: form.get('reason'),
+            effectiveAt: form.get('effectiveAt'),
+          }),
+        }),
+      'Ajuste financeiro aplicado.',
+    ).then((ok) => {
+      if (ok) setAdjusting(undefined);
+    });
+  };
+
+  const reversePayment = (event: FormEvent<HTMLFormElement>, payment: Payment) => {
+    event.preventDefault();
+    const reason = new FormData(event.currentTarget).get('reason');
+    void finish(
+      () =>
+        api(`/finance/payments/${payment.id}/reversal`, {
+          method: 'POST',
+          body: JSON.stringify({ reason }),
+        }),
+      'Pagamento estornado.',
+    ).then((ok) => {
+      if (ok) setReversing(undefined);
+    });
+  };
+
   return (
     <section>
       <header className="page-title">
@@ -191,7 +276,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             Cadastre valores a receber, gere parcelas e confirme pagamentos com rastreabilidade.
           </span>
         </div>
-        {(canCreateReceivable || canCreatePayment) && (
+        {(canCreateReceivable || canCreatePayment || canCreateExpense) && (
           <div className="segmented">
             {canCreateReceivable && (
               <button
@@ -207,6 +292,14 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                 onClick={() => setMode('payment')}
               >
                 Receber pagamento
+              </button>
+            )}
+            {canCreateExpense && (
+              <button
+                className={mode === 'expense' ? 'active' : ''}
+                onClick={() => setMode('expense')}
+              >
+                Nova despesa
               </button>
             )}
           </div>
@@ -274,7 +367,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             {busy ? 'Salvando…' : 'Criar cobrança e parcelas'}
           </button>
         </form>
-      ) : canCreatePayment ? (
+      ) : mode === 'payment' && canCreatePayment ? (
         <form className="surface form-grid" data-reveal onSubmit={createPayment}>
           <label>
             Cliente
@@ -330,6 +423,46 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             {busy ? 'Confirmando…' : 'Confirmar pagamento'}
           </button>
         </form>
+      ) : mode === 'expense' && canCreateExpense ? (
+        <form className="surface form-grid" data-reveal onSubmit={createExpense}>
+          <label>
+            Cliente
+            <select name="clientId" defaultValue="">
+              <option value="">Sem vínculo</option>
+              {clients.data?.items.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.displayName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Categoria
+            <input required name="category" minLength={2} />
+          </label>
+          <label className="form-wide">
+            Descrição
+            <input required name="description" minLength={2} />
+          </label>
+          <label>
+            Valor
+            <input required name="amount" inputMode="decimal" placeholder="0,00" />
+          </label>
+          <label>
+            Data da despesa
+            <input required type="date" name="incurredAt" defaultValue={today()} />
+          </label>
+          <label>
+            Vencimento
+            <input type="date" name="dueDate" />
+          </label>
+          <label className="check">
+            <input type="checkbox" name="reimbursable" /> Reembolsável pelo cliente
+          </label>
+          <button className="primary form-wide" disabled={busy}>
+            Cadastrar despesa
+          </button>
+        </form>
       ) : null}
       <section className="section-block" data-reveal>
         <div className="section-heading">
@@ -349,6 +482,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                 <th>Parcelas</th>
                 <th>Último vencimento</th>
                 <th>Status</th>
+                {canApproveReceivables && <th>Ações</th>}
               </tr>
             </thead>
             <tbody>
@@ -365,6 +499,66 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                   <td>
                     <span className="badge">{item.status}</span>
                   </td>
+                  {canApproveReceivables && (
+                    <td>
+                      {item.installments
+                        .filter(
+                          (part) => !['PAID', 'CANCELLED', 'RENEGOTIATED'].includes(part.status),
+                        )
+                        .map((part) => (
+                          <button
+                            className="table-action"
+                            key={part.id}
+                            onClick={() =>
+                              setAdjusting(adjusting === part.id ? undefined : part.id)
+                            }
+                          >
+                            Ajustar parcela {part.sequence}
+                          </button>
+                        ))}
+                      {item.installments.map(
+                        (part) =>
+                          adjusting === part.id && (
+                            <form
+                              className="stack-form compact-form"
+                              key={`form-${part.id}`}
+                              onSubmit={(event) => addAdjustment(event, part.id)}
+                            >
+                              <label>
+                                Tipo
+                                <select name="kind" defaultValue="DISCOUNT">
+                                  <option value="DISCOUNT">Desconto</option>
+                                  <option value="INTEREST">Juros</option>
+                                  <option value="PENALTY">Multa</option>
+                                  <option value="CORRECTION">Correção</option>
+                                  <option value="OTHER">Outro</option>
+                                </select>
+                              </label>
+                              <label>
+                                Valor
+                                <input required name="amount" inputMode="decimal" />
+                              </label>
+                              <label>
+                                Motivo
+                                <input required minLength={3} name="reason" />
+                              </label>
+                              <label>
+                                Data
+                                <input
+                                  required
+                                  type="date"
+                                  name="effectiveAt"
+                                  defaultValue={today()}
+                                />
+                              </label>
+                              <button className="secondary" disabled={busy}>
+                                Aplicar
+                              </button>
+                            </form>
+                          ),
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -390,6 +584,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                   <th>Forma</th>
                   <th>Data</th>
                   <th>Status</th>
+                  {canApprovePayments && <th>Ações</th>}
                 </tr>
               </thead>
               <tbody>
@@ -403,11 +598,87 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                     <td>
                       <span className="badge">{item.status}</span>
                     </td>
+                    {canApprovePayments && (
+                      <td>
+                        {item.status === 'CONFIRMED' && (
+                          <>
+                            <button
+                              className="table-action"
+                              disabled={busy}
+                              onClick={() =>
+                                setReversing(reversing === item.id ? undefined : item.id)
+                              }
+                            >
+                              Estornar
+                            </button>
+                            {reversing === item.id && (
+                              <form
+                                className="stack-form compact-form"
+                                onSubmit={(event) => reversePayment(event, item)}
+                              >
+                                <label>
+                                  Motivo
+                                  <input required minLength={3} maxLength={500} name="reason" />
+                                </label>
+                                <button className="secondary" disabled={busy}>
+                                  Confirmar estorno
+                                </button>
+                              </form>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+        </section>
+      )}
+      {canViewExpenses && (
+        <section className="section-block" data-reveal>
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Saídas</p>
+              <h2>Despesas</h2>
+            </div>
+            <span>{expenses.data?.total ?? 0} registros</span>
+          </div>
+          {expenses.error ? (
+            <div className="notice notice-error" role="alert">
+              {expenses.error.message}
+            </div>
+          ) : (
+            <div className="surface table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Descrição</th>
+                    <th>Cliente</th>
+                    <th>Categoria</th>
+                    <th>Valor</th>
+                    <th>Data</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {expenses.data?.items.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.description}</td>
+                      <td>{item.client?.displayName ?? '—'}</td>
+                      <td>{item.category}</td>
+                      <td>{formatMoney(item.amount, item.currency)}</td>
+                      <td>{formatDate(item.incurredAt)}</td>
+                      <td>
+                        <span className="badge">{item.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
     </section>

@@ -34,4 +34,15 @@ describe('PermissionGuard', () => {
       new PermissionGuard(missing as never).canActivate(context(['payments:view'])),
     ).toThrow(ForbiddenException);
   });
+
+  it('autoriza rota explicitamente marcada para qualquer sessão autenticada', () => {
+    const reflector = {
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(undefined)
+        .mockReturnValueOnce(true),
+    };
+    expect(new PermissionGuard(reflector as never).canActivate(context([]))).toBe(true);
+  });
 });

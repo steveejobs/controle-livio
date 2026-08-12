@@ -156,6 +156,36 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - `supabase start` foi tentado duas vezes e falhou antes de criar containers porque Docker e Podman não
   existem no PATH. Logo, migrations/seed/testes RLS reais permanecem preparados mas não executados.
 
+## Implementação operacional de 2026-08-12
+
+- A auditoria completa das abas deixou de tratar presença de endpoint como equivalência de produto
+  pronto. Agenda, Tarefas, Documentos, Contratos e Pipelines agora possuem operações de escrita
+  compatíveis com as permissões da API; Processos ganhou cadastro e atualização operacional, e o
+  filtro do CRM jurídico passou a usar exclusivamente pipelines `LEGAL`.
+- A área financeira mantém criação de entrada/parcelas/pagamentos e passou a expor despesas, ajustes
+  aprovados de parcelas e estorno auditado. Relatórios agora mostram todos os doze contratos de
+  relatório da API e só exibem exportação a perfis com `reports:export`.
+- A tela administrativa agora respeita separadamente `users:manage`, `roles:view` e `roles:manage`,
+  permite suspender/reativar profissionais e executar explicitamente a reconciliação dos papéis de
+  sistema. O convite continua dependendo do SMTP do Supabase, que ainda precisa de configuração e
+  validação próprias em produção.
+- Perfis vinculados a cliente agora recebem a aba `Minha área`, com leitura/download apenas de
+  documentos liberados como `CLIENT` e troca de observações pelo canal de mensagens existente, sem
+  depender de acesso ao cadastro geral de clientes.
+- Corrigido o isolamento da visão agregada de cliente: cada coleção interna só é consultada quando a
+  sessão possui sua permissão específica, e documentos de perfil cliente também exigem visibilidade
+  `CLIENT`. A rota autenticada `/auth/me` deixou de depender indevidamente de `notifications:view`.
+- Alertas financeiros agora respeitam `actor.clientId`. Uma Vercel Cron diária protegida por
+  `CRON_SECRET` reconcilia parcelas e lembretes de tarefas vencidos para todos os destinatários
+  ativos; o endpoint falha fechado quando o segredo não foi configurado. E-mail/WhatsApp continuam
+  fora do escopo até existir provedor, consentimento, templates e política de retentativas.
+- Os módulos operacionais são carregados sob demanda pelo Next, reduzindo o JavaScript necessário no
+  login e na primeira renderização. Estados vazios de Auditoria e das novas telas são explícitos, sem
+  spinner infinito.
+- Validação parcial desta etapa: format, lint, TypeScript e 45 testes passaram. Prisma validate e
+  builds locais passaram; smoke do deploy e E2E autenticado ainda precisam ser concluídos antes de
+  considerar a etapa publicada.
+
 ## Invariantes
 
 1. Tenant nunca vem do navegador sem membership validada.
@@ -172,9 +202,9 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - Rotacionar a credencial administrativa atual antes da abertura pública.
 - Configurar custom SMTP e validar convite, login, refresh, recuperação e templates no staging
   publicado; Site URL e redirect HTTPS já estão configurados.
-- Alertas desta etapa são internos e reconciliados durante o uso do sistema. Envio proativo fora do
-  aplicativo exige provedor, consentimento, templates, política de retentativas e agendamento ainda
-  não definidos.
+- Alertas desta etapa são internos e possuem reconciliação diária na Vercel quando `CRON_SECRET`
+  estiver configurado. Envio por e-mail/WhatsApp exige provedor, consentimento, templates e política
+  de retentativas ainda não definidos.
 - Definir domínios próprios, se exigidos pelo produto, e atualizar CORS, URL pública da API e
   redirects antes da troca dos aliases `vercel.app`.
 - Adicionar scanner antimalware, rate limit distribuído, telemetria e alertas antes de produção.

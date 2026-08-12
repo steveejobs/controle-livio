@@ -3,7 +3,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import type { AuthenticatedActor } from '@livio/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { CurrentActor } from './current-actor.decorator';
-import { RequirePermission } from './require-permission.decorator';
+import { AuthenticatedRoute } from './authenticated-route.decorator';
 
 @ApiTags('Autenticação')
 @ApiBearerAuth()
@@ -12,7 +12,7 @@ export class AuthController {
   constructor(private readonly prisma: PrismaService) {}
 
   @Get('me')
-  @RequirePermission('notifications:view')
+  @AuthenticatedRoute()
   async me(@CurrentActor() actor: AuthenticatedActor) {
     if (!actor.membershipId || !actor.profileId) {
       throw new UnauthorizedException('Contexto de membership inválido');
@@ -27,6 +27,7 @@ export class AuthController {
         profileId: actor.profileId,
         name: membership.profile.fullName,
         email: membership.profile.email,
+        clientId: membership.clientId,
         permissions: actor.permissions,
       },
       organization: {

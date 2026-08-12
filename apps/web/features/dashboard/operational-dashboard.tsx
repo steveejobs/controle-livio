@@ -17,7 +17,13 @@ type Summary = {
   }>;
 };
 
-export function OperationalDashboard({ navigate }: { navigate: (module: string) => void }) {
+export function OperationalDashboard({
+  navigate,
+  permissions,
+}: {
+  navigate: (module: string) => void;
+  permissions: readonly string[];
+}) {
   const { data, error, reload } = useApiData<Summary>('/dashboard/summary');
   const maximum =
     data?.monthlyReceivables.reduce((value, item) => {
@@ -33,6 +39,12 @@ export function OperationalDashboard({ navigate }: { navigate: (module: string) 
     new Intl.DateTimeFormat('pt-BR', { month: 'short', year: '2-digit', timeZone: 'UTC' }).format(
       new Date(`${value}T12:00:00Z`),
     );
+  const allowedTargets = new Set([
+    ...(permissions.includes('clients:view') ? ['clients'] : []),
+    ...(permissions.includes('matters:view') ? ['matters'] : []),
+    ...(permissions.includes('receivables:view') ? ['finance'] : []),
+    ...(permissions.includes('tasks:view') ? ['tasks'] : []),
+  ]);
   const cards = data
     ? ([
         ['Clientes ativos', data.activeClients, 'clients'],
@@ -49,9 +61,11 @@ export function OperationalDashboard({ navigate }: { navigate: (module: string) 
           <h1>Visão geral</h1>
           <span>Indicadores operacionais e contas a receber dos próximos seis meses.</span>
         </div>
-        <button className="secondary" onClick={() => navigate('notifications')}>
-          Ver notificações
-        </button>
+        {permissions.includes('notifications:view') && (
+          <button className="secondary" onClick={() => navigate('notifications')}>
+            Ver notificações
+          </button>
+        )}
       </header>
       {error && (
         <div className="notice notice-error" role="alert">
@@ -75,6 +89,7 @@ export function OperationalDashboard({ navigate }: { navigate: (module: string) 
                 className="metric"
                 key={label}
                 onClick={() => navigate(target)}
+                disabled={!allowedTargets.has(target)}
               >
                 <span>{label}</span>
                 <strong>{value}</strong>
@@ -88,9 +103,11 @@ export function OperationalDashboard({ navigate }: { navigate: (module: string) 
                 <p className="eyebrow">Fluxo futuro</p>
                 <h2>Contas a receber mensais</h2>
               </div>
-              <button className="table-action" onClick={() => navigate('reports')}>
-                Abrir relatório
-              </button>
+              {permissions.includes('reports:view') && (
+                <button className="table-action" onClick={() => navigate('reports')}>
+                  Abrir relatório
+                </button>
+              )}
             </div>
             <div className="monthly-chart" aria-label="Contas a receber por mês">
               {data?.monthlyReceivables.map((item) => (

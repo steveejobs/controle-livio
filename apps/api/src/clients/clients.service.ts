@@ -78,6 +78,8 @@ export class ClientsService {
   async overview(actor: AuthenticatedActor, id: string) {
     const client = await this.get(actor, id);
     const scope = { organizationId: actor.organizationId, clientId: id };
+    const can = (permission: (typeof actor.permissions)[number]) =>
+      actor.permissions.includes(permission);
     const [
       matters,
       contracts,
@@ -89,123 +91,154 @@ export class ClientsService {
       notes,
       messages,
       timeline,
-    ] = await this.prisma.$transaction([
-      this.prisma.matter.findMany({
-        where: { ...scope, deletedAt: null },
-        select: {
-          id: true,
-          reference: true,
-          title: true,
-          status: true,
-          priority: true,
-          updatedAt: true,
-          currentStage: { select: { name: true } },
-        },
-        orderBy: { updatedAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.contract.findMany({
-        where: scope,
-        select: {
-          id: true,
-          number: true,
-          title: true,
-          status: true,
-          fixedAmount: true,
-          currency: true,
-          createdAt: true,
-        },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.receivable.findMany({
-        where: scope,
-        select: {
-          id: true,
-          reference: true,
-          status: true,
-          originalAmount: true,
-          currency: true,
-          dueDate: true,
-          installments: {
+    ] = await Promise.all([
+      can('matters:view')
+        ? this.prisma.matter.findMany({
+            where: { ...scope, deletedAt: null },
             select: {
               id: true,
-              sequence: true,
+              reference: true,
+              title: true,
               status: true,
-              amount: true,
+              priority: true,
+              updatedAt: true,
+              currentStage: { select: { name: true } },
+            },
+            orderBy: { updatedAt: 'desc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('contracts:view')
+        ? this.prisma.contract.findMany({
+            where: scope,
+            select: {
+              id: true,
+              number: true,
+              title: true,
+              status: true,
+              fixedAmount: true,
+              currency: true,
+              createdAt: true,
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('receivables:view')
+        ? this.prisma.receivable.findMany({
+            where: scope,
+            select: {
+              id: true,
+              reference: true,
+              status: true,
+              originalAmount: true,
+              currency: true,
               dueDate: true,
-              allocations: {
-                where: { reversedAt: null, payment: { status: 'CONFIRMED' } },
-                select: { amount: true },
-              },
-              adjustments: {
-                where: { approvedAt: { not: null } },
-                select: { kind: true, amount: true },
+              installments: {
+                select: {
+                  id: true,
+                  sequence: true,
+                  status: true,
+                  amount: true,
+                  dueDate: true,
+                  allocations: {
+                    where: { reversedAt: null, payment: { status: 'CONFIRMED' } },
+                    select: { amount: true },
+                  },
+                  adjustments: {
+                    where: { approvedAt: { not: null } },
+                    select: { kind: true, amount: true },
+                  },
+                },
               },
             },
-          },
-        },
-        orderBy: { dueDate: 'asc' },
-        take: 50,
-      }),
-      this.prisma.payment.findMany({
-        where: scope,
-        select: {
-          id: true,
-          reference: true,
-          amount: true,
-          currency: true,
-          status: true,
-          paidAt: true,
-          method: true,
-          documents: { select: { id: true, title: true } },
-        },
-        orderBy: { paidAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.document.findMany({
-        where: { ...scope, deletedAt: null },
-        select: { id: true, title: true, category: true, visibility: true, updatedAt: true },
-        orderBy: { updatedAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.task.findMany({
-        where: { ...scope, deletedAt: null },
-        select: { id: true, title: true, status: true, priority: true, dueAt: true },
-        orderBy: { dueAt: 'asc' },
-        take: 20,
-      }),
-      this.prisma.calendarEvent.findMany({
-        where: { ...scope, startsAt: { gte: new Date() } },
-        select: { id: true, title: true, type: true, startsAt: true, endsAt: true, timezone: true },
-        orderBy: { startsAt: 'asc' },
-        take: 20,
-      }),
-      this.prisma.internalNote.findMany({
-        where: { ...scope, deletedAt: null },
-        select: { id: true, body: true, createdAt: true, createdById: true },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.clientMessage.findMany({
-        where: { ...scope, deletedAt: null },
-        select: { id: true, body: true, publishedAt: true, createdById: true },
-        orderBy: { publishedAt: 'desc' },
-        take: 20,
-      }),
-      this.prisma.activityEvent.findMany({
-        where: { organizationId: actor.organizationId, subjectType: 'client', subjectId: id },
-        select: {
-          id: true,
-          type: true,
-          summary: true,
-          metadata: true,
-          occurredAt: true,
-          actorUserId: true,
-        },
-        orderBy: { occurredAt: 'desc' },
-        take: 50,
-      }),
+            orderBy: { dueDate: 'asc' },
+            take: 50,
+          })
+        : Promise.resolve([]),
+      can('payments:view')
+        ? this.prisma.payment.findMany({
+            where: scope,
+            select: {
+              id: true,
+              reference: true,
+              amount: true,
+              currency: true,
+              status: true,
+              paidAt: true,
+              method: true,
+              documents: { select: { id: true, title: true } },
+            },
+            orderBy: { paidAt: 'desc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('documents:view')
+        ? this.prisma.document.findMany({
+            where: {
+              ...scope,
+              deletedAt: null,
+              ...(actor.clientId ? { visibility: 'CLIENT' as const } : {}),
+            },
+            select: { id: true, title: true, category: true, visibility: true, updatedAt: true },
+            orderBy: { updatedAt: 'desc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('tasks:view')
+        ? this.prisma.task.findMany({
+            where: { ...scope, deletedAt: null },
+            select: { id: true, title: true, status: true, priority: true, dueAt: true },
+            orderBy: { dueAt: 'asc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('calendar:view')
+        ? this.prisma.calendarEvent.findMany({
+            where: { ...scope, startsAt: { gte: new Date() } },
+            select: {
+              id: true,
+              title: true,
+              type: true,
+              startsAt: true,
+              endsAt: true,
+              timezone: true,
+            },
+            orderBy: { startsAt: 'asc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('notes:view')
+        ? this.prisma.internalNote.findMany({
+            where: { ...scope, deletedAt: null },
+            select: { id: true, body: true, createdAt: true, createdById: true },
+            orderBy: { createdAt: 'desc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('messages:view')
+        ? this.prisma.clientMessage.findMany({
+            where: { ...scope, deletedAt: null },
+            select: { id: true, body: true, publishedAt: true, createdById: true },
+            orderBy: { publishedAt: 'desc' },
+            take: 20,
+          })
+        : Promise.resolve([]),
+      can('audit:view')
+        ? this.prisma.activityEvent.findMany({
+            where: { organizationId: actor.organizationId, subjectType: 'client', subjectId: id },
+            select: {
+              id: true,
+              type: true,
+              summary: true,
+              metadata: true,
+              occurredAt: true,
+              actorUserId: true,
+            },
+            orderBy: { occurredAt: 'desc' },
+            take: 50,
+          })
+        : Promise.resolve([]),
     ]);
     return {
       client,

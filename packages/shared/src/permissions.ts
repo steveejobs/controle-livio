@@ -93,6 +93,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('reports', ['view', 'export']),
   ],
   client: [
+    ...codes('clients', viewOnly),
     ...codes('matters', viewOnly),
     ...codes('contracts', viewOnly),
     ...codes('receivables', viewOnly),
