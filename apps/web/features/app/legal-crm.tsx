@@ -494,7 +494,9 @@ function Content({
             ? 'CRM comercial'
             : active === 'collection'
               ? 'CRM de cobranca'
-              : 'CRM juridico'
+              : active === 'legal'
+                ? 'CRM juridico'
+                : 'Processos'
         }
       />
     );
@@ -566,6 +568,12 @@ function MatterBoard({
     }
   };
   const selectedPipelines = (pipelines ?? []).filter((p) => !kind || p.kind === kind);
+  const configuredStageIds = new Set(
+    selectedPipelines.flatMap((pipeline) => pipeline.stages.map((stage) => stage.id)),
+  );
+  const mattersWithoutConfiguredStage = filtered.filter(
+    (matter) => !matter.currentStage || !configuredStageIds.has(matter.currentStage.id),
+  );
   const create = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const target = event.currentTarget;
@@ -619,6 +627,34 @@ function MatterBoard({
       setFeedback(
         `Erro: ${caught instanceof ApiError ? caught.message : 'processo não atualizado'}`,
       );
+    } finally {
+      setMoving(undefined);
+    }
+  };
+  const assignToPipeline = async (matter: Matter, pipelineId: string) => {
+    const pipeline = selectedPipelines.find((item) => item.id === pipelineId);
+    const firstStage = pipeline
+      ? [...pipeline.stages].sort((a, b) => a.position - b.position)[0]
+      : undefined;
+    if (!pipeline || !firstStage || moving) return;
+    setMoving(matter.id);
+    setFeedback(undefined);
+    try {
+      await api(`/matters/${matter.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ pipelineId: pipeline.id }),
+      });
+      await api(`/matters/${matter.id}/stage-movements`, {
+        method: 'POST',
+        body: JSON.stringify({ toStageId: firstStage.id }),
+      });
+      setFeedback(`Processo movido para ${pipeline.name}.`);
+      await reload();
+    } catch (caught) {
+      setFeedback(
+        `Erro: ${caught instanceof ApiError ? caught.message : 'pipeline não atribuído'}`,
+      );
+      await reload();
     } finally {
       setMoving(undefined);
     }
@@ -761,99 +797,227 @@ function MatterBoard({
           <Empty>Nenhum processo no seu escopo.</Empty>
         )
       ) : selectedPipelines.length ? (
-        selectedPipelines.map((pipeline) => (
-          <section className="board" key={pipeline.id}>
-            <h2>{pipeline.name}</h2>
-            <div className="kanban">
-              {[...pipeline.stages]
-                .sort((a, b) => a.position - b.position)
-                .map((stage) => (
-                  <div className="column" key={stage.id}>
-                    <header>
-                      <i style={{ backgroundColor: stage.color ?? '#5f766d' }} />
-                      {stage.name}
-                      <span>{filtered.filter((m) => m.currentStage?.id === stage.id).length}</span>
-                    </header>
-                    {filtered
-                      .filter((m) => m.currentStage?.id === stage.id)
-                      .map((matter) => (
-                        <article className="kanban-card" key={matter.id}>
-                          <b>{matter.reference}</b>
-                          <strong>{matter.title}</strong>
-                          <small>{matter.client?.displayName ?? 'Cliente nao informado'}</small>
-                          <div>
-                            <span className={`badge priority-${matter.priority.toLowerCase()}`}>
-                              {asText(matter.priority)}
-                            </span>
-                            <span>{matter.nextAction ?? 'Sem proxima acao'}</span>
-                          </div>
-                          {canMove && (
-                            <div className="matter-controls">
-                              <label>
-                                Status
-                                <select
-                                  aria-label={`Status de ${matter.title}`}
-                                  value={matter.status}
-                                  disabled={moving === matter.id}
-                                  onChange={(event) =>
-                                    void update(matter, { status: event.target.value })
-                                  }
-                                >
-                                  <option value="LEAD">Lead</option>
-                                  <option value="ACTIVE">Ativo</option>
-                                  <option value="SUSPENDED">Suspenso</option>
-                                  <option value="CLOSED">Encerrado</option>
-                                  <option value="ARCHIVED">Arquivado</option>
-                                </select>
-                              </label>
-                              <label>
-                                Prioridade
-                                <select
-                                  aria-label={`Prioridade de ${matter.title}`}
-                                  value={matter.priority}
-                                  disabled={moving === matter.id}
-                                  onChange={(event) =>
-                                    void update(matter, { priority: event.target.value })
-                                  }
-                                >
-                                  <option value="LOW">Baixa</option>
-                                  <option value="MEDIUM">Média</option>
-                                  <option value="HIGH">Alta</option>
-                                  <option value="URGENT">Urgente</option>
-                                </select>
-                              </label>
+        <>
+          {selectedPipelines.map((pipeline) => (
+            <section className="board" key={pipeline.id}>
+              <h2>{pipeline.name}</h2>
+              <div className="kanban">
+                {[...pipeline.stages]
+                  .sort((a, b) => a.position - b.position)
+                  .map((stage) => (
+                    <div className="column" key={stage.id}>
+                      <header>
+                        <i style={{ backgroundColor: stage.color ?? '#5f766d' }} />
+                        {stage.name}
+                        <span>
+                          {filtered.filter((m) => m.currentStage?.id === stage.id).length}
+                        </span>
+                      </header>
+                      {filtered
+                        .filter((m) => m.currentStage?.id === stage.id)
+                        .map((matter) => (
+                          <article className="kanban-card" key={matter.id}>
+                            <b>{matter.reference}</b>
+                            <strong>{matter.title}</strong>
+                            <small>{matter.client?.displayName ?? 'Cliente nao informado'}</small>
+                            <div>
+                              <span className={`badge priority-${matter.priority.toLowerCase()}`}>
+                                {asText(matter.priority)}
+                              </span>
+                              <span>{matter.nextAction ?? 'Sem proxima acao'}</span>
                             </div>
-                          )}
-                          {canMove && (
-                            <>
-                              <label className="sr-only" htmlFor={`move-${matter.id}`}>
-                                Mover {matter.title}
-                              </label>
-                              <select
-                                id={`move-${matter.id}`}
-                                disabled={moving === matter.id}
-                                value={matter.currentStage?.id ?? ''}
-                                onChange={(e) => void move(matter, e.target.value)}
-                              >
-                                <option value="">Sem etapa</option>
-                                {pipeline.stages.map((s) => (
-                                  <option key={s.id} value={s.id}>
-                                    {s.name}
+                            {canMove && (
+                              <div className="matter-controls">
+                                <label>
+                                  Status
+                                  <select
+                                    aria-label={`Status de ${matter.title}`}
+                                    value={matter.status}
+                                    disabled={moving === matter.id}
+                                    onChange={(event) =>
+                                      void update(matter, { status: event.target.value })
+                                    }
+                                  >
+                                    <option value="LEAD">Lead</option>
+                                    <option value="ACTIVE">Ativo</option>
+                                    <option value="SUSPENDED">Suspenso</option>
+                                    <option value="CLOSED">Encerrado</option>
+                                    <option value="ARCHIVED">Arquivado</option>
+                                  </select>
+                                </label>
+                                <label>
+                                  Prioridade
+                                  <select
+                                    aria-label={`Prioridade de ${matter.title}`}
+                                    value={matter.priority}
+                                    disabled={moving === matter.id}
+                                    onChange={(event) =>
+                                      void update(matter, { priority: event.target.value })
+                                    }
+                                  >
+                                    <option value="LOW">Baixa</option>
+                                    <option value="MEDIUM">Média</option>
+                                    <option value="HIGH">Alta</option>
+                                    <option value="URGENT">Urgente</option>
+                                  </select>
+                                </label>
+                              </div>
+                            )}
+                            {canMove && (
+                              <>
+                                <label className="sr-only" htmlFor={`move-${matter.id}`}>
+                                  Mover {matter.title}
+                                </label>
+                                <select
+                                  id={`move-${matter.id}`}
+                                  disabled={moving === matter.id}
+                                  value={matter.currentStage?.id ?? ''}
+                                  onChange={(e) => void move(matter, e.target.value)}
+                                >
+                                  <option value="" disabled>
+                                    Sem etapa
                                   </option>
-                                ))}
-                              </select>
-                            </>
-                          )}
-                        </article>
-                      ))}
-                  </div>
-                ))}
-            </div>
-          </section>
-        ))
+                                  {pipeline.stages.map((s) => (
+                                    <option key={s.id} value={s.id}>
+                                      {s.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </>
+                            )}
+                          </article>
+                        ))}
+                    </div>
+                  ))}
+              </div>
+            </section>
+          ))}
+          {mattersWithoutConfiguredStage.length > 0 && (
+            <MatterFallbackTable
+              title="Processos sem etapa configurada"
+              matters={mattersWithoutConfiguredStage}
+              canUpdate={canMove}
+              moving={moving}
+              update={update}
+              pipelines={selectedPipelines}
+              assignToPipeline={assignToPipeline}
+            />
+          )}
+        </>
+      ) : filtered.length ? (
+        <MatterFallbackTable
+          title="Processos cadastrados"
+          matters={filtered}
+          canUpdate={canMove}
+          moving={moving}
+          update={update}
+          pipelines={selectedPipelines}
+          assignToPipeline={assignToPipeline}
+        />
       ) : (
         <Empty>Crie e configure um pipeline antes de movimentar processos.</Empty>
       )}
+    </section>
+  );
+}
+
+function MatterFallbackTable({
+  title,
+  matters,
+  canUpdate,
+  moving,
+  update,
+  pipelines,
+  assignToPipeline,
+}: {
+  title: string;
+  matters: Matter[];
+  canUpdate: boolean;
+  moving?: string;
+  update: (matter: Matter, changes: Record<string, unknown>) => Promise<void>;
+  pipelines: Pipeline[];
+  assignToPipeline: (matter: Matter, pipelineId: string) => Promise<void>;
+}) {
+  return (
+    <section className="surface table-wrap">
+      <h2>{title}</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Referência</th>
+            <th>Processo</th>
+            <th>Cliente</th>
+            <th>Status</th>
+            <th>Prioridade</th>
+            <th>Etapa</th>
+          </tr>
+        </thead>
+        <tbody>
+          {matters.map((matter) => (
+            <tr key={matter.id}>
+              <td>{matter.reference}</td>
+              <td>{matter.title}</td>
+              <td>{matter.client?.displayName ?? '—'}</td>
+              <td>
+                {canUpdate ? (
+                  <select
+                    aria-label={`Status de ${matter.title}`}
+                    value={matter.status}
+                    disabled={moving === matter.id}
+                    onChange={(event) => void update(matter, { status: event.target.value })}
+                  >
+                    <option value="LEAD">Lead</option>
+                    <option value="ACTIVE">Ativo</option>
+                    <option value="SUSPENDED">Suspenso</option>
+                    <option value="CLOSED">Encerrado</option>
+                    <option value="ARCHIVED">Arquivado</option>
+                  </select>
+                ) : (
+                  asText(matter.status)
+                )}
+              </td>
+              <td>
+                {canUpdate ? (
+                  <select
+                    aria-label={`Prioridade de ${matter.title}`}
+                    value={matter.priority}
+                    disabled={moving === matter.id}
+                    onChange={(event) => void update(matter, { priority: event.target.value })}
+                  >
+                    <option value="LOW">Baixa</option>
+                    <option value="MEDIUM">Média</option>
+                    <option value="HIGH">Alta</option>
+                    <option value="URGENT">Urgente</option>
+                  </select>
+                ) : (
+                  asText(matter.priority)
+                )}
+              </td>
+              <td>
+                {canUpdate && pipelines.length > 0 ? (
+                  <select
+                    aria-label={`Pipeline de ${matter.title}`}
+                    defaultValue=""
+                    disabled={moving === matter.id}
+                    onChange={(event) => void assignToPipeline(matter, event.target.value)}
+                  >
+                    <option value="" disabled>
+                      Atribuir pipeline
+                    </option>
+                    {pipelines.map((pipeline) => (
+                      <option value={pipeline.id} key={pipeline.id}>
+                        {pipeline.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  'Sem etapa configurada'
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </section>
   );
 }

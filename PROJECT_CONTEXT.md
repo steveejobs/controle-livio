@@ -161,7 +161,9 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - A auditoria completa das abas deixou de tratar presença de endpoint como equivalência de produto
   pronto. Agenda, Tarefas, Documentos, Contratos e Pipelines agora possuem operações de escrita
   compatíveis com as permissões da API; Processos ganhou cadastro e atualização operacional, e o
-  filtro do CRM jurídico passou a usar exclusivamente pipelines `LEGAL`.
+  filtro do CRM jurídico passou a usar exclusivamente pipelines `LEGAL`. Processos sem pipeline ou
+  vinculados a uma etapa que deixou de existir permanecem visíveis em uma tabela operacional, em vez
+  de desaparecerem do quadro.
 - A área financeira mantém criação de entrada/parcelas/pagamentos e passou a expor despesas, ajustes
   aprovados de parcelas e estorno auditado. Relatórios agora mostram todos os doze contratos de
   relatório da API e só exibem exportação a perfis com `reports:export`.
@@ -182,9 +184,18 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - Os módulos operacionais são carregados sob demanda pelo Next, reduzindo o JavaScript necessário no
   login e na primeira renderização. Estados vazios de Auditoria e das novas telas são explícitos, sem
   spinner infinito.
-- Validação parcial desta etapa: format, lint, TypeScript e 45 testes passaram. Prisma validate e
-  builds locais passaram; smoke do deploy e E2E autenticado ainda precisam ser concluídos antes de
-  considerar a etapa publicada.
+- Validação final desta etapa: format, lint, TypeScript, Prisma validate, 45 testes e builds locais
+  passaram. O commit `c8c38ed` foi publicado nos dois projetos Vercel e o workflow `Quality`
+  correspondente concluiu com sucesso, inclusive no job descartável de RLS/Storage.
+- Smoke de produção confirmou redirecionamento 308 da URL compartilhada, web 200 com o título
+  esperado, `live`/`ready` 200, cron sem segredo 401 e 401 para as rotas protegidas de clientes,
+  agenda, tarefas, documentos, financeiro, relatórios, auditoria, usuários e notificações. Não houve
+  resposta 5xx nos logs do período validado. Em três amostras aquecidas, a web respondeu em
+  125–247 ms e a API em 150–235 ms; os nove scripts iniciais somaram 249.934 bytes comprimidos,
+  abaixo dos 255.235 bytes medidos antes da divisão dos módulos.
+- `CRON_SECRET` está configurado como segredo de produção no projeto da API e a agenda diária está
+  publicada. O teste de fumaça não executou o cron autenticado nem mutações com dados reais para não
+  gerar notificações ou registros artificiais na organização de produção.
 
 ## Invariantes
 
@@ -202,13 +213,12 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - Rotacionar a credencial administrativa atual antes da abertura pública.
 - Configurar custom SMTP e validar convite, login, refresh, recuperação e templates no staging
   publicado; Site URL e redirect HTTPS já estão configurados.
-- Alertas desta etapa são internos e possuem reconciliação diária na Vercel quando `CRON_SECRET`
-  estiver configurado. Envio por e-mail/WhatsApp exige provedor, consentimento, templates e política
-  de retentativas ainda não definidos.
+- Alertas desta etapa são internos e possuem reconciliação diária na Vercel, com `CRON_SECRET`
+  configurado. Envio por e-mail/WhatsApp exige provedor, consentimento, templates e política de
+  retentativas ainda não definidos.
 - Definir domínios próprios, se exigidos pelo produto, e atualizar CORS, URL pública da API e
   redirects antes da troca dos aliases `vercel.app`.
 - Adicionar scanner antimalware, rate limit distribuído, telemetria e alertas antes de produção.
 - Ensaiar backup/restauração separados de Database e Storage.
-- Confirmar o workflow `Quality`, inclusive RLS/Storage, após o push. O smoke responsivo público não
-  substitui um E2E autenticado com mutações em banco descartável; Docker/Podman seguem indisponíveis
-  nesta máquina.
+- O smoke público e o workflow `Quality` verde não substituem um E2E autenticado completo das novas
+  telas com mutações em banco descartável; Docker/Podman seguem indisponíveis nesta máquina.
