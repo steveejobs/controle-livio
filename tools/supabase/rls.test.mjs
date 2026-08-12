@@ -128,6 +128,7 @@ const documentInsert = await lawyerA.from('documents').insert({
   visibility: 'CLIENT',
   current_version: 1,
   created_by_id: 'a1000000-0000-4000-8000-000000000002',
+  updated_at: new Date().toISOString(),
 });
 expect(
   !documentInsert.error,
