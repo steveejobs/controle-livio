@@ -75,6 +75,11 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   login por e-mail dos usuários locais. A configuração foi corrigida para manter o provedor de e-mail
   ativo e bloquear novos cadastros pelo `auth.enable_signup = false`; isso afeta somente o stack local
   descartável, não a configuração Auth hospedada.
+- O CI final aprovou os jobs `application` e `supabase-isolation`. A stack descartável aplicou as cinco
+  migrations e comprovou login de todos os papéis, isolamento entre organizações, negação de mutações
+  cruzadas, restrições do portal/secretaria/financeiro e upload/download privado no Storage. A quinta
+  migration está validada em desenvolvimento, versionada e ainda não foi aplicada ao projeto remoto,
+  pois o safeguard exige autorização adicional explícita para migration de produção.
 
 - Auditoria de prontidão repetida em 2026-08-11 sobre instalação limpa por `npm ci`: format check,
   lint, TypeScript agregado, Prisma validate, 19 testes da API, 8 testes shared e builds completos de
