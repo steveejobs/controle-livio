@@ -20,8 +20,9 @@ organização, mas nunca concede acesso sem vínculo ativo. Não existe sessão/
 | `/documents`                    | upload, nova versão, metadados e URL assinada temporária                                       |
 | `/work`                         | notas internas, mensagens ao cliente, tarefas/comentários/lembretes e eventos                  |
 | `/reports`                      | vencimentos, recebimentos, competência, vencidos, aging, caixa, parciais, contratos e receitas |
-| `/reports/export/:report.csv`   | exportação CSV protegida contra fórmula                                                        |
-| `/admin`                        | usuários, papéis e estado de usuários                                                          |
+| `/reports/:report/export.csv`   | exportação CSV protegida contra fórmula                                                        |
+| `/notifications`                | alertas de vencimento, listagem pessoal e marcação de leitura                                  |
+| `/admin`                        | usuários, papéis, convites, estados e reconciliação dos papéis de sistema                      |
 | `/audit`                        | consulta paginada de auditoria                                                                 |
 | `/health/live`, `/health/ready` | processo e conectividade PostgreSQL                                                            |
 
@@ -40,6 +41,14 @@ Upload usa `multipart/form-data`, arquivo e metadados validados. Tipos aceitos: 
 ## Relatórios e CSV
 
 Relatórios identificam `basis`: `vencimento`, `recebimento/caixa`, `competência`, `previsão_por_vencimento`, `pagamentos_alocados` ou `estado_contratual`. Períodos usam início inclusivo e fim exclusivo. O exportador CSV adiciona BOM UTF-8, escapa aspas e neutraliza células iniciadas por `=`, `+`, `-`, `@`, tab ou carriage return. `ReportExporter` já reserva a extensão futura para PDF.
+
+## Alertas financeiros
+
+`POST /notifications/reconcile` calcula o saldo efetivo das parcelas com pagamentos confirmados e
+ajustes aprovados. Gera notificações `IN_APP` idempotentes para parcelas vencidas ou que vencem em até
+sete dias e encerra alertas que deixaram de ter saldo. `GET /notifications` devolve somente as
+notificações do usuário autenticado; `PATCH /notifications/:id/read` não permite leitura cruzada entre
+usuários ou organizações. Nesta etapa não há envio externo por e-mail ou WhatsApp.
 
 ## Erros
 

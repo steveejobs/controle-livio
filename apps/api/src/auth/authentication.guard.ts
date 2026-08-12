@@ -40,8 +40,11 @@ export class AuthenticationGuard implements CanActivate {
     const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : undefined;
     if (!token) throw new UnauthorizedException('Autenticação necessária');
 
-    const { data, error } = await this.supabase.auth.getUser(token);
-    if (error || !data.user) throw new UnauthorizedException('Sessão inválida ou expirada');
+    const { data, error } = await this.supabase.auth.getClaims(token);
+    const profileId = data?.claims.sub;
+    if (error || typeof profileId !== 'string') {
+      throw new UnauthorizedException('Sessão inválida ou expirada');
+    }
 
     const selectedOrganization = request.headers['x-organization-id'];
     const organizationId = Array.isArray(selectedOrganization)
@@ -49,7 +52,7 @@ export class AuthenticationGuard implements CanActivate {
       : selectedOrganization;
     const memberships = await this.prisma.organizationMember.findMany({
       where: {
-        profileId: data.user.id,
+        profileId,
         status: 'ACTIVE',
         ...(organizationId ? { organizationId } : {}),
         organization: { status: 'ACTIVE' },
@@ -89,7 +92,7 @@ export class AuthenticationGuard implements CanActivate {
       ),
     );
     const actor: AuthenticatedActor = {
-      profileId: data.user.id,
+      profileId,
       membershipId: membership.id,
       userId: membership.userId,
       organizationId: membership.organizationId,

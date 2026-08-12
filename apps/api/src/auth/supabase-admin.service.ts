@@ -9,7 +9,9 @@ export class SupabaseAdminService {
   private readonly redirectTo: string;
 
   constructor(config: ConfigService<ApiEnvironment, true>) {
-    this.redirectTo = config.get('SUPABASE_AUTH_REDIRECT_URL', { infer: true });
+    const redirect = new URL(config.get('SUPABASE_AUTH_REDIRECT_URL', { infer: true }));
+    if (!redirect.searchParams.has('next')) redirect.searchParams.set('next', '/reset-password');
+    this.redirectTo = redirect.toString();
     this.client = createClient(
       config.get('SUPABASE_URL', { infer: true }),
       config.get('SUPABASE_SERVICE_ROLE_KEY', { infer: true }),

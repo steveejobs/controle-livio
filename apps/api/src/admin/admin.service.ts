@@ -1,5 +1,10 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import type { AuthenticatedActor } from '@livio/shared';
+import {
+  initialRolePermissions,
+  systemRoleKeys,
+  type AuthenticatedActor,
+  type SystemRoleKey,
+} from '@livio/shared';
 import { SupabaseAdminService } from '../auth/supabase-admin.service';
 import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -178,5 +183,62 @@ export class AdminService {
       include: { permissions: { include: { permission: true } } },
       orderBy: { name: 'asc' },
     });
+  }
+
+  async reconcileSystemRoles(actor: AuthenticatedActor) {
+    const roleNames: Record<SystemRoleKey, string> = {
+      administrator: 'Administrador',
+      lawyer: 'Advogado',
+      secretary: 'Secretaria',
+      finance: 'Financeiro',
+      client: 'Cliente',
+    };
+    await this.prisma.$transaction(async (transaction) => {
+      const permissions = await transaction.permission.findMany({
+        where: { organizationId: actor.organizationId },
+      });
+      const permissionByCode = new Map(
+        permissions.map((permission) => [
+          `${permission.resource}:${permission.action}`,
+          permission.id,
+        ]),
+      );
+      for (const key of systemRoleKeys) {
+        const role = await transaction.role.upsert({
+          where: { organizationId_key: { organizationId: actor.organizationId, key } },
+          create: {
+            organizationId: actor.organizationId,
+            key,
+            name: roleNames[key],
+            isSystem: true,
+          },
+          update: { name: roleNames[key], isSystem: true },
+        });
+        const permissionIds = initialRolePermissions[key].map((code) => permissionByCode.get(code));
+        if (permissionIds.some((id) => !id))
+          throw new NotFoundException('Catálogo de permissões incompleto');
+        await transaction.rolePermission.deleteMany({
+          where: { organizationId: actor.organizationId, roleId: role.id },
+        });
+        await transaction.rolePermission.createMany({
+          data: permissionIds.map((permissionId) => ({
+            organizationId: actor.organizationId,
+            roleId: role.id,
+            permissionId: permissionId!,
+          })),
+          skipDuplicates: true,
+        });
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'UPDATE',
+          resource: 'role',
+          resourceId: role.id,
+          after: { key, permissions: initialRolePermissions[key] },
+        });
+      }
+    });
+    return this.listRoles(actor);
   }
 }

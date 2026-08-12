@@ -7,7 +7,7 @@ export class DashboardController {
   constructor(private readonly dashboard: DashboardService) {}
 
   @Get('summary')
-  @RequirePermission('matters:view')
+  @RequirePermission('reports:view')
   summary(): Promise<DashboardSummary> {
     return this.dashboard.summary();
   }

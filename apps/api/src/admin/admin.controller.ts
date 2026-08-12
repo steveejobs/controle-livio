@@ -37,6 +37,11 @@ export class AdminController {
   @Get('roles') @RequirePermission('roles:view') roles(@CurrentActor() actor: AuthenticatedActor) {
     return this.admin.listRoles(actor);
   }
+  @Post('system-roles/reconcile') @RequirePermission('roles:manage') reconcileRoles(
+    @CurrentActor() actor: AuthenticatedActor,
+  ) {
+    return this.admin.reconcileSystemRoles(actor);
+  }
   @Post('roles') @RequirePermission('roles:manage') createRole(
     @CurrentActor() actor: AuthenticatedActor,
     @Body(new ZodValidationPipe(createRoleSchema)) input: CreateRoleInput,

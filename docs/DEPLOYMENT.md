@@ -85,6 +85,8 @@ Para a API:
 - Build e Install Command: mantenha os valores de `apps/api/vercel.json`;
 - Output Directory: vazio, para o preset NestJS produzir uma única Vercel Function;
 - Fluid compute: habilitado.
+- Região da Function: `gru1`, versionada em `apps/api/vercel.json` para aproximar a API do projeto
+  Supabase usado pela aplicação.
 
 Enquanto os aliases `vercel.app` forem usados, `controle-livio.vercel.app` identifica o projeto da
 API e `controle-livio-web.vercel.app` identifica a web. A raiz `/` da API possui redirecionamento

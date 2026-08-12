@@ -42,6 +42,25 @@ describe('authenticated API client', () => {
     expect(headers.get('X-Organization-Id')).toBe('organization-for-test');
   });
 
+  it('reaproveita leituras brevemente e invalida o cache após uma escrita', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    await api('/clients');
+    await api('/clients');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await api('/clients', { method: 'POST', body: JSON.stringify({ name: 'Novo' }) });
+    await api('/clients');
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it('downloads a protected CSV through the authenticated client', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response('\uFEFFname\r\nGabriel', {

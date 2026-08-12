@@ -3,8 +3,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ProductBrand } from '../../components/product-brand';
-import { ApiError, api, downloadApiFile, resetApiSession } from '../../lib/api';
+import { ApiError, api, resetApiSession } from '../../lib/api';
 import { createSupabaseBrowserClient } from '../../lib/supabase/client';
+import { TeamManagement } from '../admin/team-management';
+import { ClientManagement } from '../clients/client-management';
+import { OperationalDashboard } from '../dashboard/operational-dashboard';
+import { FinanceOperations } from '../finance/finance-operations';
+import { NotificationsCenter } from '../notifications/notifications-center';
+import { ReportsCenter } from '../reports/reports-center';
 
 type Page<T> = { items: T[]; total: number };
 type Client = {
@@ -66,16 +72,27 @@ type Session = {
   user: { id: string; name?: string; email: string; permissions?: string[] };
   organization: { name?: string; slug?: string };
 };
-type Summary = {
-  activeClients: number;
-  activeMatters: number;
-  overdueReceivables: number;
-  openTasks: number;
-  generatedAt: string;
-};
-
 type NavItem = readonly [id: string, name: string, icon: string];
 type NavGroup = { label: string; items: readonly NavItem[] };
+
+const navPermissions: Readonly<Record<string, string>> = {
+  dashboard: 'reports:view',
+  clients: 'clients:view',
+  matters: 'matters:view',
+  commercial: 'matters:view',
+  legal: 'matters:view',
+  collection: 'matters:view',
+  documents: 'documents:view',
+  tasks: 'tasks:view',
+  calendar: 'calendar:view',
+  notifications: 'notifications:view',
+  contracts: 'contracts:view',
+  finance: 'receivables:view',
+  reports: 'reports:view',
+  admin: 'users:view',
+  pipelines: 'pipelines:view',
+  audit: 'audit:view',
+};
 
 const navGroups: readonly NavGroup[] = [
   {
@@ -95,6 +112,7 @@ const navGroups: readonly NavGroup[] = [
       ['documents', 'Documentos', 'DO'],
       ['tasks', 'Tarefas', 'TA'],
       ['calendar', 'Agenda', 'AG'],
+      ['notifications', 'Notificações', 'NO'],
     ],
   },
   {
@@ -177,6 +195,7 @@ function Loading() {
 export function LegalCrm() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [active, setActive] = useState('dashboard');
+  const [selectedClientId, setSelectedClientId] = useState<string>();
   const [error, setError] = useState<ApiError>();
   const [menuOpen, setMenuOpen] = useState(false);
   const loadSession = useCallback(async () => {
@@ -190,6 +209,11 @@ export function LegalCrm() {
   useEffect(() => {
     void loadSession();
   }, [loadSession]);
+  useEffect(() => {
+    if (session?.user.permissions?.includes('notifications:update')) {
+      void api('/notifications/reconcile', { method: 'POST' }).catch(() => undefined);
+    }
+  }, [session]);
   const logout = async () => {
     try {
       await resetApiSession();
@@ -204,19 +228,26 @@ export function LegalCrm() {
       </main>
     );
   if (!session) return <Login onAuthenticated={loadSession} />;
+  const permissions = new Set(session.user.permissions ?? []);
+  const canOpen = (id: string) => permissions.has(navPermissions[id] ?? '');
+  const availableNav = nav.filter(([id]) => canOpen(id));
+  const visibleGroups = navGroups
+    .map((group) => ({ ...group, items: group.items.filter(([id]) => canOpen(id)) }))
+    .filter((group) => group.items.length);
+  const safeActive = canOpen(active) ? active : (availableNav[0]?.[0] ?? 'notifications');
   return (
     <div className="crm-shell">
       <aside className={menuOpen ? 'sidebar sidebar-open' : 'sidebar'} id="primary-navigation">
         <ProductBrand inverse />
         <nav aria-label="Navegacao principal">
-          {navGroups.map((group) => (
+          {visibleGroups.map((group) => (
             <div className="nav-group" key={group.label}>
               <p>{group.label}</p>
               {group.items.map(([id, name, icon]) => (
                 <button
                   key={id}
-                  className={active === id ? 'nav-active' : ''}
-                  aria-current={active === id ? 'page' : undefined}
+                  className={safeActive === id ? 'nav-active' : ''}
+                  aria-current={safeActive === id ? 'page' : undefined}
                   onClick={() => {
                     setActive(id);
                     setMenuOpen(false);
@@ -255,10 +286,11 @@ export function LegalCrm() {
           </button>
           <div className="current-module">
             <small>Você está em</small>
-            <strong>{nav.find(([id]) => id === active)?.[1] ?? 'Módulo'}</strong>
+            <strong>{nav.find(([id]) => id === safeActive)?.[1] ?? 'Módulo'}</strong>
           </div>
           <GlobalSearch
             onOpen={(id, type) => {
+              if (type === 'cliente') setSelectedClientId(id);
               setActive(type === 'cliente' ? 'clients' : 'matters');
             }}
           />
@@ -276,7 +308,17 @@ export function LegalCrm() {
             void loadSession();
           }}
         />
-        <Content active={active} setActive={setActive} />
+        <Content
+          active={safeActive}
+          setActive={setActive}
+          permissions={session.user.permissions ?? []}
+          selectedClientId={selectedClientId}
+          clearSelectedClient={() => setSelectedClientId(undefined)}
+          openClient={(id) => {
+            setSelectedClientId(id);
+            setActive('clients');
+          }}
+        />
       </main>
     </div>
   );
@@ -287,6 +329,11 @@ function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
   const [error, setError] = useState<ApiError>();
   const [sent, setSent] = useState(false);
   const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('authError')) {
+      setError(new ApiError(400, 'O link de acesso expirou ou já foi utilizado. Solicite outro.'));
+    }
+  }, []);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
@@ -384,9 +431,32 @@ function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
   );
 }
 
-function Content({ active, setActive }: { active: string; setActive: (value: string) => void }) {
-  if (active === 'dashboard') return <Dashboard setActive={setActive} />;
-  if (active === 'clients') return <Clients />;
+function Content({
+  active,
+  setActive,
+  permissions,
+  selectedClientId,
+  clearSelectedClient,
+  openClient,
+}: {
+  active: string;
+  setActive: (value: string) => void;
+  permissions: readonly string[];
+  selectedClientId?: string;
+  clearSelectedClient: () => void;
+  openClient: (id: string) => void;
+}) {
+  if (active === 'dashboard') return <OperationalDashboard navigate={setActive} />;
+  if (active === 'clients')
+    return (
+      <ClientManagement
+        initialClientId={selectedClientId}
+        permissions={permissions}
+        onSelectedClientChange={(id) => {
+          if (!id) clearSelectedClient();
+        }}
+      />
+    );
   if (active === 'matters' || ['commercial', 'legal', 'collection'].includes(active))
     return (
       <MatterBoard
@@ -408,12 +478,13 @@ function Content({ active, setActive }: { active: string; setActive: (value: str
     );
   if (active === 'tasks') return <Tasks />;
   if (active === 'calendar') return <Calendar />;
-  if (active === 'reports') return <Reports />;
-  if (active === 'admin') return <Admin />;
+  if (active === 'reports') return <ReportsCenter />;
+  if (active === 'admin') return <TeamManagement />;
+  if (active === 'notifications') return <NotificationsCenter openClient={openClient} />;
   if (active === 'pipelines') return <Pipelines />;
   if (active === 'audit') return <Audit />;
   if (active === 'contracts') return <FinanceList kind="contracts" />;
-  if (active === 'finance') return <FinanceList kind="receivables" />;
+  if (active === 'finance') return <FinanceOperations permissions={permissions} />;
   if (active === 'documents') return <Documents />;
   return <Unavailable title={nav.find(([id]) => id === active)?.[1] ?? 'Modulo'} />;
 }
@@ -532,178 +603,6 @@ function Documents() {
         </div>
       ) : (
         <Empty>Nenhum documento no seu escopo.</Empty>
-      )}
-    </section>
-  );
-}
-
-function Dashboard({ setActive }: { setActive: (value: string) => void }) {
-  const { data, error, reload } = useLoad<Summary>('/dashboard/summary');
-  const cards = data
-    ? [
-        ['Clientes ativos', data.activeClients, 'clients'],
-        ['Processos ativos', data.activeMatters, 'matters'],
-        ['Titulos vencidos', data.overdueReceivables, 'finance'],
-        ['Tarefas abertas', data.openTasks, 'tasks'],
-      ]
-    : [];
-  return (
-    <section>
-      <Title
-        title="Visao geral"
-        description="Indicadores operacionais calculados pela API no momento da consulta."
-      />
-      <Notice error={error} onRetry={reload} />
-      {!data && !error ? (
-        <Loading />
-      ) : (
-        <>
-          <div className="metric-grid">
-            {cards.map(([label, value, target]) => (
-              <button
-                className="metric"
-                key={String(label)}
-                onClick={() => setActive(String(target))}
-              >
-                <span>{label}</span>
-                <strong>{value}</strong>
-                <small>Ver registros</small>
-              </button>
-            ))}
-          </div>
-          <section className="surface">
-            <h2>Definicoes dos indicadores</h2>
-            <dl className="definitions">
-              <div>
-                <dt>Clientes ativos</dt>
-                <dd>Clientes nao arquivados da organizacao.</dd>
-              </div>
-              <div>
-                <dt>Processos ativos</dt>
-                <dd>Processos com status ativo.</dd>
-              </div>
-              <div>
-                <dt>Titulos vencidos</dt>
-                <dd>Recebiveis em aberto, parciais ou vencidos com vencimento anterior a hoje.</dd>
-              </div>
-              <div>
-                <dt>Tarefas abertas</dt>
-                <dd>Tarefas abertas, em andamento ou bloqueadas.</dd>
-              </div>
-            </dl>
-            {data && (
-              <small>
-                Atualizado em {date(data.generatedAt)}. Valores financeiros detalhados dependem dos
-                relatorios e endpoints financeiros.
-              </small>
-            )}
-          </section>
-        </>
-      )}
-    </section>
-  );
-}
-
-function Clients() {
-  const [search, setSearch] = useState('');
-  const [showForm, setShowForm] = useState(false);
-  const { data, error, reload } = useLoad<Page<Client>>(
-    `/clients?pageSize=100${search ? `&search=${encodeURIComponent(search)}` : ''}`,
-    300,
-  );
-  const create = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    await api('/clients', {
-      method: 'POST',
-      body: JSON.stringify({
-        type: form.get('type'),
-        displayName: form.get('displayName'),
-        email: form.get('email') || undefined,
-        phone: form.get('phone') || undefined,
-        taxId: form.get('taxId') || undefined,
-      }),
-    });
-    setShowForm(false);
-    await reload();
-  };
-  return (
-    <section>
-      <Title
-        title="Clientes"
-        description="Cadastro centralizado e pesquisa por nome, documento, telefone ou e-mail."
-        action={
-          <button className="primary" onClick={() => setShowForm(!showForm)}>
-            Novo cliente
-          </button>
-        }
-      />
-      {showForm && (
-        <form className="surface inline-form" onSubmit={(e) => void create(e)}>
-          <label>
-            Tipo
-            <select name="type" defaultValue="PERSON">
-              <option value="PERSON">Pessoa fisica</option>
-              <option value="COMPANY">Pessoa juridica</option>
-            </select>
-          </label>
-          <label>
-            Nome
-            <input name="displayName" required minLength={2} />
-          </label>
-          <label>
-            CPF/CNPJ
-            <input name="taxId" />
-          </label>
-          <label>
-            E-mail
-            <input name="email" type="email" />
-          </label>
-          <label>
-            Telefone
-            <input name="phone" />
-          </label>
-          <button className="primary">Cadastrar</button>
-        </form>
-      )}
-      <input
-        className="search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="Pesquisar clientes"
-        aria-label="Pesquisar clientes"
-      />
-      <Notice error={error} onRetry={reload} />
-      {!data && !error ? (
-        <Loading />
-      ) : data?.items.length ? (
-        <div className="surface table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Cliente</th>
-                <th>Documento</th>
-                <th>Contato</th>
-                <th>Atualizacao</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.items.map((client) => (
-                <tr key={client.id}>
-                  <td>
-                    <strong>{client.displayName}</strong>
-                    <small>{client.type === 'COMPANY' ? 'Pessoa juridica' : 'Pessoa fisica'}</small>
-                  </td>
-                  <td>{client.taxIdNormalized ?? '-'}</td>
-                  <td>{client.email ?? client.phone ?? '-'}</td>
-                  <td>{date(client.updatedAt)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        <Empty>Cadastre um cliente para iniciar o relacionamento.</Empty>
       )}
     </section>
   );
@@ -887,97 +786,6 @@ function Calendar() {
         </div>
       ) : (
         <Empty>Nenhum compromisso agendado.</Empty>
-      )}
-    </section>
-  );
-}
-function Reports() {
-  const [report, setReport] = useState('aging');
-  const { data, error, reload } = useLoad<unknown>(`/reports/${report}`);
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<ApiError>();
-  const exportCsv = async () => {
-    setExporting(true);
-    setExportError(undefined);
-    try {
-      await downloadApiFile(`/reports/${report}/export.csv`, `livio-${report}.csv`);
-    } catch (caught) {
-      setExportError(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError(0, 'Não foi possível baixar o relatório.'),
-      );
-    } finally {
-      setExporting(false);
-    }
-  };
-  return (
-    <section>
-      <Title
-        title="Relatorios"
-        description="Os resultados mantem a base contabil explicita informada pela API."
-        action={
-          <button className="secondary" disabled={exporting} onClick={() => void exportCsv()}>
-            {exporting ? 'Exportando...' : 'Exportar CSV'}
-          </button>
-        }
-      />
-      <div className="filters">
-        <label>
-          Relatorio
-          <select value={report} onChange={(e) => setReport(e.target.value)}>
-            <option value="aging">Aging por vencimento</option>
-            <option value="received">Recebimentos (caixa)</option>
-            <option value="accrual">Competencia</option>
-            <option value="overdue">Titulos vencidos</option>
-            <option value="cash-forecast">Previsao de caixa</option>
-            <option value="partial-payments">Pagamentos parciais</option>
-            <option value="delinquent-clients">Clientes inadimplentes</option>
-          </select>
-        </label>
-      </div>
-      <Notice error={exportError ?? error} onRetry={exportError ? undefined : reload} />
-      {!data && !error ? (
-        <Loading />
-      ) : data ? (
-        <pre className="surface report-output">{JSON.stringify(data, null, 2)}</pre>
-      ) : null}
-    </section>
-  );
-}
-function Admin() {
-  const { data, error, reload } =
-    useLoad<{ id: string; name?: string; email: string; status: string }[]>('/admin/users');
-  return (
-    <section>
-      <Title
-        title="Usuarios e permissoes"
-        description="Permissoes sao sempre aplicadas pela API; esta tela reflete apenas o acesso concedido."
-      />
-      <Notice error={error} onRetry={reload} />
-      {data?.length ? (
-        <div className="surface table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Usuario</th>
-                <th>E-mail</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((user) => (
-                <tr key={user.id}>
-                  <td>{user.name ?? '-'}</td>
-                  <td>{user.email}</td>
-                  <td>{user.status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : (
-        !error && <Loading />
       )}
     </section>
   );

@@ -16,6 +16,7 @@ import { FinanceModule } from './finance/finance.module';
 import { HealthModule } from './health/health.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { MattersModule } from './matters/matters.module';
+import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { WorkModule } from './work/work.module';
 
@@ -68,6 +69,7 @@ function generateRequestId(request: IncomingMessage): string {
     FinanceModule,
     DocumentsModule,
     WorkModule,
+    NotificationsModule,
     ReportsModule,
   ],
   providers: [

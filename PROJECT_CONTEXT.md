@@ -46,6 +46,28 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 
 ## Validação desta etapa
 
+- A etapa funcional de 2026-08-12 adicionou telas operacionais para cadastro, pesquisa e edição de
+  clientes, contatos, visão financeira do cliente, comprovantes privados vinculáveis a pagamento,
+  observações visíveis ao cliente e notas internas. Recebíveis podem ser gerados com entrada e até 240
+  parcelas sem cálculo monetário em ponto flutuante; pagamentos são alocados com idempotência e os
+  relatórios podem ser consultados e exportados em CSV pela interface.
+- O dashboard passou a mostrar seis meses de contas a receber, com previsto, recebido, saldo e número
+  de parcelas. Alertas `IN_APP` idempotentes cobrem títulos vencidos e vencimentos nos próximos sete
+  dias, são reconciliados no acesso autenticado e preservam o estado de leitura.
+- Administração ganhou reconciliação auditada dos papéis Administrador, Advogado, Secretaria,
+  Financeiro e Cliente e cadastro de profissionais por convite. O convite direciona à definição e
+  confirmação de senha; login, logout e recuperação continuam no Supabase Auth. A navegação e as ações
+  novas são filtradas pelas permissões resolvidas da membership.
+- O caminho crítico de autenticação trocou a consulta remota `getUser` por validação de claims via JWKS
+  com `getClaims`; a API Vercel foi fixada em `gru1` e leituras GET da web têm cache curto de 15 segundos
+  isolado por token e organização, invalidado por mutações/logout. Isso reduz chamadas Auth remotas e
+  recargas de dados sem relaxar tenant ou permissões.
+- Nenhuma migration foi criada ou aplicada: notificações, papéis, documentos, recebíveis e parcelas
+  reutilizam o modelo existente. O gate local após as mudanças passou em format check, lint, TypeScript
+  estrito, 41 testes automatizados, Prisma validate e builds completos da API e web. O artefato Next
+  respondeu HTTP 200; a interface compacta foi inspecionada em 360/390 px e as novas seções usam o
+  observer compartilhado com `opacity`/`transform` e reduced motion.
+
 - Auditoria de prontidão repetida em 2026-08-11 sobre instalação limpa por `npm ci`: format check,
   lint, TypeScript agregado, Prisma validate, 19 testes da API, 8 testes shared e builds completos de
   shared/db/ui/API/Next passaram. `npm audit --omit=dev` encontrou zero vulnerabilidades conhecidas.
@@ -136,9 +158,13 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - Rotacionar a credencial administrativa atual antes da abertura pública.
 - Configurar custom SMTP e validar convite, login, refresh, recuperação e templates no staging
   publicado; Site URL e redirect HTTPS já estão configurados.
+- Alertas desta etapa são internos e reconciliados durante o uso do sistema. Envio proativo fora do
+  aplicativo exige provedor, consentimento, templates, política de retentativas e agendamento ainda
+  não definidos.
 - Definir domínios próprios, se exigidos pelo produto, e atualizar CORS, URL pública da API e
   redirects antes da troca dos aliases `vercel.app`.
 - Adicionar scanner antimalware, rate limit distribuído, telemetria e alertas antes de produção.
 - Ensaiar backup/restauração separados de Database e Storage.
-- Confirmar o workflow `Quality`, inclusive RLS/Storage, após o primeiro push. Testes E2E de browser
-  continuam pendentes; esta etapa não implementa novos fluxos financeiros.
+- Confirmar o workflow `Quality`, inclusive RLS/Storage, após o push. O smoke responsivo público não
+  substitui um E2E autenticado com mutações em banco descartável; Docker/Podman seguem indisponíveis
+  nesta máquina.
