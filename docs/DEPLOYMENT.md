@@ -90,7 +90,7 @@ Para a API:
 
 Enquanto os aliases `vercel.app` forem usados, `controle-livio.vercel.app` identifica o projeto da
 API e `controle-livio-web.vercel.app` identifica a web. A raiz `/` da API possui redirecionamento
-temporário versionado para a web; rotas `/v1/*` continuam atendidas diretamente pela API. Domínios
+permanente versionado para a web, permitindo cache do salto pelo navegador; rotas `/v1/*` continuam atendidas diretamente pela API. Domínios
 próprios futuros devem manter os limites `api.*` e `app.*` e substituir esse redirecionamento.
 
 Os comandos de instalação versionados usam `npm ci --include=dev`: `NODE_ENV=production` não pode

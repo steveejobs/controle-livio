@@ -8,7 +8,7 @@
     {
       "source": "/",
       "destination": "https://controle-livio-web.vercel.app",
-      "permanent": false
+      "permanent": true
     }
   ],
   "fluid": true
