@@ -67,6 +67,11 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   estrito, 41 testes automatizados, Prisma validate e builds completos da API e web. O artefato Next
   respondeu HTTP 200; a interface compacta foi inspecionada em 360/390 px e as novas seções usam o
   observer compartilhado com `opacity`/`transform` e reduced motion.
+- O primeiro CI desta etapa aprovou integralmente o job da aplicação. O job Supabase chegou a iniciar
+  o stack e aplicar migrations/seed, mas revelou que `auth.email.enable_signup = false` desativava o
+  login por e-mail dos usuários locais. A configuração foi corrigida para manter o provedor de e-mail
+  ativo e bloquear novos cadastros pelo `auth.enable_signup = false`; isso afeta somente o stack local
+  descartável, não a configuração Auth hospedada.
 
 - Auditoria de prontidão repetida em 2026-08-11 sobre instalação limpa por `npm ci`: format check,
   lint, TypeScript agregado, Prisma validate, 19 testes da API, 8 testes shared e builds completos de
