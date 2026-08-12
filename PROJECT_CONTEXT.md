@@ -132,8 +132,8 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - A URL compartilhada `https://controle-livio.vercel.app` pertence ao projeto da API e, portanto,
   devolvia 404 na raiz apesar de `/v1/health/live` estar saudável. `apps/api/vercel.json` agora define
   redirecionamento permanente somente de `/` para `https://controle-livio-web.vercel.app`, para o
-  navegador armazenar o salto; `/v1/*`
-  permanece na API sem alteração. O smoke do deploy confirmou 307 na raiz, página final HTTP 200 com
+  navegador armazenar o salto por um dia; `/v1/*`
+  permanece na API sem alteração. O smoke do deploy confirmou 308 na raiz, página final HTTP 200 com
   título `Controle Financeiro Lívio` e HTTP 200 em `/v1/health/live` e `/v1/health/ready`.
 - Rate limit distribuído, antimalware, telemetria/alertas e ensaio de backup/restauração continuam
   ausentes.
