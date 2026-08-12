@@ -86,6 +86,11 @@ Para a API:
 - Output Directory: vazio, para o preset NestJS produzir uma única Vercel Function;
 - Fluid compute: habilitado.
 
+Enquanto os aliases `vercel.app` forem usados, `controle-livio.vercel.app` identifica o projeto da
+API e `controle-livio-web.vercel.app` identifica a web. A raiz `/` da API possui redirecionamento
+temporário versionado para a web; rotas `/v1/*` continuam atendidas diretamente pela API. Domínios
+próprios futuros devem manter os limites `api.*` e `app.*` e substituir esse redirecionamento.
+
 Os comandos de instalação versionados usam `npm ci --include=dev`: `NODE_ENV=production` não pode
 remover `typescript`/CLI de build antes da compilação. Arquivos `.env*`, `chaves` e metadados locais
 da Vercel são excluídos do upload por `.vercelignore`; configure os valores somente no projeto Vercel.

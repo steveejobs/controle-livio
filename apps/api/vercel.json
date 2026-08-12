@@ -3,5 +3,12 @@
   "framework": "nestjs",
   "installCommand": "cd ../.. && npm ci --include=dev",
   "buildCommand": "cd ../.. && npm run build:api",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "https://controle-livio-web.vercel.app",
+      "permanent": false
+    }
+  ],
   "fluid": true
 }

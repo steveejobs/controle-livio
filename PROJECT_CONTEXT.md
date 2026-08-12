@@ -94,6 +94,11 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
 - Logs HTTP passaram a redigir token OIDC, assinatura de proxy e `forwarded` da Vercel. A validação
   final repetiu format check, lint, TypeScript, Prisma validate, 19 testes API, 11 shared, 2 web e os
   builds completos; todos passaram.
+- A URL compartilhada `https://controle-livio.vercel.app` pertence ao projeto da API e, portanto,
+  devolvia 404 na raiz apesar de `/v1/health/live` estar saudável. `apps/api/vercel.json` agora define
+  redirecionamento temporário somente de `/` para `https://controle-livio-web.vercel.app`; `/v1/*`
+  permanece na API sem alteração. O smoke do deploy desse ajuste ainda deve confirmar 307 na raiz,
+  200 após seguir o redirecionamento e 200 nos dois health checks.
 - Rate limit distribuído, antimalware, telemetria/alertas e ensaio de backup/restauração continuam
   ausentes.
 
