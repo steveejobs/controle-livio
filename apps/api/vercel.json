@@ -7,7 +7,7 @@
   "headers": [
     {
       "source": "/",
-      "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }]
+      "headers": [{ "key": "Vercel-CDN-Cache-Control", "value": "public, s-maxage=86400" }]
     }
   ],
   "redirects": [
