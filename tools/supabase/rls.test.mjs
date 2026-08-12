@@ -25,7 +25,10 @@ function expect(condition, message) {
 
 async function invisible(client, table, id) {
   const { data, error } = await client.from(table).select('id').eq('id', id);
-  expect(!error, `${table}: consulta negativa não deve revelar erro interno`);
+  expect(
+    !error,
+    `${table}: consulta negativa não deve revelar erro interno (${error?.code ?? 'sem-código'}: ${error?.message ?? 'sem-mensagem'})`,
+  );
   expect(data.length === 0, `${table}: registro de outro tenant ficou visível`);
 }
 
