@@ -66,8 +66,8 @@ async function main() {
     authUserId = listed.data.users.find((user) => user.email?.toLowerCase() === email)?.id;
     if (!authUserId) {
       const password = required('BOOTSTRAP_ADMIN_PASSWORD');
-      if (password.length < 12)
-        throw new Error('Bootstrap bloqueado: senha deve ter ao menos 12 caracteres');
+      if (password.length < 6)
+        throw new Error('Bootstrap bloqueado: senha deve ter ao menos 6 caracteres');
       const created = await supabase.auth.admin.createUser({
         email,
         password,

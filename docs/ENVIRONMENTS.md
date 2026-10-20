@@ -19,7 +19,7 @@ habilitada e forçada, 141 policies e o bucket privado `legal-documents`. A orga
 membership administrativa foram provisionadas no novo Auth. A API e a web da Vercel usam somente as
 credenciais do projeto novo nos ambientes Production e Preview. O deploy da API usa
 `SUPABASE_ENVIRONMENT=staging`, pois o runtime `NODE_ENV=production` exige essa classificação.
-Signup público está desabilitado, senha mínima é 12 caracteres e Site URL/redirects apontam para a
+Signup público está desabilitado, senha mínima é 6 caracteres e Site URL/redirects apontam para a
 web publicada. Custom SMTP e a entrega efetiva do convite administrativo ainda precisam de validação.
 
 ## Safeguards

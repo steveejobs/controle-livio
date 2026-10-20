@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ProductBrand } from '../../components/product-brand';
 import { InstallAppButton } from '../../components/install-app-button';
+import { PasswordField } from '../../components/password-field';
 import { ApiError, api, resetApiSession } from '../../lib/api';
 import { createSupabaseBrowserClient } from '../../lib/supabase/client';
 import { Loading, Notice, Title } from '../shared/crm-ui';
@@ -351,10 +352,12 @@ function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
                 <input required name="email" type="email" autoComplete="email" />
               </label>
               {mode === 'login' && (
-                <label>
-                  Senha
-                  <input required name="password" type="password" autoComplete="current-password" />
-                </label>
+                <PasswordField
+                  id="login-password"
+                  label="Senha"
+                  name="password"
+                  autoComplete="current-password"
+                />
               )}
               <Notice error={error} />
               <button className="primary" disabled={busy}>

@@ -11,7 +11,8 @@ secretas, health check e logs persistentes.
 3. No Supabase Auth, configure a Site URL da web e permita somente redirects necessários, incluindo
    `https://app.seudominio.com/auth/confirm`.
 4. Configure custom SMTP, SPF/DKIM/DMARC, desabilite signup público quando o acesso for por convite e
-   mantenha senha mínima de pelo menos 12 caracteres.
+   confira a política de senha do Auth. O projeto atual usa mínimo de 6 caracteres por decisão de
+   produto; antes de abrir acesso público, reavalie esse limite.
 5. Aponte DNS, valide certificados e só então execute os smoke tests finais.
 
 Não reutilize `.env` local no provedor. Cada valor deve ser cadastrado no secret manager do ambiente.

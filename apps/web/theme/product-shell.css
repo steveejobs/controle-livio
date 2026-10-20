@@ -566,6 +566,40 @@ tbody tr:hover {
   padding-inline: 12px;
 }
 
+.password-field {
+  display: grid;
+  gap: 5px;
+}
+
+.password-field__control {
+  position: relative;
+}
+
+.auth-card .password-field__control input {
+  width: 100%;
+  padding-right: 90px;
+}
+
+.auth-card .password-field__toggle {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  transform: translateY(-50%);
+  min-width: 78px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-forest);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.auth-card .password-field__toggle:hover {
+  background: var(--color-surface-soft);
+}
+
 .auth-card .primary {
   margin-top: 8px;
 }

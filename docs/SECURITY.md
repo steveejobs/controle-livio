@@ -10,6 +10,11 @@ As tabelas legadas `sessions` e `password_reset_tokens` permanecem inativas apen
 histórico de schema. `users.password_hash` é nullable e a migration definitiva limpa hashes depois de
 confirmar que toda conta ativa possui `auth_user_id`.
 
+O mínimo de senha do projeto de desenvolvimento/homologação foi reduzido de 12 para 6 caracteres em
+2026-10-20 por solicitação do responsável. Isso facilita senhas fracas; recomenda-se senha única e
+longa e reavaliar o mínimo antes de abrir acesso público. O formulário e o Auth remoto usam o mesmo
+limite; a confirmação da senha é validada no cliente.
+
 ## Autorização
 
 O tenant vem de `organization_members`, nunca do body/query. A proteção combina:

@@ -344,3 +344,26 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   as 16 abas nem substitui a simulação ampla autenticada no projeto de desenvolvimento. Após sua
   inclusão, passaram novamente format check, lint, TypeScript, 51 testes unitários, Prisma validate,
   build completo, orçamento de 249.065/260.000 bytes gzip e o E2E no Chrome local.
+
+## Senhas e visibilidade em 2026-10-20
+
+- Login, nova senha e confirmação agora têm controle acessível de mostrar/ocultar, independente por
+  campo, com botão de pelo menos 44 px e operação por teclado. O formulário de nova senha exige
+  6 caracteres e mantém a confirmação de igualdade antes do envio.
+- O mínimo local do Supabase e a validação do bootstrap passaram a 6. No projeto remoto de
+  desenvolvimento/homologação `ioebcdpyrszokdyaoaqv`, a Management API confirmou a mudança de
+  `password_min_length` de 12 para 6 após atualização; a política de caracteres segue sem exigência
+  adicional. Nenhuma senha nem token foi registrado neste arquivo.
+- Um mínimo de 6 facilita senhas fracas. A decisão foi solicitada para este ambiente; deve ser
+  reavaliada antes de abrir acesso público. O E2E de senha cobre visibilidade, teclado, validação
+  HTML de 5/6 caracteres e layout em 360 px; a entrega de e-mail de recuperação continua dependente
+  de SMTP e não foi exercitada nesta etapa.
+- Após a alteração passaram format check, lint, TypeScript, 51 testes unitários, Prisma validate,
+  build completo, gate de bundle (249.295/260.000 bytes gzip), 3 testes E2E no Chrome local e
+  `git diff --check`. A configuração remota de Auth foi lida novamente e confirmou mínimo 6.
+- Com aprovação explícita, a web foi publicada na Vercel Production para o projeto
+  `controle-livio-web`, com alias `https://controle-livio-web.vercel.app`. O build remoto concluiu e
+  smoke no domínio público respondeu 200 para `/` e `/reset-password`; no Chrome em 360 px, o login
+  mostrou a senha, a nova senha também alternou visibilidade após hidratação, o campo exibiu
+  `minlength=6` e não houve overflow horizontal. O vínculo local da raiz voltou ao projeto da API
+  após a publicação; o vínculo de `apps/web` permanece na web.
