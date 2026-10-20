@@ -84,6 +84,16 @@ export function ClientDetail({
             email: String(form.get('email') || '') || undefined,
             phone: String(form.get('phone') || '') || undefined,
             source: String(form.get('source') || '') || undefined,
+            address: {
+              ...data.client.address,
+              street: String(form.get('address.street') || '').trim() || undefined,
+              number: String(form.get('address.number') || '').trim() || undefined,
+              complement: String(form.get('address.complement') || '').trim() || undefined,
+              district: String(form.get('address.district') || '').trim() || undefined,
+              city: String(form.get('address.city') || '').trim() || undefined,
+              state: String(form.get('address.state') || '').trim() || undefined,
+              postalCode: String(form.get('address.postalCode') || '').trim() || undefined,
+            },
           }),
         }),
       'Cadastro atualizado.',
@@ -216,6 +226,75 @@ export function ClientDetail({
               Origem
               <input name="source" disabled={!canUpdateClient} defaultValue={data.client.source} />
             </label>
+            <fieldset className="optional-address">
+              <legend>
+                Endereço <span>(opcional)</span>
+              </legend>
+              <div className="stack-form">
+                <label>
+                  Logradouro
+                  <input
+                    name="address.street"
+                    autoComplete="street-address"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.street}
+                  />
+                </label>
+                <label>
+                  Número
+                  <input
+                    name="address.number"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.number}
+                  />
+                </label>
+                <label>
+                  Complemento
+                  <input
+                    name="address.complement"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.complement}
+                  />
+                </label>
+                <label>
+                  Bairro
+                  <input
+                    name="address.district"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.district}
+                  />
+                </label>
+                <label>
+                  Cidade
+                  <input
+                    name="address.city"
+                    autoComplete="address-level2"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.city}
+                  />
+                </label>
+                <label>
+                  Estado (UF)
+                  <input
+                    name="address.state"
+                    maxLength={2}
+                    autoComplete="address-level1"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.state}
+                  />
+                </label>
+                <label>
+                  CEP
+                  <input
+                    name="address.postalCode"
+                    inputMode="numeric"
+                    autoComplete="postal-code"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.address?.postalCode}
+                  />
+                </label>
+              </div>
+            </fieldset>
             {canUpdateClient && (
               <button className="primary" disabled={saving}>
                 Salvar alterações
@@ -226,43 +305,55 @@ export function ClientDetail({
 
         <ClientPanel title="Contatos">
           <div className="record-list">
-            {data.contacts.map((item) => (
-              <article key={item.id}>
-                <strong>
-                  {item.name}
-                  {item.isPrimary ? ' · principal' : ''}
-                </strong>
-                <span>
-                  {item.role || 'Contato'} · {item.email || item.phone || 'Sem canal informado'}
-                </span>
-              </article>
-            ))}
+            {data.contacts.length ? (
+              data.contacts.map((item) => (
+                <article key={item.id}>
+                  <strong>
+                    {item.name}
+                    {item.isPrimary ? ' · principal' : ''}
+                  </strong>
+                  <span>
+                    {item.role || 'Contato'} · {item.email || item.phone || 'Sem canal informado'}
+                  </span>
+                </article>
+              ))
+            ) : (
+              <p className="section-note">Nenhuma outra pessoa vinculada a este cliente.</p>
+            )}
           </div>
           {canAddContact && (
-            <form className="stack-form compact-form" onSubmit={addContact}>
-              <label>
-                Nome
-                <input required name="name" />
-              </label>
-              <label>
-                Função
-                <input name="role" />
-              </label>
-              <label>
-                E-mail
-                <input name="email" type="email" />
-              </label>
-              <label>
-                Telefone
-                <input name="phone" />
-              </label>
-              <label className="check">
-                <input name="isPrimary" type="checkbox" /> Contato principal
-              </label>
-              <button className="secondary" disabled={saving}>
-                Adicionar contato
-              </button>
-            </form>
+            <details className="optional-fields contact-entry">
+              <summary>Adicionar outra pessoa</summary>
+              <p className="section-note">
+                O telefone e o e-mail do próprio cliente ficam no cadastro acima. Use este
+                formulário para alguém ligado a ele, como representante, familiar ou responsável
+                financeiro.
+              </p>
+              <form className="stack-form compact-form" onSubmit={addContact}>
+                <label>
+                  Nome da pessoa
+                  <input required name="name" autoComplete="name" />
+                </label>
+                <label>
+                  Relação ou função
+                  <input name="role" placeholder="Ex.: representante legal" />
+                </label>
+                <label>
+                  E-mail
+                  <input name="email" type="email" autoComplete="email" />
+                </label>
+                <label>
+                  Telefone
+                  <input name="phone" autoComplete="tel" />
+                </label>
+                <label className="check">
+                  <input name="isPrimary" type="checkbox" /> Contato principal
+                </label>
+                <button className="secondary" disabled={saving}>
+                  Salvar contato
+                </button>
+              </form>
+            </details>
           )}
         </ClientPanel>
       </div>

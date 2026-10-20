@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 
 test('mobile navigation, deferred clients and notification refresh', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 });
@@ -63,6 +64,8 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
+  expect(accessibility.violations).toEqual([]);
   expect(requests.reconcile).toBe(0);
   expect(requests.clients).toBe(0);
 

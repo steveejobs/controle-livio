@@ -3,9 +3,9 @@
 import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate } from '../shared/format';
-import { useApiData } from '../shared/use-api-data';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 
-type Page<T> = { items: T[]; total: number };
 type Client = { id: string; displayName: string };
 type DocumentItem = {
   id: string;
@@ -18,9 +18,10 @@ type DocumentItem = {
 };
 
 export function Documents({ permissions }: { permissions: readonly string[] }) {
-  const documents = useApiData<Page<DocumentItem>>('/documents?pageSize=100');
-  const clients = useApiData<Page<Client>>(
-    permissions.includes('clients:view') ? '/clients?pageSize=100' : undefined,
+  const documents = usePaginatedData<DocumentItem>('/documents');
+  const clients = usePaginatedData<Client>(
+    permissions.includes('clients:view') ? '/clients' : undefined,
+    100,
   );
   const [showUpload, setShowUpload] = useState(false);
   const [versionFor, setVersionFor] = useState<string>();
@@ -139,6 +140,18 @@ export function Documents({ permissions }: { permissions: readonly string[] }) {
               </select>
             </label>
           )}
+          {clients.data && (
+            <div className="form-wide">
+              <LoadMore
+                shown={clients.data.items.length}
+                total={clients.data.total}
+                loading={clients.loading}
+                error={clients.error}
+                onLoad={clients.loadMore}
+                onRetry={clients.retry}
+              />
+            </div>
+          )}
           <label className="form-wide">
             Arquivo
             <input
@@ -153,7 +166,7 @@ export function Documents({ permissions }: { permissions: readonly string[] }) {
           </button>
         </form>
       )}
-      {documents.error && (
+      {documents.error && !documents.data && (
         <div role="alert" className="notice notice-error">
           {documents.error.message} <button onClick={documents.reload}>Tentar novamente</button>
         </div>
@@ -230,6 +243,16 @@ export function Documents({ permissions }: { permissions: readonly string[] }) {
           <strong>Nenhum documento</strong>
           <span>Envie o primeiro arquivo para começar.</span>
         </div>
+      )}
+      {documents.data && (
+        <LoadMore
+          shown={documents.data.items.length}
+          total={documents.data.total}
+          loading={documents.loading}
+          error={documents.error}
+          onLoad={documents.loadMore}
+          onRetry={documents.retry}
+        />
       )}
     </section>
   );

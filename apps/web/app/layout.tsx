@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/next';
 import { MotionController } from '../components/motion-controller';
 import './globals.css';
 import '../theme/index.css';
@@ -31,6 +32,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
       <body>
         {children}
         <MotionController />
+        <SpeedInsights />
       </body>
     </html>
   );

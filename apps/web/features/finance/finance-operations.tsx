@@ -3,10 +3,10 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { addMonths, decimalToCents, formatDate, formatMoney, splitAmount } from '../shared/format';
-import { useApiData } from '../shared/use-api-data';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 
 type Client = { id: string; displayName: string };
-type Page<T> = { items: T[]; total: number };
 type Installment = {
   id: string;
   sequence: number;
@@ -72,28 +72,30 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
   const canApproveReceivables = permissions.includes('receivables:approve');
   const canCreateExpense = permissions.includes('expenses:create');
   const canViewExpenses = permissions.includes('expenses:view');
-  const clients = useApiData<Page<Client>>(
-    permissions.includes('clients:view') ? '/clients?pageSize=100' : undefined,
-  );
-  const receivables = useApiData<Page<Receivable>>('/finance/receivables?pageSize=100');
-  const payments = useApiData<Page<Payment>>(
-    canViewPayments ? '/finance/payments?pageSize=100' : undefined,
-  );
-  const expenses = useApiData<Page<Expense>>(
-    canViewExpenses ? '/finance/expenses?pageSize=100' : undefined,
+  const clients = usePaginatedData<Client>(
+    permissions.includes('clients:view') ? '/clients' : undefined,
+    100,
   );
   const [mode, setMode] = useState<'receivable' | 'payment' | 'expense'>(
     canCreateReceivable ? 'receivable' : 'payment',
   );
+  const [selectedClient, setSelectedClient] = useState('');
+  const receivables = usePaginatedData<Receivable>('/finance/receivables');
+  const payments = usePaginatedData<Payment>(canViewPayments ? '/finance/payments' : undefined);
+  const expenses = usePaginatedData<Expense>(canViewExpenses ? '/finance/expenses' : undefined);
+  const paymentReceivables = usePaginatedData<Receivable>(
+    mode === 'payment' && selectedClient
+      ? `/finance/receivables?clientId=${encodeURIComponent(selectedClient)}`
+      : undefined,
+  );
   const [adjusting, setAdjusting] = useState<string>();
   const [reversing, setReversing] = useState<string>();
-  const [selectedClient, setSelectedClient] = useState('');
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
 
   const openInstallments = useMemo(
     () =>
-      (receivables.data?.items ?? [])
+      (paymentReceivables.data?.items ?? [])
         .filter((item) => !selectedClient || item.clientId === selectedClient)
         .flatMap((item) =>
           item.installments
@@ -107,7 +109,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
               clientName: item.client.displayName,
             })),
         ),
-    [receivables.data, selectedClient],
+    [paymentReceivables.data, selectedClient],
   );
 
   const finish = async (action: () => Promise<unknown>, success: string) => {
@@ -117,6 +119,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
       await action();
       setFeedback(success);
       receivables.reload();
+      paymentReceivables.reload();
       payments.reload();
       expenses.reload();
       return true;
@@ -308,11 +311,26 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
       <OperationFeedback message={feedback} />
       <OperationFeedback
         message={
-          clients.error || receivables.error || payments.error
+          (clients.error && !clients.data) || receivables.error || payments.error
             ? `Erro: ${(clients.error || receivables.error || payments.error)?.message}`
             : undefined
         }
       />
+      {clients.error && !clients.data && (
+        <button type="button" className="secondary" onClick={clients.retry}>
+          Tentar carregar clientes novamente
+        </button>
+      )}
+      {clients.data && (canCreateReceivable || canCreatePayment || canCreateExpense) && (
+        <LoadMore
+          shown={clients.data.items.length}
+          total={clients.data.total}
+          loading={clients.loading}
+          error={clients.error}
+          onLoad={clients.loadMore}
+          onRetry={clients.retry}
+        />
+      )}
       {canCreateReceivable && mode === 'receivable' ? (
         <form className="surface form-grid" data-reveal onSubmit={createReceivable}>
           <label>
@@ -372,10 +390,13 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
           <label>
             Cliente
             <select
+              required
               value={selectedClient}
               onChange={(event) => setSelectedClient(event.target.value)}
             >
-              <option value="">Todos</option>
+              <option value="" disabled>
+                Selecione um cliente
+              </option>
               {clients.data?.items.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.displayName}
@@ -397,6 +418,32 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
               ))}
             </select>
           </label>
+          {selectedClient && paymentReceivables.error && !paymentReceivables.data && (
+            <div className="notice notice-error form-wide" role="alert">
+              {paymentReceivables.error.message}{' '}
+              <button type="button" onClick={paymentReceivables.retry}>
+                Tentar novamente
+              </button>
+            </div>
+          )}
+          {selectedClient &&
+            paymentReceivables.data &&
+            !openInstallments.length &&
+            paymentReceivables.data.items.length >= paymentReceivables.data.total && (
+              <p className="form-wide">Nenhuma parcela aberta para este cliente.</p>
+            )}
+          {selectedClient && paymentReceivables.data && (
+            <div className="form-wide">
+              <LoadMore
+                shown={paymentReceivables.data.items.length}
+                total={paymentReceivables.data.total}
+                loading={paymentReceivables.loading}
+                error={paymentReceivables.error}
+                onLoad={paymentReceivables.loadMore}
+                onRetry={paymentReceivables.retry}
+              />
+            </div>
+          )}
           <label>
             Referência do pagamento
             <input name="reference" required placeholder="PIX-0001" />
@@ -472,7 +519,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
           </div>
           <span>{receivables.data?.total ?? 0} registros</span>
         </div>
-        <div className="surface table-wrap">
+        <div className="surface table-wrap" role="region" aria-label="Recebíveis" tabIndex={0}>
           <table>
             <thead>
               <tr>
@@ -564,6 +611,22 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             </tbody>
           </table>
         </div>
+        {receivables.error && !receivables.data && (
+          <div className="notice notice-error" role="alert">
+            {receivables.error.message}{' '}
+            <button onClick={receivables.retry}>Tentar novamente</button>
+          </div>
+        )}
+        {receivables.data && (
+          <LoadMore
+            shown={receivables.data.items.length}
+            total={receivables.data.total}
+            loading={receivables.loading}
+            error={receivables.error}
+            onLoad={receivables.loadMore}
+            onRetry={receivables.retry}
+          />
+        )}
       </section>
       {canViewPayments && (
         <section className="section-block" data-reveal>
@@ -574,7 +637,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             </div>
             <span>{payments.data?.total ?? 0} registros</span>
           </div>
-          <div className="surface table-wrap">
+          <div className="surface table-wrap" role="region" aria-label="Pagamentos" tabIndex={0}>
             <table>
               <thead>
                 <tr>
@@ -634,6 +697,21 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
               </tbody>
             </table>
           </div>
+          {payments.error && !payments.data && (
+            <div className="notice notice-error" role="alert">
+              {payments.error.message} <button onClick={payments.retry}>Tentar novamente</button>
+            </div>
+          )}
+          {payments.data && (
+            <LoadMore
+              shown={payments.data.items.length}
+              total={payments.data.total}
+              loading={payments.loading}
+              error={payments.error}
+              onLoad={payments.loadMore}
+              onRetry={payments.retry}
+            />
+          )}
         </section>
       )}
       {canViewExpenses && (
@@ -645,12 +723,12 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             </div>
             <span>{expenses.data?.total ?? 0} registros</span>
           </div>
-          {expenses.error ? (
+          {expenses.error && !expenses.data ? (
             <div className="notice notice-error" role="alert">
               {expenses.error.message}
             </div>
           ) : (
-            <div className="surface table-wrap">
+            <div className="surface table-wrap" role="region" aria-label="Despesas" tabIndex={0}>
               <table>
                 <thead>
                   <tr>
@@ -678,6 +756,16 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                 </tbody>
               </table>
             </div>
+          )}
+          {expenses.data && (
+            <LoadMore
+              shown={expenses.data.items.length}
+              total={expenses.data.total}
+              loading={expenses.loading}
+              error={expenses.error}
+              onLoad={expenses.loadMore}
+              onRetry={expenses.retry}
+            />
           )}
         </section>
       )}

@@ -67,18 +67,20 @@ Os principais atritos observados são:
 
 ## Próximas melhorias prioritárias
 
-1. Dividir o restante de `legal-crm.tsx` em features de autenticação, busca e navegação sem alterar
-   contratos da API.
+1. Dividir o restante de `legal-crm.tsx` em features de autenticação e navegação sem alterar contratos da
+   API. A busca global já foi extraída para `features/search`.
 2. Fazer o shell modular do dashboard ser a composição principal, ou remover a duplicidade após uma
    decisão de produto registrada.
-3. Transformar busca em combobox acessível com `aria-controls`, `aria-expanded`, `aria-activedescendant`
-   e anúncio de resultados.
-4. Ampliar a suíte E2E versionada para os demais fluxos autenticados e acrescentar testes de
-   acessibilidade. O fluxo mobile de processos e notificações já roda no CI com API simulada; a
-   simulação ampla no projeto de desenvolvimento foi manual e a suíte RLS/Storage ainda depende de
-   Docker ou Podman.
-5. Substituir gradualmente literais de cor de `globals.css` por aliases dos tokens, validando contraste
+3. Ampliar a suíte E2E versionada para os demais fluxos autenticados. A busca global já funciona como
+   combobox com teclado, estados de carregamento/vazio/erro e anúncio de resultados. Os testes com axe
+   cobrem login, nova senha e painel autenticado em 360 px; também cobrem paginação, pagamento e
+   recuperação simulada. A simulação ampla no projeto de desenvolvimento foi manual e a suíte
+   RLS/Storage ainda depende de Docker ou Podman.
+4. Substituir gradualmente literais de cor de `globals.css` por aliases dos tokens, validando contraste
    e estados de foco a cada módulo.
+
+O teste de acessibilidade encontrou e corrigiu um rótulo ARIA inválido no gráfico mensal e uma região
+de tabela com rolagem sem foco por teclado. A tabela passou a ser uma região nomeada e focável.
 
 ## Critério de intuitividade para as próximas entregas
 

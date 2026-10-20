@@ -67,6 +67,25 @@ não estiver instalado, execute `npx playwright install chromium`. É possível 
 `PLAYWRIGHT_CHROME_PATH` para um Chrome local. As respostas da API são simuladas e não tocam o
 Supabase; o teste protege a interação e a quantidade de requisições, não valida dados reais.
 
+## Paginação e observabilidade preparadas em 2026-10-20
+
+Processos, documentos, recebíveis, pagamentos e despesas agora carregam 25 registros por vez e mostram
+quantos já estão visíveis. Clientes, contratos, auditoria e documentos do portal também foram paginados.
+A próxima página mantém as anteriores na tela; se falhar, a pessoa pode tentar
+novamente sem perder o contexto. A escolha de parcela para pagamento consulta recebíveis do cliente
+selecionado e também permite avançar páginas. Isso elimina o corte silencioso no primeiro lote de 100
+registros desses módulos. Seletores de clientes começam com 100 opções e permitem carregar os lotes
+seguintes; para organizações muito grandes, uma busca direta no seletor ainda será mais rápida.
+
+O componente `@vercel/speed-insights` foi integrado à web para permitir medir Web Vitals após publicação
+e ativação do recurso no projeto Vercel. Nenhum p95 real foi coletado nesta etapa; ativação e eventual
+custo do serviço devem ser conferidos no painel antes de uso. O limite de bundle continuou respeitado:
+250.903 de 260.000 bytes gzip na medição local após a integração e a revisão das listas.
+
+Os testes Playwright usam respostas isoladas da API e cobrem carregamento da página seguinte, falha e
+nova tentativa, busca por teclado, pagamento com valor decimal exato e navegação mobile. Isso verifica
+o comportamento da interface, não a capacidade do banco sob volume representativo.
+
 ## Próxima medição necessária
 
 Para estabelecer metas reais de p95 e capacidade, coletar tempos por rota da API e métricas de

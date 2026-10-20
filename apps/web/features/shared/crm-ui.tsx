@@ -30,7 +30,7 @@ export function Empty({ children }: { children: string }) {
 
 export function Loading() {
   return (
-    <div className="loading" aria-label="Carregando">
+    <div className="loading" role="status" aria-label="Carregando">
       <i />
       <i />
       <i />

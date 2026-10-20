@@ -4,8 +4,9 @@ import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate } from '../shared/format';
 import { useApiData } from '../shared/use-api-data';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 
-type Page<T> = { items: T[]; total: number };
 type Message = { id: string; body: string; publishedAt: string };
 type DocumentItem = {
   id: string;
@@ -24,10 +25,8 @@ export function ClientPortal({
   permissions: readonly string[];
 }) {
   const messages = useApiData<Message[]>(`/client-messages?clientId=${clientId}`);
-  const documents = useApiData<Page<DocumentItem>>(
-    permissions.includes('documents:view')
-      ? `/documents?clientId=${clientId}&pageSize=100`
-      : undefined,
+  const documents = usePaginatedData<DocumentItem>(
+    permissions.includes('documents:view') ? `/documents?clientId=${clientId}` : undefined,
   );
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -119,9 +118,12 @@ export function ClientPortal({
         </section>
         <section className="surface client-panel">
           <h2>Comprovantes e documentos</h2>
-          {documents.error && (
+          {documents.error && !documents.data && (
             <div role="alert" className="notice notice-error">
-              {documents.error.message}
+              {documents.error.message}{' '}
+              <button type="button" onClick={documents.retry}>
+                Tentar novamente
+              </button>
             </div>
           )}
           <div className="record-list">
@@ -145,6 +147,16 @@ export function ClientPortal({
               <strong>Nenhum documento</strong>
               <span>Os arquivos liberados pelo escritório aparecerão aqui.</span>
             </div>
+          )}
+          {documents.data && (
+            <LoadMore
+              shown={documents.data.items.length}
+              total={documents.data.total}
+              loading={documents.loading}
+              error={documents.error}
+              onLoad={documents.loadMore}
+              onRetry={documents.retry}
+            />
           )}
         </section>
       </div>

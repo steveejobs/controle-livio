@@ -128,3 +128,20 @@ download de documentos, isolamento entre organizações e layout a 360 px.
 
 Não publique enquanto scanner antimalware, rate limit distribuído, telemetria/alertas, custom SMTP e
 ensaio de restauração ainda forem requisitos pendentes para o uso real pretendido.
+
+## Pendências operacionais verificadas em 2026-10-20
+
+- **E-mail:** ainda não há provedor SMTP. O navegador testa o pedido de recuperação e seu redirect com
+  resposta simulada, mas convite, recebimento e recuperação real não foram comprovados. Configurar um
+  provedor, validar domínio/remetente e testar entrega com uma conta de homologação antes de abrir acesso.
+- **Métricas:** a web inclui o cliente Vercel Speed Insights. Ativar o recurso no projeto web após revisar
+  o plano e os custos, publicar a versão testada e acompanhar Web Vitals e erros por rota. Sem essa
+  ativação e tráfego real não há p95 de usuários.
+- **Proteção de arquivos e API:** o scanner de malware e um store compartilhado para rate limit ainda
+  não foram provisionados. Definir provedores e credenciais server-side, tratar falhas sem liberar arquivo
+  não verificado e testar limites com duas instâncias antes de uso real.
+- **Recuperação:** não há Docker, `pg_dump` ou scanner local nesta estação; nenhum ensaio de restauração
+  foi executado. Criar projeto de restauração isolado, obter backup verificável do Database e cópia
+  separada dos objetos Storage, restaurar ambos nesse destino e conferir Auth, memberships, 39 tabelas,
+  RLS, políticas, integridade e acesso a documentos. Registrar duração e perda máxima observadas. Nunca
+  fazer o ensaio sobre o projeto ativo.

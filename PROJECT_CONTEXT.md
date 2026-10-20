@@ -367,3 +367,87 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   mostrou a senha, a nova senha também alternou visibilidade após hidratação, o campo exibiu
   `minlength=6` e não houve overflow horizontal. O vínculo local da raiz voltou ao projeto da API
   após a publicação; o vínculo de `apps/web` permanece na web.
+
+## Paginação, busca e regressão em 2026-10-20
+
+- Processos, documentos, recebíveis, pagamentos e despesas carregam 25 por página, informam a contagem,
+  preservam os itens anteriores e permitem repetir uma página que falhou. A seleção de parcela consulta
+  recebíveis do cliente escolhido; pagamento continua enviando valor decimal como string e chave de
+  idempotência. Após uma revisão adicional, clientes, contratos, auditoria e documentos do portal também
+  receberam paginação. Seletores de clientes começam com 100 opções e podem carregar mais lotes, sem
+  corte silencioso; uma busca direta no seletor ainda melhoraria o uso em organizações muito grandes.
+- A busca global foi separada do shell e agora oferece combobox com navegação por setas, Enter e Escape,
+  estados de carregamento, vazio e erro. O painel recebeu região de gráfico semântica e tabela rolável
+  nomeada e focável. O componente Speed Insights foi integrado à web, mas o serviço ainda precisa ser
+  ativado no projeto Vercel após revisão do plano/custo; não há métricas reais de p95.
+- O Playwright passou a cobrir paginação/falha/nova tentativa, busca por teclado, pagamento decimal,
+  recuperação de senha com resposta simulada e axe WCAG A/AA em login, nova senha e painel mobile.
+  Os sete testes E2E passaram com Chrome local após build, incluindo a pesquisa paginada de clientes. As respostas são simuladas e não comprovam
+  entrega de e-mail nem performance ou segurança do banco remoto.
+- O responsável informou que ainda não possui provedor de e-mail. Custom SMTP, entrega real de convite
+  e recuperação, scanner de malware, rate limit distribuído, ativação/alertas de observabilidade e ensaio
+  isolado de backup/restauração continuam pendentes. A estação não possui Docker, `pg_dump` nem scanner
+  local. `docs/DEPLOYMENT.md` registra os passos operacionais. Esta versão ainda não foi publicada;
+  o deploy anterior continua sendo o último em Vercel Production.
+
+## Cadastro de clientes e contatos em 2026-10-20
+
+- O formulário de cliente agora coleta endereço com campos opcionais para logradouro, número,
+  complemento, bairro, cidade, UF e CEP. O endereço é enviado somente quando há algum dado e pode ser
+  revisado/editado no cadastro do cliente.
+- A seção de contatos explica que os dados de telefone/e-mail do próprio cliente já ficam no cadastro
+  principal. A ação “Adicionar outra pessoa” abre o formulário para representantes, familiares ou
+  responsáveis, e a lista informa quando não há outras pessoas vinculadas.
+- Formatação, lint, TypeScript, Prisma validate e builds completos passaram. Testes automatizados não
+  foram executados nesta alteração. Não houve mudança de API, schema Prisma ou migration.
+
+## Períodos do dashboard financeiro em 2026-10-20
+
+- O gráfico de recebíveis aceita 3, 6 ou 12 meses futuros e todo o período cadastrado. Os filtros são
+  validados na API e aplicados no SQL dentro do tenant autenticado; períodos curtos retornam buckets
+  mensais, enquanto todo o período agrega por ano para manter o volume visual controlado. O histórico
+  completo inclui parcelas ativas anteriores e projeções futuras, excluindo parcelas canceladas e
+  renegociadas.
+- A interface preserva métricas operacionais ao trocar o filtro, indica o recarregamento do gráfico e
+  mostra uma mensagem enxuta com atalho ao Financeiro quando não há parcelas. A tabela identifica mês
+  ou ano conforme o agrupamento.
+- Format check, lint, TypeScript, Prisma validate, 52 testes automatizados, dois E2E em Chrome local
+  (360 e 1440 px, axe e overflow) e builds completos passaram. O primeiro disparo paralelo de lint/testes
+  excedeu memória; ambos passaram em execuções sequenciais. Nenhuma migration ou escrita no banco foi
+  necessária.
+
+## Página inicial do dashboard em 2026-10-20
+
+- A página inicial ganhou composição em duas áreas: recebíveis e acesso rápido aos módulos permitidos.
+  Os quatro indicadores são exibidos apenas quando a sessão pode abrir o módulo correspondente. O painel
+  lateral mostra atalhos reais e destaca títulos vencidos ou tarefas em aberto quando houver.
+- Sem parcelas no período selecionado, a área financeira mantém uma linha do tempo com posições vazias,
+  rótulos de mês/ano e explicação clara. Nenhum número ou registro fictício é renderizado. Com parcelas,
+  o painel soma previsto, recebido e em aberto a partir das strings decimais usando centavos em `bigint`,
+  e mantém gráfico e tabela por mês ou ano.
+- O teste E2E deixou de gravar uma captura baseada em API simulada. Sua fixture de dashboard representa
+  períodos vazios com valores zero apenas para verificar o estado sem registros. Format check, lint,
+  TypeScript, 52 testes automatizados, Prisma validate e builds completos passaram. Os dois cenários E2E
+  no Chrome instalado passaram em 360 e 1440 px, com verificação de overflow e axe WCAG A/AA. A inspeção
+  visual em 1440 px identificou rótulos cortados na linha do tempo; o alinhamento foi corrigido e o
+  cenário desktop passou novamente após o build web.
+
+## Verificação ampla de QA em 2026-10-20
+
+- A suíte Playwright foi ampliada para 17 cenários. Em 360 e 1440 px, percorre as 16 abas disponíveis
+  ao administrador, verifica carregamento, axe WCAG A/AA, erros de navegador e ausência de overflow.
+  Também cobre prazos, lembretes, agenda, notificações, convite simulado, pipelines, 12 relatórios,
+  CSV, pagamento decimal, paginação, autenticação simulada, cadastro/edição de cliente, contato,
+  comunicação e portal do cliente com mensagem e documento privado. A matriz detalhada está em
+  `docs/QA_COVERAGE.md`.
+- A abertura de Usuários e permissões deixou de reconciliar papéis automaticamente; a operação permanece
+  no botão explícito. Regiões de tabelas financeiras/administração receberam foco e nome acessível,
+  carregamentos passaram a anunciar status e botões segmentados receberam alvo confortável.
+- `tools/qa/live-readonly.mjs` verificou 35 rotas na API publicada com a organização sintética QA do
+  projeto de desenvolvimento. Incluiu os 12 relatórios, CSV, negações 403 no portal e proteção 401 de
+  cron. A ferramenta não altera dados de negócio nem imprime tokens. Os testes do navegador usam API
+  simulada; a verificação remota consulta a versão publicada, ainda anterior às alterações locais.
+- Passaram format check, lint, TypeScript, Prisma validate, build completo, 52 testes unitários e os
+  17 E2E no Chrome local após build. Nenhuma migration, reset ou escrita de negócio remota foi feita
+  nesta verificação. O SMTP continua ausente, então entrega real de convite/recuperação não foi validada;
+  RLS/Storage local requer Docker ou Podman e backup/restauração e carga representativa seguem pendentes.

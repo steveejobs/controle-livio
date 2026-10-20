@@ -4,8 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { Empty, Loading, Notice, Title } from '../shared/crm-ui';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 
-type Page<T> = { items: T[]; total: number };
 type Client = {
   id: string;
   displayName: string;
@@ -66,10 +67,17 @@ export function MatterBoard({
     error: pipeError,
     reload: reloadPipes,
   } = useLoad<Pipeline[]>(canViewPipelines ? '/pipelines' : undefined);
-  const { data: clientPage, error: clientsError } = useLoad<Page<Client>>(
-    canCreate && showForm ? '/clients?pageSize=100' : undefined,
-  );
-  const { data: matters, error, reload } = useLoad<Page<Matter>>('/matters?pageSize=100');
+  const clients = usePaginatedData<Client>(canCreate && showForm ? '/clients' : undefined, 100);
+  const clientPage = clients.data;
+  const clientsError = clients.error;
+  const {
+    data: matters,
+    error,
+    loading: loadingMatters,
+    loadMore,
+    reload,
+    retry,
+  } = usePaginatedData<Matter>('/matters');
   const [moving, setMoving] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
   const filtered = useMemo(
@@ -223,6 +231,18 @@ export function MatterBoard({
               ))}
             </select>
           </label>
+          {clientPage && (
+            <div className="form-wide">
+              <LoadMore
+                shown={clientPage.items.length}
+                total={clientPage.total}
+                loading={clients.loading}
+                error={clientsError}
+                onLoad={clients.loadMore}
+                onRetry={clients.retry}
+              />
+            </div>
+          )}
           <label>
             Referência
             <input required name="reference" maxLength={80} />
@@ -289,7 +309,7 @@ export function MatterBoard({
         </form>
       )}
       <Notice
-        error={pipeError ?? clientsError ?? error}
+        error={pipeError ?? clientsError ?? (!matters ? error : undefined)}
         onRetry={() => {
           void reload();
           void reloadPipes();
@@ -444,6 +464,16 @@ export function MatterBoard({
         />
       ) : (
         <Empty>Crie e configure um pipeline antes de movimentar processos.</Empty>
+      )}
+      {matters && (
+        <LoadMore
+          shown={matters.items.length}
+          total={matters.total}
+          loading={loadingMatters}
+          error={error}
+          onLoad={loadMore}
+          onRetry={retry}
+        />
       )}
     </section>
   );

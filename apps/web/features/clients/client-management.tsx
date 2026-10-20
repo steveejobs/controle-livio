@@ -1,13 +1,12 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate } from '../shared/format';
-import { useApiData } from '../shared/use-api-data';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 import { ClientDetail } from './client-detail';
 import type { Client } from './client.types';
-
-type ClientPage = { items: Client[]; total: number };
 
 export function ClientManagement({
   initialClientId,
@@ -20,13 +19,18 @@ export function ClientManagement({
 }) {
   const [selected, setSelected] = useState(initialClientId);
   const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
   const [submitError, setSubmitError] = useState<string>();
   const [saving, setSaving] = useState(false);
-  const { data, error, reload } = useApiData<ClientPage>(
-    `/clients?pageSize=100${search ? `&search=${encodeURIComponent(search)}` : ''}`,
-    300,
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+  const clients = usePaginatedData<Client>(
+    `/clients${query ? `?search=${encodeURIComponent(query)}` : ''}`,
   );
+  const { data, error, reload } = clients;
 
   const selectClient = (id?: string) => {
     setSelected(id);
@@ -59,6 +63,25 @@ export function ClientManagement({
           email: form.get('email') || undefined,
           phone: form.get('phone') || undefined,
           source: form.get('source') || undefined,
+          address: [
+            'street',
+            'number',
+            'complement',
+            'district',
+            'city',
+            'state',
+            'postalCode',
+          ].some((field) => String(form.get(`address.${field}`) || '').trim())
+            ? {
+                street: String(form.get('address.street') || '').trim() || undefined,
+                number: String(form.get('address.number') || '').trim() || undefined,
+                complement: String(form.get('address.complement') || '').trim() || undefined,
+                district: String(form.get('address.district') || '').trim() || undefined,
+                city: String(form.get('address.city') || '').trim() || undefined,
+                state: String(form.get('address.state') || '').trim() || undefined,
+                postalCode: String(form.get('address.postalCode') || '').trim() || undefined,
+              }
+            : undefined,
         }),
       });
       setShowForm(false);
@@ -120,6 +143,44 @@ export function ClientManagement({
             Origem
             <input name="source" />
           </label>
+          <fieldset className="form-wide optional-address">
+            <legend>
+              Endereço <span>(opcional)</span>
+            </legend>
+            <p className="section-note">
+              Você pode informar o endereço agora ou completar o cadastro depois.
+            </p>
+            <div className="form-grid">
+              <label>
+                Logradouro
+                <input name="address.street" autoComplete="street-address" />
+              </label>
+              <label>
+                Número
+                <input name="address.number" />
+              </label>
+              <label>
+                Complemento
+                <input name="address.complement" />
+              </label>
+              <label>
+                Bairro
+                <input name="address.district" />
+              </label>
+              <label>
+                Cidade
+                <input name="address.city" autoComplete="address-level2" />
+              </label>
+              <label>
+                Estado (UF)
+                <input name="address.state" maxLength={2} autoComplete="address-level1" />
+              </label>
+              <label>
+                CEP
+                <input name="address.postalCode" autoComplete="postal-code" inputMode="numeric" />
+              </label>
+            </div>
+          </fieldset>
           {submitError && (
             <div className="notice notice-error form-wide" role="alert">
               {submitError}
@@ -137,10 +198,10 @@ export function ClientManagement({
         placeholder="Pesquisar nome, CPF/CNPJ, telefone ou e-mail"
         aria-label="Pesquisar clientes"
       />
-      {error && (
+      {error && !data && (
         <div role="alert" className="notice notice-error">
           {error.message}
-          <button onClick={reload}>Tentar novamente</button>
+          <button onClick={clients.retry}>Tentar novamente</button>
         </div>
       )}
       {!data && !error ? (
@@ -181,11 +242,21 @@ export function ClientManagement({
             </tbody>
           </table>
         </div>
-      ) : (
+      ) : !error ? (
         <div className="empty">
           <strong>Nenhum cliente cadastrado</strong>
           <span>Use “Novo cliente” para iniciar.</span>
         </div>
+      ) : null}
+      {data && (
+        <LoadMore
+          shown={data.items.length}
+          total={data.total}
+          loading={clients.loading}
+          error={error}
+          onLoad={clients.loadMore}
+          onRetry={clients.retry}
+        />
       )}
     </section>
   );

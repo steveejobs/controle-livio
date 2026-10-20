@@ -3,9 +3,9 @@
 import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate, formatMoney } from '../shared/format';
-import { useApiData } from '../shared/use-api-data';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 
-type Page<T> = { items: T[]; total: number };
 type Client = { id: string; displayName: string };
 type Contract = {
   id: string;
@@ -21,9 +21,10 @@ type Contract = {
 };
 
 export function Contracts({ permissions }: { permissions: readonly string[] }) {
-  const contracts = useApiData<Page<Contract>>('/finance/contracts?pageSize=100');
-  const clients = useApiData<Page<Client>>(
-    permissions.includes('clients:view') ? '/clients?pageSize=100' : undefined,
+  const contracts = usePaginatedData<Contract>('/finance/contracts');
+  const clients = usePaginatedData<Client>(
+    permissions.includes('clients:view') ? '/clients' : undefined,
+    100,
   );
   const [showForm, setShowForm] = useState(false);
   const [feedback, setFeedback] = useState<string>();
@@ -102,6 +103,18 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
               ))}
             </select>
           </label>
+          {clients.data && (
+            <div className="form-wide">
+              <LoadMore
+                shown={clients.data.items.length}
+                total={clients.data.total}
+                loading={clients.loading}
+                error={clients.error}
+                onLoad={clients.loadMore}
+                onRetry={clients.retry}
+              />
+            </div>
+          )}
           <label>
             Número
             <input required name="number" maxLength={80} />
@@ -144,10 +157,14 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
           </button>
         </form>
       )}
-      {(contracts.error || clients.error) && (
+      {contracts.error && !contracts.data && (
         <div role="alert" className="notice notice-error">
-          {contracts.error?.message ?? clients.error?.message}
-          <button onClick={contracts.reload}>Tentar novamente</button>
+          {contracts.error.message} <button onClick={contracts.retry}>Tentar novamente</button>
+        </div>
+      )}
+      {showForm && clients.error && !clients.data && (
+        <div role="alert" className="notice notice-error">
+          {clients.error.message} <button onClick={clients.retry}>Tentar novamente</button>
         </div>
       )}
       {!contracts.data && !contracts.error ? (
@@ -195,6 +212,16 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
           <strong>Nenhum contrato</strong>
           <span>Cadastre o primeiro contrato de honorários.</span>
         </div>
+      )}
+      {contracts.data && (
+        <LoadMore
+          shown={contracts.data.items.length}
+          total={contracts.data.total}
+          loading={contracts.loading}
+          error={contracts.error}
+          onLoad={contracts.loadMore}
+          onRetry={contracts.retry}
+        />
       )}
     </section>
   );

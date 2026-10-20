@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, type FormEvent } from 'react';
+import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { useApiData } from '../shared/use-api-data';
 
@@ -22,20 +22,6 @@ export function TeamManagement({ permissions }: { permissions: readonly string[]
   const roles = useApiData<Role[]>(canViewRoles ? '/admin/roles' : undefined);
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (
-      !canManageRoles ||
-      !roles.data ||
-      (roles.data.some(({ key }) => key === 'lawyer') &&
-        roles.data.some(({ key }) => key === 'secretary'))
-    )
-      return;
-    if (roles.data)
-      api<Role[]>('/admin/system-roles/reconcile', { method: 'POST' })
-        .then(() => roles.reload())
-        .catch(() => undefined);
-  }, [canManageRoles, roles.data, roles.reload]);
 
   const setStatus = async (user: User) => {
     setBusy(true);
@@ -167,7 +153,12 @@ export function TeamManagement({ permissions }: { permissions: readonly string[]
             <h2>Usuários cadastrados</h2>
           </div>
         </div>
-        <div className="surface table-wrap">
+        <div
+          className="surface table-wrap"
+          role="region"
+          aria-label="Usuários cadastrados"
+          tabIndex={0}
+        >
           <table>
             <thead>
               <tr>

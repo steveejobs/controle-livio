@@ -8,6 +8,7 @@ import { InstallAppButton } from '../../components/install-app-button';
 import { PasswordField } from '../../components/password-field';
 import { ApiError, api, resetApiSession } from '../../lib/api';
 import { createSupabaseBrowserClient } from '../../lib/supabase/client';
+import { GlobalSearch } from '../search/global-search';
 import { Loading, Notice, Title } from '../shared/crm-ui';
 
 const TeamManagement = dynamic(() =>
@@ -48,9 +49,6 @@ const MatterBoard = dynamic(() =>
   import('../matters/matter-board').then((module) => module.MatterBoard),
 );
 
-type Page<T> = { items: T[]; total: number };
-type Client = { id: string; displayName: string };
-type Matter = { id: string; reference: string; title: string };
 type Session = {
   user: { id: string; name?: string; email: string; clientId?: string; permissions?: string[] };
   organization: { name?: string; slug?: string };
@@ -482,86 +480,5 @@ function Unavailable({ title }: { title: string }) {
         </span>
       </div>
     </section>
-  );
-}
-function GlobalSearch({
-  onOpen,
-  permissions,
-}: {
-  onOpen: (id: string, type: string) => void;
-  permissions: readonly string[];
-}) {
-  const [term, setTerm] = useState('');
-  const [results, setResults] = useState<{ clients: Client[]; matters: Matter[] }>({
-    clients: [],
-    matters: [],
-  });
-  const controller = useRef<AbortController | undefined>(undefined);
-  useEffect(() => {
-    if (term.trim().length < 2) {
-      setResults({ clients: [], matters: [] });
-      return;
-    }
-    const timer = setTimeout(() => {
-      controller.current?.abort();
-      const signal = new AbortController();
-      controller.current = signal;
-      const clientsRequest = permissions.includes('clients:view')
-        ? api<Page<Client>>(
-            `/clients?search=${encodeURIComponent(term)}&pageSize=5`,
-            {},
-            signal.signal,
-          )
-        : Promise.resolve({ items: [], total: 0 });
-      const mattersRequest = permissions.includes('matters:view')
-        ? api<Page<Matter>>(
-            `/matters?search=${encodeURIComponent(term)}&pageSize=5`,
-            {},
-            signal.signal,
-          )
-        : Promise.resolve({ items: [], total: 0 });
-      Promise.all([clientsRequest, mattersRequest])
-        .then(([clients, matters]) =>
-          setResults({ clients: clients.items, matters: matters.items }),
-        )
-        .catch(() => undefined);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [permissions, term]);
-  return (
-    <div className="global-search">
-      <input
-        value={term}
-        onChange={(e) => setTerm(e.target.value)}
-        placeholder="Buscar cliente, processo, CPF, e-mail..."
-        aria-label="Busca global"
-      />
-      {results.clients.length || results.matters.length ? (
-        <div className="search-results">
-          {results.clients.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => {
-                onOpen(item.id, 'cliente');
-                setTerm('');
-              }}
-            >
-              Cliente: {item.displayName}
-            </button>
-          ))}
-          {results.matters.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => {
-                onOpen(item.id, 'processo');
-                setTerm('');
-              }}
-            >
-              Processo: {item.reference} - {item.title}
-            </button>
-          ))}
-        </div>
-      ) : null}
-    </div>
   );
 }

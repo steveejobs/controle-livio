@@ -43,6 +43,7 @@
     "postinstall": "npm run db:generate"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@eslint/js": "^9.35.0",
     "@next/eslint-plugin-next": "^16.3.0",
     "@playwright/test": "^1.64.1",

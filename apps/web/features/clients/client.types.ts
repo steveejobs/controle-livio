@@ -7,6 +7,15 @@ export type Client = {
   phone?: string;
   taxIdNormalized?: string;
   source?: string;
+  address?: {
+    street?: string;
+    number?: string;
+    complement?: string;
+    district?: string;
+    city?: string;
+    state?: string;
+    postalCode?: string;
+  };
   updatedAt?: string;
 };
 

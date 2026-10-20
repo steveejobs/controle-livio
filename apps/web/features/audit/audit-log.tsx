@@ -1,7 +1,8 @@
 'use client';
 
 import { formatDate } from '../shared/format';
-import { useApiData } from '../shared/use-api-data';
+import { LoadMore } from '../shared/load-more';
+import { usePaginatedData } from '../shared/use-paginated-data';
 
 type AuditPage = {
   items: Array<{
@@ -15,7 +16,7 @@ type AuditPage = {
 };
 
 export function AuditLog() {
-  const logs = useApiData<AuditPage>('/audit-logs?pageSize=100');
+  const logs = usePaginatedData<AuditPage['items'][number]>('/audit-logs');
   return (
     <section>
       <header className="page-title">
@@ -25,20 +26,25 @@ export function AuditLog() {
           <span>Histórico imutável das operações realizadas no sistema.</span>
         </div>
       </header>
-      {logs.error && (
+      {logs.error && !logs.data && (
         <div role="alert" className="notice notice-error">
           {logs.error.message}
-          <button onClick={logs.reload}>Tentar novamente</button>
+          <button onClick={logs.retry}>Tentar novamente</button>
         </div>
       )}
       {!logs.data && !logs.error ? (
-        <div className="loading" aria-label="Carregando auditoria">
+        <div className="loading" role="status" aria-label="Carregando auditoria">
           <i />
           <i />
           <i />
         </div>
       ) : logs.data?.items.length ? (
-        <div className="surface table-wrap">
+        <div
+          className="surface table-wrap"
+          role="region"
+          aria-label="Logs de auditoria"
+          tabIndex={0}
+        >
           <table>
             <thead>
               <tr>
@@ -65,6 +71,16 @@ export function AuditLog() {
           <strong>Nenhum evento registrado</strong>
           <span>As próximas operações auditáveis aparecerão aqui.</span>
         </div>
+      )}
+      {logs.data && (
+        <LoadMore
+          shown={logs.data.items.length}
+          total={logs.data.total}
+          loading={logs.loading}
+          error={logs.error}
+          onLoad={logs.loadMore}
+          onRetry={logs.retry}
+        />
       )}
     </section>
   );
