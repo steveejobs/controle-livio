@@ -14,7 +14,7 @@ preservado para compatibilidade com FKs de ator/responsável. Um profile pode te
 `organization_member_roles` é a fonte de papéis da membership; permissões continuam normalizadas em
 `roles`, `permissions` e `role_permissions`.
 
-A API valida o Bearer token por `auth.getUser`, busca uma membership ativa e deriva o tenant. Um
+A API valida os claims do Bearer token pelo Supabase Auth, busca uma membership ativa e deriva o tenant. Um
 `X-Organization-Id` arbitrário nunca concede acesso: apenas seleciona uma membership já existente.
 O Auth legado, Argon2, cookie próprio e CSRF foram retirados do runtime. A migration final bloqueia se
 existir usuário ativo sem `auth_user_id` e somente então limpa hashes próprios.
@@ -44,8 +44,11 @@ A chave nunca possui prefixo `NEXT_PUBLIC_`.
 ## Migrations e transição
 
 As três migrations de 2026-08-07 foram preservadas. A migration aditiva
-`20260809120000_auth_memberships_hardening.sql` consolida o modelo sem reescrever histórico. As Prisma
-migrations estão arquivadas e não podem ser executadas em paralelo.
+`20260809120000_auth_memberships_hardening.sql` consolida o modelo, e
+`20260812150000_authenticated_table_grants.sql` concede DML ao papel `authenticated` para que as
+policies RLS possam ser avaliadas. As cinco migrations foram aplicadas ao projeto novo de
+desenvolvimento/homologação em 2026-10-20. As Prisma migrations estão arquivadas e não podem ser
+executadas em paralelo.
 
 Antes de aplicar em um ambiente com usuários legados, cada conta ativa deve ser criada/convidada no
 Supabase Auth e receber `users.auth_user_id`. Hash Argon2 não é convertido. Usuários sem credencial

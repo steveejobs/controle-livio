@@ -3,7 +3,7 @@
   "framework": "nestjs",
   "installCommand": "cd ../.. && npm ci --include=dev",
   "buildCommand": "cd ../.. && npm run build:api",
-  "regions": ["gru1"],
+  "regions": ["cle1"],
   "headers": [
     {
       "source": "/",

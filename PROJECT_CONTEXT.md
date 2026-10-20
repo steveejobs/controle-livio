@@ -1,6 +1,6 @@
 # Contexto vivo do projeto Lívio
 
-Última atualização: 2026-08-12
+Última atualização: 2026-10-20
 
 ## Estado atual
 
@@ -220,5 +220,127 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   redirects antes da troca dos aliases `vercel.app`.
 - Adicionar scanner antimalware, rate limit distribuído, telemetria e alertas antes de produção.
 - Ensaiar backup/restauração separados de Database e Storage.
-- O smoke público e o workflow `Quality` verde não substituem um E2E autenticado completo das novas
-  telas com mutações em banco descartável; Docker/Podman seguem indisponíveis nesta máquina.
+- Uma simulação E2E autenticada pontual foi executada em 2026-10-20 contra o projeto de desenvolvimento,
+  com organização QA isolada e mutações sintéticas. Ainda falta versionar essa simulação como suíte
+  automatizada; a execução local da prova RLS/Storage continua dependendo de Docker ou Podman.
+
+## Troca do projeto Supabase em 2026-10-20
+
+- O projeto Supabase `ioebcdpyrszokdyaoaqv` foi confirmado pelo responsável como ambiente novo de
+  desenvolvimento/homologação, sem dados a migrar. A inspeção prévia encontrou zero tabelas públicas,
+  usuários Auth, buckets e objetos. O projeto anterior não foi modificado nesta troca.
+- As URLs fornecidas para os dois poolers continham uma senha diferente da senha de banco fornecida
+  separadamente. A conexão foi corrigida e validada por `SELECT 1`. O `.env` local ignorado pelo Git
+  e as variáveis da Vercel usam a URL corrigida de transaction pooler para runtime; a URL de session
+  pooler foi usada somente para migrations. Valores de credenciais não foram versionados.
+- O dry run da Supabase CLI listou apenas as cinco migrations oficiais. Com autorização específica para
+  as substituições de políticas, trigger e constraint da migration de Auth/RLS, as cinco foram
+  aplicadas ao projeto novo, sem seed, reset ou remoção de tabelas/dados. A inspeção posterior confirmou
+  39/39 tabelas públicas com RLS habilitada e forçada, 141 policies, bucket `legal-documents` privado,
+  nenhum objeto e nenhum hash de senha legado.
+- O Auth remoto foi configurado com a web HTTPS como Site URL, redirects local/publicado, signup público
+  desabilitado e senha mínima de 12 caracteres. Um convite foi criado para o administrador informado;
+  o bootstrap vinculou uma membership ativa à organização `bandeira`, um papel Administrador e 126
+  permissões. A API e a web da Vercel receberam variáveis do novo projeto em Production e Preview.
+- O build local, format check, lint, TypeScript, Prisma validate e 45 testes automatizados passaram
+  após instalação limpa. O build da web publicada incluiu somente o project ref novo nos scripts.
+  `/v1/health/live` e `/v1/health/ready` responderam 200 na API publicada, CORS aceitou a origem da
+  web e uma rota protegida sem Bearer respondeu 401. A web publicada respondeu 200 e a raiz da API
+  redirecionou com 308.
+- A região da Function da API mudou de `gru1` para `cle1` para coincidir com `us-east-2` do banco novo;
+  o deploy foi inspecionado e mostrou a Function em `cle1`. Auth Admin e Storage responderam usando a
+  nova chave server-side; leitura anônima de organizações não retornou dados.
+- O lockfile recebeu atualizações compatíveis via `npm audit fix`: Next passou para 16.4.2 e a cadeia
+  de dependências de produção passou de 13 alertas (dois críticos) para cinco (zero críticos, três
+  altos). Os cinco restantes exigem migrações de versão principal do Prisma ou Swagger; não foi usado
+  `--force`. Format, lint, TypeScript, Prisma validate, os 45 testes e os builds completos passaram
+  após essa atualização. Os dois projetos Vercel foram republicados com o lockfile novo.
+- O smoke final dos aliases publicados confirmou web 200 com título e CSP, somente o project ref novo
+  nos scripts, `/v1/health/ready` 200 e redirecionamento 308 da raiz da API para a web.
+- A entrega do convite por e-mail e o fluxo autenticado no navegador dependem da aceitação do convite
+  e ainda precisam de confirmação. Custom SMTP não está configurado. Os alertas restantes do audit e
+  os riscos gerais de produção documentados acima devem ser resolvidos antes de uso sensível real.
+
+## Simulação autenticada do sistema em 2026-10-20
+
+- A simulação usou a organização QA isolada `qa-simulation-20261020150139`, com usuário administrador
+  e usuário cliente sintéticos. Os dados de teste permanecem identificados nessa organização para
+  revisão; não foram enviados convites nem mensagens de e-mail.
+- A cobertura da API passou por autenticação e permissões, dashboard, clientes/contatos, processos,
+  pipelines/etapas, notas internas e mensagens, tarefas/comentários/lembretes, agenda/prazos, contratos,
+  recebíveis/parcelas, pagamentos/idempotência/estorno, ajustes/renegociação, despesas, upload e versão
+  de documentos privados, notificações, os 12 relatórios/CSV, administração de papéis, estado de usuário
+  e auditoria. Os alertas vencidos e de próximos vencimentos foram reconciliados duas vezes; a leitura
+  foi preservada sem duplicar notificações.
+- No navegador real, as 16 abas do administrador e as 11 abas disponíveis ao cliente abriram. Em 360 px,
+  o menu móvel abriu/fechou, não houve overflow horizontal e a navegação continuou operável. Os fluxos
+  pela interface criaram cliente, tarefa com prazo, comentário e lembrete, prazo na agenda, recebível,
+  pagamento, despesa, documento e mensagem do portal.
+- A validação do portal confirmou escopo de um único cliente, documento `CLIENT` visível, documento
+  interno oculto e bloqueio 403 para notas internas. A exportação CSV autenticada baixou o arquivo; os
+  12 relatórios foram selecionados sem erro visível.
+- A simulação encontrou e corrigiu erro real em operações financeiras: IDs de parcelas eram enviados
+  como texto para uma comparação UUID no PostgreSQL. O bloqueio agora tipa cada ID como UUID e as
+  transações financeiras seriais têm limites explícitos de espera de 10 s e execução de 30 s. O fluxo
+  completo de ajuste, pagamento parcial, repetição idempotente, estorno e renegociação passou na API
+  publicada; o valor renegociado conferiu com R$ 110,00. A correção foi publicada na API Vercel.
+- Após essa correção passaram format check, lint, TypeScript, 46 testes automatizados, Prisma validate e
+  builds completos. A prova de isolamento RLS/Storage diretamente no projeto continua pendente: Docker
+  e Podman não estão instalados nesta máquina e o safeguard bloqueia o runner remoto. Convite/recuperação
+  por e-mail não foram exercitados: isso enviaria e-mail externo e o custom SMTP ainda não está configurado.
+
+## Revisão mobile e instalação em 2026-10-20
+
+- A web agora oferece instalação como PWA pelo navegador, usando manifest com `standalone`, ícones PNG
+  192/512 px (incluindo maskable), ícone SVG e metadados Apple. O botão está no login e na navegação
+  autenticada. Chrome/Edge podem apresentar prompt nativo quando disponível; nos demais casos, o diálogo
+  mostra como adicionar à tela inicial no iPhone/iPad, Android ou computador.
+- No menu mobile, Escape fecha a navegação e devolve foco ao controle de abertura; ao abrir, o foco vai
+  ao primeiro destino e a rolagem de fundo fica bloqueada. Selecionar destino e usar o backdrop também
+  fecham o menu.
+- QA local com Chrome em 360 e 390 px confirmou largura do documento igual à janela, formulário sem
+  corte, diálogo de instalação e ciclo de foco/rolagem do menu. Rotas da web e do manifest, além dos
+  ícones, responderam 200. Format check, lint, TypeScript, 46 testes, Prisma validate e build completo
+  passaram após esta etapa.
+- A entrega é instalável pelo navegador e continua online; não cria APK/EXE nem inclui leitura offline.
+  A experiência de instalação varia por navegador, e iPhone/iPad usam o fluxo manual de Compartilhar >
+  Adicionar à Tela de Início.
+
+## Desempenho e eficiência em 2026-10-20
+
+- O quadro de processos foi extraído do shell e passou a carregar sob demanda; a lista de clientes do
+  cadastro de processo só é requisitada quando o formulário abre. Medição local do build web caiu de
+  10 para 9 scripts iniciais e de 251.592 para 249.065 bytes gzip (redução de 1,0%). O novo
+  `npm run perf:bundle` limita o JavaScript inicial a 260.000 bytes no workflow `Quality`.
+- A web deixou de reconciliar notificações no login. A central reconcilia na primeira abertura,
+  reutiliza o resultado por cinco minutos e mantém atualização manual. Browser QA com respostas
+  isoladas confirmou 0 POSTs no login, 1 na primeira abertura, 0 extras na reabertura e 1 atualização
+  manual; o cadastro de processos só requisitou clientes após abrir o formulário. Em 360 px não houve
+  overflow horizontal.
+- O cliente API agora compartilha GETs simultâneos no mesmo escopo, respeita cancelamento individual,
+  cancela o transporte quando nenhum leitor resta, limita o cache a 80 entradas e impede que leituras
+  antigas repovoem o cache após escrita/logout. Testes cobrem concorrência, cancelamento e corrida
+  entre leitura e escrita.
+- A reconciliação financeira agrega pagamentos e ajustes somente das parcelas elegíveis, filtra
+  notificações financeiras anteriores no banco e evita `UPSERT` quando conteúdo ativo não mudou. O
+  cron processa no máximo oito destinatários em paralelo. Comparação SQL somente leitura no projeto
+  de desenvolvimento confirmou linhas iguais para a organização QA (5 alertas) e um cliente (2).
+  `EXPLAIN ANALYZE` do conjunto pequeno registrou 0,983 → 0,315 ms e 0,217 → 0,203 ms,
+  respectivamente; não extrapolar esses tempos para bases grandes. Nenhuma migration ou escrita em
+  dados reais foi executada nesta medição.
+- Após as mudanças passaram format check, lint, TypeScript, 51 testes automatizados, Prisma validate,
+  build completo e o orçamento de bundle. Ainda faltam métricas reais de p95/Web Vitals e carga
+  concorrente com volume representativo antes de afirmar ganhos em produção. Detalhes e método estão
+  em `docs/PERFORMANCE.md`.
+- Um smoke HTTP local limitado a GET registrou web 50/50 respostas 200 (p95 77 ms), API liveness
+  10/10 (p95 15 ms) e API readiness 30/30 sob cinco chamadas simultâneas (p95 4.796 ms). O readiness
+  sequencial ficou em p95 930 ms. A instância local usa o transaction pooler remoto com
+  `connection_limit=1`, portanto as consultas de readiness concorrem pela mesma conexão; esse dado
+  não representa a latência da Function Vercel próxima ao banco. A ferramenta de smoke foi limitada
+  a URL HTTP local, GET, 100 requisições e oito simultâneas por segurança.
+- A regressão mobile de processos/notificações foi versionada em Playwright e adicionada ao CI.
+  Usa API simulada, não acessa o Supabase, e valida navegação em 360 px, foco/Escape, ausência de
+  overflow, carregamento de clientes sob demanda e contagem de reconciliações. Ainda não cobre todas
+  as 16 abas nem substitui a simulação ampla autenticada no projeto de desenvolvimento. Após sua
+  inclusão, passaram novamente format check, lint, TypeScript, 51 testes unitários, Prisma validate,
+  build completo, orçamento de 249.065/260.000 bytes gzip e o E2E no Chrome local.

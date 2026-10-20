@@ -61,6 +61,81 @@ describe('authenticated API client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('compartilha leituras simultâneas sem cancelar os outros consumidores', async () => {
+    let complete!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          complete = resolve;
+        }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+
+    const first = api('/clients', {}, firstController.signal);
+    const second = api('/clients', {}, secondController.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    firstController.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock.mock.calls[0]?.[1]?.signal.aborted).toBe(false);
+
+    complete(new Response(JSON.stringify({ items: [{ id: 'client-a' }] }), { status: 200 }));
+    await expect(second).resolves.toEqual({ items: [{ id: 'client-a' }] });
+    await expect(api('/clients')).resolves.toEqual({ items: [{ id: 'client-a' }] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('não reutiliza uma leitura iniciada antes de uma escrita', async () => {
+    let finishOldRead!: (response: Response) => void;
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      if (init.method === 'POST') return Promise.resolve(new Response('{}', { status: 200 }));
+      if (fetchMock.mock.calls.length === 1) {
+        return new Promise<Response>((resolve) => {
+          finishOldRead = resolve;
+        });
+      }
+      return Promise.resolve(new Response(JSON.stringify({ items: ['atual'] }), { status: 200 }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    const oldRead = api('/clients');
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    await api('/clients', { method: 'POST', body: '{}' });
+    await expect(api('/clients')).resolves.toEqual({ items: ['atual'] });
+    finishOldRead(new Response(JSON.stringify({ items: ['antigo'] }), { status: 200 }));
+    await expect(oldRead).resolves.toEqual({ items: ['antigo'] });
+    await expect(api('/clients')).resolves.toEqual({ items: ['atual'] });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('cancela o transporte quando todos os leitores saem e permite nova tentativa', async () => {
+    const fetchMock = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      if (fetchMock.mock.calls.length > 1) {
+        return Promise.resolve(new Response(JSON.stringify({ items: ['novo'] }), { status: 200 }));
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () => {
+          reject(new DOMException('Requisição cancelada', 'AbortError'));
+        });
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+    const controller = new AbortController();
+
+    const pending = api('/clients', {}, controller.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    controller.abort();
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetchMock.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
+    await expect(api('/clients')).resolves.toEqual({ items: ['novo'] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('downloads a protected CSV through the authenticated client', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response('\uFEFFname\r\nGabriel', {

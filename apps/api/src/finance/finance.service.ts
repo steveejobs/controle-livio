@@ -250,7 +250,11 @@ export class FinanceService {
             idempotent: false,
           };
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
       ),
     );
   }
@@ -313,7 +317,11 @@ export class FinanceService {
           });
           return reversal;
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
       ),
     );
   }
@@ -361,7 +369,11 @@ export class FinanceService {
           });
           return adjustment;
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
       ),
     );
   }
@@ -467,7 +479,11 @@ export class FinanceService {
           });
           return { renegotiation, resultingReceivable: resulting };
         },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
       ),
     );
   }
@@ -770,7 +786,7 @@ export class FinanceService {
   ): Promise<void> {
     if (!ids.length) return;
     await transaction.$queryRaw(
-      Prisma.sql`SELECT id FROM receivable_installments WHERE organization_id = ${organizationId}::uuid AND id IN (${Prisma.join(ids)}) ORDER BY id FOR UPDATE`,
+      Prisma.sql`SELECT id FROM receivable_installments WHERE organization_id = ${organizationId}::uuid AND id IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))}) ORDER BY id FOR UPDATE`,
     );
   }
 

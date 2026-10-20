@@ -101,6 +101,50 @@ describe('FinanceService transacional', () => {
     expect(prisma.$transaction).toHaveBeenCalledTimes(2);
   });
 
+  it('envia IDs UUID tipados para o bloqueio de parcelas do pagamento', async () => {
+    const installmentId = '00000000-0000-4000-8000-000000000001';
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const transaction = {
+      $queryRaw: queryRaw,
+      payment: {
+        findUnique: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'payment-c', allocations: [] }),
+      },
+      receivableInstallment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: installmentId,
+            amount: new Prisma.Decimal('50.00'),
+            currency: 'BRL',
+            dueDate: new Date('2026-08-01'),
+            status: 'OPEN',
+            allocations: [],
+            adjustments: [],
+            receivable: { clientId: 'client-a' },
+          },
+        ]),
+        update: vi.fn(),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(transaction)),
+    };
+    const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+
+    await service.createPayment(actor, 'uuid-cast-key', {
+      clientId: 'client-a',
+      reference: 'PIX-UUID-1',
+      amount: '50.00',
+      currency: 'BRL',
+      paidAt: new Date('2026-08-01'),
+      method: 'PIX',
+      allocations: [{ installmentId, amount: '50.00' }],
+    });
+
+    expect(queryRaw.mock.calls[0]![0].sql).toContain('id IN (?::uuid)');
+    expect(queryRaw.mock.calls[0]![0].values).toContain(installmentId);
+  });
+
   it('estorna sem apagar o pagamento, com controle otimista e auditoria', async () => {
     const payment = {
       id: 'payment-a',

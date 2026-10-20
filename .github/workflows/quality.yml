@@ -41,6 +41,9 @@ jobs:
       - run: npm test
       - run: npm run db:validate
       - run: npm run build
+      - run: npm run perf:bundle
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
 
   supabase-isolation:
     runs-on: ubuntu-latest

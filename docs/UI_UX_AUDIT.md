@@ -2,6 +2,27 @@
 
 Atualizado em 2026-08-09.
 
+## Revisão mobile e instalação em 2026-10-20
+
+- A instalação foi adicionada como PWA pelo navegador: manifest com apresentação `standalone`, nomes,
+  cores e ícones 192/512 px e maskable. A web oferece “Instalar aplicativo” no login e no menu
+  autenticado; quando o navegador não expõe prompt próprio, abre instruções para iPhone/iPad, Android
+  ou computador. O iOS recebe metadados e ícone Apple Touch.
+- O menu mobile agora informa estado aberto/fechado, fecha com Escape, envia o foco ao primeiro item,
+  devolve o foco ao botão ao fechar e bloqueia rolagem da página de fundo enquanto está aberto. O menu
+  continua fechando após escolher uma aba e pelo botão de fundo.
+- Verificação em Chrome local autenticado simulado: a 360 px, largura do documento ficou em 360 px;
+  menu aberto recebeu foco e bloqueou rolagem; Escape fechou o menu e restaurou o foco; instruções de
+  instalação abriram em diálogo nativo acessível. Em 360 e 390 px, formulário e botão de instalação
+  ficaram dentro do viewport. O login foi conferido visualmente em 390 px. Testes de navegador
+  simularam o fluxo nativo do Chrome e confirmaram instruções específicas de iPhone e Android.
+- A rota `/manifest.webmanifest`, os ícones 192/512 px e a raiz web responderam 200 no build local.
+  Format check, lint, TypeScript, 46 testes, validação Prisma e build completo passaram.
+- A instalação adiciona a aplicação web à tela inicial/launcher e exige conexão para consultar dados;
+  esta etapa não inclui pacote nativo APK/EXE nem cache offline. A disponibilidade do prompt automático
+  depende do navegador; iPhone/iPad e navegadores sem esse evento recebem passos manuais no próprio
+  sistema.
+
 ## Diagnóstico atual
 
 O sistema está em um nível **funcional, mas ainda não altamente intuitivo**. A base tem bons sinais:
@@ -10,8 +31,9 @@ visível, navegação responsiva e mensagens que não inventam dados quando a AP
 
 Os principais atritos observados são:
 
-- a rota inicial usa `features/app/legal-crm.tsx`, um componente muito grande, enquanto existe um
-  dashboard modular separado que não é o shell ativo;
+- a rota inicial ainda concentra autenticação, navegação e busca em `features/app/legal-crm.tsx`,
+  enquanto existe um dashboard modular separado que não é o shell ativo; o quadro de processos foi
+  movido para `features/matters/matter-board.tsx` e carrega sob demanda;
 - há dois vocabulários visuais e uma quantidade relevante de estilos/cor hardcoded em `globals.css`,
   o que aumenta a divergência conforme novos módulos forem adicionados;
 - a animação estava limitada aos elementos presentes no primeiro mount e não cobria de forma
@@ -45,14 +67,16 @@ Os principais atritos observados são:
 
 ## Próximas melhorias prioritárias
 
-1. Dividir o restante de `legal-crm.tsx` em features por domínio (`auth`, `clients`, `matters`, `work`, `reports`,
-   `admin`) sem alterar contratos da API.
+1. Dividir o restante de `legal-crm.tsx` em features de autenticação, busca e navegação sem alterar
+   contratos da API.
 2. Fazer o shell modular do dashboard ser a composição principal, ou remover a duplicidade após uma
    decisão de produto registrada.
 3. Transformar busca em combobox acessível com `aria-controls`, `aria-expanded`, `aria-activedescendant`
    e anúncio de resultados.
-4. Adicionar testes de acessibilidade e E2E em ambiente Supabase descartável; isso continua bloqueado
-   pela ausência de Docker/Playwright nesta máquina.
+4. Ampliar a suíte E2E versionada para os demais fluxos autenticados e acrescentar testes de
+   acessibilidade. O fluxo mobile de processos e notificações já roda no CI com API simulada; a
+   simulação ampla no projeto de desenvolvimento foi manual e a suíte RLS/Storage ainda depende de
+   Docker ou Podman.
 5. Substituir gradualmente literais de cor de `globals.css` por aliases dos tokens, validando contraste
    e estados de foco a cada módulo.
 

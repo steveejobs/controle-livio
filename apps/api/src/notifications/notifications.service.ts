@@ -22,6 +22,8 @@ type AlertMetadata = {
   dueDate: string;
 };
 
+const RECONCILIATION_BATCH_SIZE = 8;
+
 @Injectable()
 export class NotificationsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -31,33 +33,41 @@ export class NotificationsService {
       ? Prisma.sql`AND r.client_id = ${actor.clientId}::uuid`
       : Prisma.empty;
     const alerts = await this.prisma.$queryRaw<FinancialAlertRow[]>(Prisma.sql`
-      WITH paid AS (
+      WITH target_installments AS MATERIALIZED (
+        SELECT i.id, i.amount, i.due_date, r.client_id,
+          c.display_name AS client_name, r.reference
+        FROM receivable_installments i
+        JOIN receivables r ON r.id = i.receivable_id
+        JOIN clients c ON c.id = r.client_id
+        WHERE i.organization_id = ${actor.organizationId}::uuid
+          AND i.status NOT IN ('PAID', 'CANCELLED', 'RENEGOTIATED')
+          AND i.due_date <= CURRENT_DATE + INTERVAL '7 days'
+          ${clientScope}
+      ), paid AS (
         SELECT pa.installment_id, SUM(pa.amount) AS amount
         FROM payment_allocations pa
+        JOIN target_installments target ON target.id = pa.installment_id
         JOIN payments p ON p.id = pa.payment_id AND p.status = 'CONFIRMED'
         WHERE pa.organization_id = ${actor.organizationId}::uuid AND pa.reversed_at IS NULL
         GROUP BY pa.installment_id
       ), adjustments AS (
-        SELECT installment_id,
-          SUM(CASE WHEN kind IN ('DISCOUNT', 'REVERSAL') THEN -amount ELSE amount END) AS amount
-        FROM financial_adjustments
-        WHERE organization_id = ${actor.organizationId}::uuid AND approved_at IS NOT NULL
-        GROUP BY installment_id
+        SELECT adjustment.installment_id,
+          SUM(CASE WHEN adjustment.kind IN ('DISCOUNT', 'REVERSAL')
+            THEN -adjustment.amount ELSE adjustment.amount END) AS amount
+        FROM financial_adjustments adjustment
+        JOIN target_installments target ON target.id = adjustment.installment_id
+        WHERE adjustment.organization_id = ${actor.organizationId}::uuid
+          AND adjustment.approved_at IS NOT NULL
+        GROUP BY adjustment.installment_id
       )
-      SELECT i.id AS installment_id, r.client_id, c.display_name AS client_name,
-        r.reference, i.due_date,
+      SELECT i.id AS installment_id, i.client_id, i.client_name,
+        i.reference, i.due_date,
         (i.amount + COALESCE(a.amount, 0) - COALESCE(p.amount, 0))::numeric(19,4) AS balance,
         CASE WHEN i.due_date < CURRENT_DATE THEN 'OVERDUE' ELSE 'DUE_SOON' END AS alert_kind
-      FROM receivable_installments i
-      JOIN receivables r ON r.id = i.receivable_id
-      JOIN clients c ON c.id = r.client_id
+      FROM target_installments i
       LEFT JOIN paid p ON p.installment_id = i.id
       LEFT JOIN adjustments a ON a.installment_id = i.id
-      WHERE i.organization_id = ${actor.organizationId}::uuid
-        AND i.status NOT IN ('PAID', 'CANCELLED', 'RENEGOTIATED')
-        AND i.due_date <= CURRENT_DATE + INTERVAL '7 days'
-        AND (i.amount + COALESCE(a.amount, 0) - COALESCE(p.amount, 0)) > 0
-        ${clientScope}
+      WHERE (i.amount + COALESCE(a.amount, 0) - COALESCE(p.amount, 0)) > 0
       ORDER BY i.due_date ASC`);
 
     const activeIds = new Set(alerts.map((alert) => alert.installment_id));
@@ -65,9 +75,11 @@ export class NotificationsService {
       where: {
         organizationId: actor.organizationId,
         userId: actor.userId,
+        metadata: { path: ['source'], equals: 'FINANCIAL_DUE' },
       },
-      select: { id: true, status: true, metadata: true },
+      select: { id: true, status: true, title: true, body: true, link: true, metadata: true },
     });
+    const previousById = new Map(previous.map((item) => [item.id, item]));
     const resolvedIds = previous
       .filter(({ metadata, status }) => {
         const value = metadata as AlertMetadata | null;
@@ -89,7 +101,7 @@ export class NotificationsService {
             }),
           ]
         : []),
-      ...alerts.map((alert) => {
+      ...alerts.flatMap((alert) => {
         const overdue = alert.alert_kind === 'OVERDUE';
         const metadata: AlertMetadata = {
           source: 'FINANCIAL_DUE',
@@ -109,16 +121,33 @@ export class NotificationsService {
           metadata: metadata as unknown as Prisma.InputJsonValue,
           sentAt: now,
         };
-        return this.prisma.notification.upsert({
-          where: { id: this.alertId(actor.userId, alert.installment_id) },
-          create: { id: this.alertId(actor.userId, alert.installment_id), ...data },
-          update: {
-            title: data.title,
-            body: data.body,
-            link: data.link,
-            metadata: data.metadata,
-          },
-        });
+        const id = this.alertId(actor.userId, alert.installment_id);
+        const existing = previousById.get(id);
+        const oldMetadata = existing?.metadata as AlertMetadata | null;
+        if (
+          existing?.title === data.title &&
+          existing.body === data.body &&
+          existing.link === data.link &&
+          oldMetadata?.source === metadata.source &&
+          oldMetadata.kind === metadata.kind &&
+          oldMetadata.installmentId === metadata.installmentId &&
+          oldMetadata.clientId === metadata.clientId &&
+          oldMetadata.dueDate === metadata.dueDate
+        ) {
+          return [];
+        }
+        return [
+          this.prisma.notification.upsert({
+            where: { id },
+            create: { id, ...data },
+            update: {
+              title: data.title,
+              body: data.body,
+              link: data.link,
+              metadata: data.metadata,
+            },
+          }),
+        ];
       }),
     ]);
 
@@ -213,18 +242,24 @@ export class NotificationsService {
         clientId: true,
       },
     });
-    const results = await Promise.all(
-      recipients.map((recipient) =>
-        this.reconcileUserAlerts({
-          membershipId: recipient.id,
-          profileId: recipient.profileId,
-          organizationId: recipient.organizationId,
-          userId: recipient.userId,
-          ...(recipient.clientId ? { clientId: recipient.clientId } : {}),
-          permissions: ['notifications:view', 'notifications:update'],
-        }),
-      ),
-    );
+    const results: Array<{ active: number; overdue: number; taskReminders: number }> = [];
+    for (let start = 0; start < recipients.length; start += RECONCILIATION_BATCH_SIZE) {
+      const batch = recipients.slice(start, start + RECONCILIATION_BATCH_SIZE);
+      results.push(
+        ...(await Promise.all(
+          batch.map((recipient) =>
+            this.reconcileUserAlerts({
+              membershipId: recipient.id,
+              profileId: recipient.profileId,
+              organizationId: recipient.organizationId,
+              userId: recipient.userId,
+              ...(recipient.clientId ? { clientId: recipient.clientId } : {}),
+              permissions: ['notifications:view', 'notifications:update'],
+            }),
+          ),
+        )),
+      );
+    }
     return {
       recipients: recipients.length,
       active: results.reduce((total, result) => total + result.active, 0),

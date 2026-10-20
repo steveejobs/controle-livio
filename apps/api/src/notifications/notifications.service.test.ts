@@ -81,6 +81,38 @@ describe('alertas financeiros', () => {
     expect(update).not.toHaveProperty('readAt');
   });
 
+  it('evita escrever novamente um alerta ativo que não mudou', async () => {
+    const upsert = vi.fn().mockResolvedValue({});
+    const findMany = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockImplementation(() => {
+        const created = upsert.mock.calls[0]?.[0].create;
+        return [
+          {
+            id: created.id,
+            status: 'READ',
+            title: created.title,
+            body: created.body,
+            link: created.link,
+            metadata: created.metadata,
+          },
+        ];
+      });
+    const prisma = {
+      $queryRaw: vi.fn().mockResolvedValue([alert]),
+      $transaction: vi.fn((operations: Array<Promise<unknown>>) => Promise.all(operations)),
+      notification: { findMany, updateMany: vi.fn(), upsert },
+    };
+    const service = new NotificationsService(prisma as never);
+
+    await service.reconcileFinancialAlerts(actor);
+    await service.reconcileFinancialAlerts(actor);
+
+    expect(upsert).toHaveBeenCalledTimes(1);
+    expect(prisma.notification.updateMany).not.toHaveBeenCalled();
+  });
+
   it('restringe a consulta financeira ao cliente vinculado à sessão', async () => {
     const prisma = {
       $queryRaw: vi.fn().mockResolvedValue([]),
@@ -134,6 +166,36 @@ describe('alertas financeiros', () => {
       overdue: 1,
       taskReminders: 0,
     });
+  });
+
+  it('limita reconciliações simultâneas da rotina diária', async () => {
+    const recipients = Array.from({ length: 17 }, (_, index) => ({
+      id: `membership-${index}`,
+      profileId: `profile-${index}`,
+      organizationId: actor.organizationId,
+      userId: `user-${index}`,
+      clientId: null,
+    }));
+    const prisma = { organizationMember: { findMany: vi.fn().mockResolvedValue(recipients) } };
+    const service = new NotificationsService(prisma as never);
+    let active = 0;
+    let maximum = 0;
+    const reconcile = vi.spyOn(service, 'reconcileUserAlerts').mockImplementation(async () => {
+      active += 1;
+      maximum = Math.max(maximum, active);
+      await Promise.resolve();
+      active -= 1;
+      return { active: 1, overdue: 0, taskReminders: 0 };
+    });
+
+    await expect(service.reconcileAllFinancialAlerts()).resolves.toEqual({
+      recipients: 17,
+      active: 17,
+      overdue: 0,
+      taskReminders: 0,
+    });
+    expect(reconcile).toHaveBeenCalledTimes(17);
+    expect(maximum).toBe(8);
   });
 
   it('transforma lembrete vencido em notificação interna para o responsável', async () => {

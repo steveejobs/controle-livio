@@ -13,12 +13,14 @@ coerentes; a API falha no startup sem configuração obrigatória.
 
 ## Estado do projeto cloud configurado
 
-Em 2026-08-11, o projeto Supabase remoto informado no ambiente contém as quatro migrations oficiais,
-um usuário Auth confirmado e a organização `bandeira` com membership administrativa. Permanece sem
-objetos de Storage ou seed remoto. Signup público foi desabilitado e a senha mínima foi elevada para
-12 caracteres, mas Site URL, redirects e SMTP ainda dependem do domínio/remetente finais. O ambiente
-precisa ser classificado explicitamente no deploy; esse provisionamento não o torna automaticamente
-produção.
+Em 2026-10-20, o ambiente remoto de desenvolvimento/homologação foi substituído por um projeto novo e
+vazio. As cinco migrations oficiais foram aplicadas pela Supabase CLI; há 39 tabelas públicas com RLS
+habilitada e forçada, 141 policies e o bucket privado `legal-documents`. A organização `bandeira` e a
+membership administrativa foram provisionadas no novo Auth. A API e a web da Vercel usam somente as
+credenciais do projeto novo nos ambientes Production e Preview. O deploy da API usa
+`SUPABASE_ENVIRONMENT=staging`, pois o runtime `NODE_ENV=production` exige essa classificação.
+Signup público está desabilitado, senha mínima é 12 caracteres e Site URL/redirects apontam para a
+web publicada. Custom SMTP e a entrega efetiva do convite administrativo ainda precisam de validação.
 
 ## Safeguards
 

@@ -87,8 +87,8 @@ Para a API:
 - Build e Install Command: mantenha os valores de `apps/api/vercel.json`;
 - Output Directory: vazio, para o preset NestJS produzir uma única Vercel Function;
 - Fluid compute: habilitado.
-- Região da Function: `gru1`, versionada em `apps/api/vercel.json` para aproximar a API do projeto
-  Supabase usado pela aplicação.
+- Região da Function: `cle1`, versionada em `apps/api/vercel.json` para manter a API na mesma região
+  `us-east-2` do projeto Supabase atual.
 - Cron diário: `GET /v1/notifications/cron` às 11:00 UTC (08:00 em Brasília), autenticado
   automaticamente por `Authorization: Bearer $CRON_SECRET`. Sem o segredo, a rota falha fechada.
 

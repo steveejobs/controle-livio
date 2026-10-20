@@ -7,6 +7,16 @@ import '../theme/index.css';
 export const metadata: Metadata = {
   title: 'Controle Financeiro Lívio',
   description: 'Controle financeiro claro, seguro e integrado para sua operação.',
+  applicationName: 'Controle Financeiro Lívio',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Lívio',
+  },
+  icons: {
+    icon: [{ url: '/icon.svg', type: 'image/svg+xml' }],
+    apple: [{ url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' }],
+  },
 };
 
 export const viewport: Viewport = {

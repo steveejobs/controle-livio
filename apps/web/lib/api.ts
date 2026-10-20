@@ -4,7 +4,63 @@ import { createSupabaseBrowserClient } from './supabase/client';
 
 const baseUrl = process.env.NEXT_PUBLIC_API_URL!;
 const responseCache = new Map<string, { expiresAt: number; value: unknown }>();
+type InFlightRead = {
+  promise: Promise<unknown>;
+  controller: AbortController;
+  subscribers: number;
+  done: boolean;
+};
+const inFlightReads = new Map<string, InFlightRead>();
 const CACHE_TTL_MS = 15_000;
+const MAX_CACHE_ENTRIES = 80;
+let readVersion = 0;
+
+function invalidateReads(abortInFlight = false) {
+  readVersion += 1;
+  responseCache.clear();
+  if (abortInFlight) {
+    for (const entry of inFlightReads.values()) entry.controller.abort();
+  }
+  inFlightReads.clear();
+}
+
+function rememberRead(key: string, value: unknown) {
+  responseCache.delete(key);
+  responseCache.set(key, { expiresAt: Date.now() + CACHE_TTL_MS, value });
+  if (responseCache.size > MAX_CACHE_ENTRIES) {
+    const oldest = responseCache.keys().next().value;
+    if (oldest) responseCache.delete(oldest);
+  }
+}
+
+function subscribeToRead<T>(entry: InFlightRead, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted)
+    return Promise.reject(new DOMException('Requisição cancelada', 'AbortError'));
+  entry.subscribers += 1;
+  return new Promise<T>((resolve, reject) => {
+    let finished = false;
+    const finish = () => {
+      if (finished) return false;
+      finished = true;
+      signal?.removeEventListener('abort', onAbort);
+      entry.subscribers -= 1;
+      if (!entry.done && entry.subscribers === 0) entry.controller.abort();
+      return true;
+    };
+    const onAbort = () => {
+      if (finish()) reject(new DOMException('Requisição cancelada', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    entry.promise.then(
+      (value) => {
+        if (finish()) resolve(value as T);
+      },
+      (error: unknown) => {
+        if (finish()) reject(error);
+      },
+    );
+  });
+}
 
 export class ApiError extends Error {
   constructor(
@@ -51,6 +107,21 @@ async function responseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, body.message ?? 'A operação não foi concluída.', body.code);
 }
 
+async function sendAndParse<T>(
+  path: string,
+  init: RequestInit,
+  signal: AbortSignal | undefined,
+  accessToken: string | null,
+): Promise<T> {
+  const response = await request(path, init, signal, accessToken);
+  if (response.status === 204) return undefined as T;
+  const body = (await response.json().catch(() => ({}))) as { message?: string; code?: string } & T;
+  if (!response.ok) {
+    throw new ApiError(response.status, body.message ?? 'A operação não foi concluída.', body.code);
+  }
+  return body;
+}
+
 export async function api<T>(
   path: string,
   init: RequestInit = {},
@@ -60,20 +131,41 @@ export async function api<T>(
   const { data: sessionData } = await createSupabaseBrowserClient().auth.getSession();
   const accessToken = sessionData.session?.access_token ?? null;
   const cacheKey = `${accessToken ?? 'anonymous'}:${window.localStorage.getItem('livio:organization-id') ?? 'default'}:${path}`;
-  if (method === 'GET' && path !== '/auth/me') {
+  const cacheable = method === 'GET' && path !== '/auth/me' && !init.headers && !init.body;
+  if (signal?.aborted) throw new DOMException('Requisição cancelada', 'AbortError');
+  if (cacheable) {
     const cached = responseCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) return cached.value as T;
-  } else if (method !== 'GET') {
-    responseCache.clear();
+    if (cached && cached.expiresAt > Date.now()) {
+      responseCache.delete(cacheKey);
+      responseCache.set(cacheKey, cached);
+      return cached.value as T;
+    }
+    if (cached) responseCache.delete(cacheKey);
+
+    let entry = inFlightReads.get(cacheKey);
+    if (!entry || entry.controller.signal.aborted) {
+      const controller = new AbortController();
+      const version = readVersion;
+      entry = { controller, subscribers: 0, done: false, promise: Promise.resolve() };
+      const current = entry;
+      current.promise = sendAndParse<T>(path, init, controller.signal, accessToken)
+        .then((body) => {
+          if (!controller.signal.aborted && version === readVersion) rememberRead(cacheKey, body);
+          return body;
+        })
+        .finally(() => {
+          current.done = true;
+          if (inFlightReads.get(cacheKey) === current) inFlightReads.delete(cacheKey);
+        });
+      inFlightReads.set(cacheKey, current);
+    }
+    return subscribeToRead<T>(entry, signal);
   }
-  const response = await request(path, init, signal, accessToken);
-  if (response.status === 204) return undefined as T;
-  const body = (await response.json().catch(() => ({}))) as { message?: string; code?: string } & T;
-  if (!response.ok) {
-    throw new ApiError(response.status, body.message ?? 'A operação não foi concluída.', body.code);
-  }
-  if (method === 'GET' && path !== '/auth/me') {
-    responseCache.set(cacheKey, { expiresAt: Date.now() + CACHE_TTL_MS, value: body });
+
+  if (method !== 'GET') invalidateReads();
+  const body = await sendAndParse<T>(path, init, signal, accessToken);
+  if (method !== 'GET') {
+    invalidateReads();
   }
   return body;
 }
@@ -95,7 +187,7 @@ export async function downloadApiFile(path: string, fileName: string): Promise<v
 }
 
 export async function resetApiSession() {
-  responseCache.clear();
+  invalidateReads(true);
   window.localStorage.removeItem('livio:organization-id');
   await createSupabaseBrowserClient().auth.signOut();
 }
