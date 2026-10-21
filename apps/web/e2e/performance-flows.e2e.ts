@@ -64,6 +64,11 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible();
+  const monthlyReport = page.locator('.monthly-report');
+  await expect(monthlyReport).toHaveClass(/is-visible/);
+  await monthlyReport.evaluate(async (element) => {
+    await Promise.all(element.getAnimations().map((animation) => animation.finished));
+  });
   const accessibility = await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa']).analyze();
   expect(accessibility.violations).toEqual([]);
   expect(requests.reconcile).toBe(0);
@@ -83,14 +88,14 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
 
   await page.getByRole('button', { name: 'Abrir navegação' }).click();
   await page.locator('#primary-navigation').getByRole('button', { name: 'Notificações' }).click();
-  await expect(page.getByRole('heading', { name: 'Notificações' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Notificações', exact: true })).toBeVisible();
   await expect.poll(() => requests.reconcile).toBe(1);
 
   await page.getByRole('button', { name: 'Abrir navegação' }).click();
   await page.locator('#primary-navigation').getByRole('button', { name: 'Processos' }).click();
   await page.getByRole('button', { name: 'Abrir navegação' }).click();
   await page.locator('#primary-navigation').getByRole('button', { name: 'Notificações' }).click();
-  await expect(page.getByRole('heading', { name: 'Notificações' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Notificações', exact: true })).toBeVisible();
   expect(requests.reconcile).toBe(1);
 
   await page.getByRole('button', { name: 'Atualizar alertas' }).click();

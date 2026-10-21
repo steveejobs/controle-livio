@@ -5,8 +5,7 @@ const modules = [
   ['Visão geral', 'Visão geral'],
   ['Clientes', 'Clientes'],
   ['Processos', 'Processos'],
-  ['CRM comercial', 'CRM comercial'],
-  ['CRM jurídico', 'CRM juridico'],
+  ['CRM jurídico e comercial', 'CRM jurídico e comercial'],
   ['Cobrança', 'CRM de cobranca'],
   ['Documentos', 'Documentos'],
   ['Tarefas', 'Tarefas'],
@@ -15,7 +14,7 @@ const modules = [
   ['Contratos', 'Contratos'],
   ['Recebíveis', 'Entradas, parcelas e pagamentos'],
   ['Relatórios', 'Relatórios'],
-  ['Usuários e permissões', 'Advogados e secretaria'],
+  ['Usuários e permissões', 'Equipe'],
   ['Pipelines', 'Pipelines'],
   ['Auditoria', 'Logs de auditoria'],
 ] as const;
@@ -57,6 +56,37 @@ const permissions = [
 
 async function mockApplication(page: Page) {
   const unexpected: string[] = [];
+  const createdMatters: Array<Record<string, unknown>> = [];
+  const pipelines = [
+    {
+      id: 'commercial-qa',
+      name: 'Comercial QA',
+      kind: 'COMMERCIAL',
+      stages: [
+        { id: 'commercial-stage-qa', name: 'Contato inicial', position: 0, isTerminal: false },
+      ],
+    },
+    {
+      id: 'legal-qa',
+      name: 'Jurídico QA',
+      kind: 'LEGAL',
+      stages: [{ id: 'legal-stage-qa', name: 'Triagem', position: 0, isTerminal: false }],
+    },
+    {
+      id: 'collection-qa',
+      name: 'Cobrança QA',
+      kind: 'COLLECTION',
+      stages: [
+        { id: 'collection-stage-open-qa', name: 'Em atraso', position: 0, isTerminal: false },
+        {
+          id: 'collection-stage-negotiation-qa',
+          name: 'Em negociação',
+          position: 1,
+          isTerminal: false,
+        },
+      ],
+    },
+  ];
   await page.route('**/v1/**', async (route) => {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
@@ -64,7 +94,13 @@ async function mockApplication(page: Page) {
     let body: unknown;
     if (pathname === '/v1/auth/me') {
       body = {
-        user: { id: 'qa-admin', email: 'qa@example.test', name: 'QA', permissions },
+        user: {
+          id: 'qa-admin',
+          email: 'qa@example.test',
+          name: 'QA',
+          permissions,
+          isAdministrator: true,
+        },
         organization: { name: 'Organização QA' },
       };
     } else if (pathname === '/v1/dashboard/summary') {
@@ -97,22 +133,60 @@ async function mockApplication(page: Page) {
       body = { items: [], unread: 0 };
     } else if (pathname === '/v1/notifications/reconcile') {
       body = { reconciled: 0 };
+    } else if (pathname === '/v1/admin/access-alerts') {
+      body = { enabled: false, times: ['09:00'], timezone: 'America/Sao_Paulo' };
     } else if (pathname.startsWith('/v1/reports/')) {
       body = { basis: 'qa', rows: [] };
     } else if (pathname === '/v1/health/live') {
       body = { status: 'ok' };
+    } else if (pathname === '/v1/clients') {
+      body = {
+        items: [{ id: 'client-qa', displayName: 'Cliente QA' }],
+        total: 1,
+        page: 1,
+        pageSize: 100,
+        pages: 1,
+      };
+    } else if (pathname === '/v1/matters' && request.method() === 'POST') {
+      const submission = request.postDataJSON() as Record<string, unknown>;
+      createdMatters.push(submission);
+      body = { id: 'matter-qa', ...submission };
+    } else if (pathname === '/v1/matters' && request.method() === 'GET') {
+      const collectionPipeline = pipelines.find((pipeline) => pipeline.kind === 'COLLECTION');
+      const collectionStage = collectionPipeline?.stages[0];
+      body = {
+        items: createdMatters.map((matter, index) => {
+          const objective = matter.collectionObjective as { description: string } | undefined;
+          return {
+            id: `matter-${index + 1}`,
+            ...matter,
+            status: 'LEAD',
+            priority: 'MEDIUM',
+            client: { id: 'client-qa', displayName: 'Cliente QA' },
+            pipeline: collectionPipeline,
+            currentStage: collectionStage,
+            customFields: objective
+              ? { collectionObjective: { kind: 'NON_FINANCIAL', ...objective } }
+              : {},
+          };
+        }),
+        total: createdMatters.length,
+        page: 1,
+        pageSize: 25,
+        pages: createdMatters.length ? 1 : 0,
+      };
     } else if (
       pathname === '/v1/admin/users' ||
       pathname === '/v1/admin/roles' ||
-      pathname === '/v1/pipelines' ||
       pathname === '/v1/tasks' ||
       pathname === '/v1/calendar-events'
     ) {
       body = [];
+    } else if (pathname === '/v1/pipelines') {
+      body = pipelines;
     } else if (
       [
         '/v1/clients',
-        '/v1/matters',
         '/v1/documents',
         '/v1/finance/contracts',
         '/v1/finance/receivables',
@@ -133,7 +207,7 @@ async function mockApplication(page: Page) {
       body: JSON.stringify(body),
     });
   });
-  return unexpected;
+  return { unexpected, createdMatters };
 }
 
 for (const viewport of [
@@ -146,10 +220,17 @@ for (const viewport of [
     test.setTimeout(240_000);
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    const unexpected = await mockApplication(page);
+    const { unexpected, createdMatters } = await mockApplication(page);
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => browserErrors.push(error.message));
     await page.goto('/');
+    await expect(page.getByRole('heading', { name: 'Visão geral' })).toBeVisible();
+    await expect(
+      page.locator('#primary-navigation').getByRole('button', {
+        name: 'CRM comercial',
+        exact: true,
+      }),
+    ).toHaveCount(0);
     for (const [navigationLabel, heading] of modules) {
       if (viewport.width === 360) {
         await page.getByRole('button', { name: 'Abrir navegação' }).click();
@@ -172,6 +253,59 @@ for (const viewport of [
         await expect(page.getByText('Nenhuma parcela no período cadastrado.')).toBeVisible();
         await periodFilter.selectOption('12m');
         await expect(page.getByText('Nenhuma parcela nos próximos doze meses.')).toBeVisible();
+      }
+      if (navigationLabel === 'CRM jurídico e comercial') {
+        await expect(page.getByRole('heading', { name: 'Comercial QA' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Jurídico QA' })).toBeVisible();
+        await page.getByRole('button', { name: 'Nova oportunidade ou processo' }).click();
+        const createRecordForm = page.locator('form').filter({
+          has: page.getByLabel('Fluxo de atendimento'),
+        });
+        const pipeline = createRecordForm.getByLabel('Fluxo de atendimento');
+        await expect(pipeline).toHaveAttribute('required', '');
+        await expect(
+          createRecordForm.getByLabel('Nome do processo ou da oportunidade'),
+        ).toHaveCount(0);
+        await pipeline.selectOption('commercial-qa');
+        await expect(createRecordForm.getByLabel('Nome da oportunidade')).toBeVisible();
+        await expect(createRecordForm.getByLabel('Número judicial ou CNJ (opcional)')).toHaveCount(
+          0,
+        );
+        await pipeline.selectOption('legal-qa');
+        await expect(createRecordForm.getByLabel('Nome do processo')).toBeVisible();
+        await expect(
+          createRecordForm.getByLabel('Número judicial ou CNJ (opcional)'),
+        ).toBeVisible();
+      }
+      if (navigationLabel === 'Cobrança') {
+        await page.getByRole('button', { name: 'Nova cobrança' }).click();
+        const collectionForm = page.locator('form').filter({
+          has: page.getByLabel('Fluxo de atendimento'),
+        });
+        await collectionForm.getByLabel('Cliente').selectOption('client-qa');
+        await collectionForm.getByLabel('Código da cobrança').fill('COB-OBJ-001');
+        await collectionForm
+          .getByLabel('Identificação da cobrança', { exact: true })
+          .fill('Regularizar documentos da cobrança');
+        await collectionForm.getByLabel('Registrar objetivo sem valor financeiro').check();
+        const objectiveDescription = collectionForm.getByLabel('Descreva o objetivo da negociação');
+        await expect(objectiveDescription).toBeVisible();
+        await objectiveDescription.fill(
+          'Receber comprovantes para concluir a análise, sem negociar valores.',
+        );
+        await collectionForm.getByRole('button', { name: 'Cadastrar cobrança' }).click();
+        await expect(page.getByText('Cobrança cadastrada.')).toBeVisible();
+        await expect(page.getByText('Objetivo sem valor financeiro')).toBeVisible();
+        expect(createdMatters.at(-1)).toMatchObject({
+          clientId: 'client-qa',
+          pipelineId: 'collection-qa',
+          collectionObjective: {
+            description: 'Receber comprovantes para concluir a análise, sem negociar valores.',
+          },
+        });
+      }
+      for (const selector of await page.locator('select').all()) {
+        await expect(selector).toHaveCSS('appearance', 'none');
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
         viewport.width,

@@ -6,6 +6,7 @@ import {
   HttpStatus,
   type ExceptionFilter,
 } from '@nestjs/common';
+import { Prisma } from '@livio/db';
 import type { ApiErrorBody } from '@livio/shared';
 
 @Catch()
@@ -15,9 +16,14 @@ export class ApiExceptionFilter implements ExceptionFilter {
     const request = context.getRequest<Request>();
     const response = context.getResponse<Response>();
     const isHttpException = exception instanceof HttpException;
-    const status = isHttpException ? exception.getStatus() : HttpStatus.INTERNAL_SERVER_ERROR;
+    const databaseError = isHttpException ? undefined : this.databaseError(exception);
+    const status = isHttpException
+      ? exception.getStatus()
+      : (databaseError?.status ?? HttpStatus.INTERNAL_SERVER_ERROR);
     const exceptionResponse = isHttpException ? exception.getResponse() : undefined;
-    const safeMessage = this.messageFor(status, exceptionResponse);
+    const safeMessage = isHttpException
+      ? this.messageFor(status, exceptionResponse)
+      : (databaseError?.message ?? this.messageFor(status, undefined));
     const requestId = String(request.headers['x-request-id'] ?? request.id ?? 'unknown');
     const body: ApiErrorBody = {
       statusCode: status,
@@ -46,5 +52,36 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
   private codeFor(status: number): string {
     return HttpStatus[status]?.toString().toLowerCase() ?? 'request_error';
+  }
+
+  private databaseError(exception: unknown): { status: number; message: string } | undefined {
+    if (!(exception instanceof Prisma.PrismaClientKnownRequestError)) return undefined;
+
+    switch (exception.code) {
+      case 'P2002':
+        return {
+          status: HttpStatus.CONFLICT,
+          message:
+            'Já existe um registro com esses dados. Confira as informações e tente novamente.',
+        };
+      case 'P2003':
+        return {
+          status: HttpStatus.CONFLICT,
+          message:
+            'Um vínculo relacionado mudou ou não está disponível. Atualize a tela e tente novamente.',
+        };
+      case 'P2025':
+        return {
+          status: HttpStatus.NOT_FOUND,
+          message: 'O registro não foi encontrado. Atualize a tela e tente novamente.',
+        };
+      case 'P2034':
+        return {
+          status: HttpStatus.CONFLICT,
+          message: 'Os dados mudaram durante a operação. Atualize a tela e tente novamente.',
+        };
+      default:
+        return undefined;
+    }
   }
 }

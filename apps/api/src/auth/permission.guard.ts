@@ -10,6 +10,7 @@ import type { RequestWithActor } from '../common/request-with-actor';
 import { AUTHENTICATED_ROUTE_KEY } from './authenticated-route.decorator';
 import { PUBLIC_ROUTE_KEY } from './public.decorator';
 import { REQUIRED_PERMISSION_KEY } from './require-permission.decorator';
+import { REQUIRED_ADMINISTRATOR_KEY } from './require-administrator.decorator';
 
 @Injectable()
 export class PermissionGuard implements CanActivate {
@@ -26,17 +27,27 @@ export class PermissionGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
+    const administratorOnly = this.reflector.getAllAndOverride<boolean>(
+      REQUIRED_ADMINISTRATOR_KEY,
+      [context.getHandler(), context.getClass()],
+    );
     if (!required) {
       const authenticatedOnly = this.reflector.getAllAndOverride<boolean>(AUTHENTICATED_ROUTE_KEY, [
         context.getHandler(),
         context.getClass(),
       ]);
       const { actor } = context.switchToHttp().getRequest<RequestWithActor>();
-      if (authenticatedOnly && actor) return true;
+      if (authenticatedOnly && actor) {
+        if (administratorOnly && !actor.isAdministrator)
+          throw new ForbiddenException('Acesso exclusivo para Administrador');
+        return true;
+      }
       throw new ForbiddenException('Rota sem política de autorização definida');
     }
 
     const { actor } = context.switchToHttp().getRequest<RequestWithActor>();
+    if (administratorOnly && !actor?.isAdministrator)
+      throw new ForbiddenException('Acesso exclusivo para Administrador');
     if (!actor?.permissions.includes(required)) {
       throw new ForbiddenException('Permissão insuficiente');
     }

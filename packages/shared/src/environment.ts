@@ -46,10 +46,29 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     SMTP_PASSWORD: z.string().min(1).optional(),
     SMTP_FROM: z.string().email().optional(),
     CRON_SECRET: z.string().min(32).optional(),
+    VAPID_PUBLIC_KEY: z.string().min(20).optional(),
+    VAPID_PRIVATE_KEY: z.string().min(20).optional(),
+    VAPID_SUBJECT: z.string().min(8).optional(),
     TRUST_PROXY: booleanEnvironmentValue.default(false),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
   })
   .superRefine((environment, context) => {
+    const vapidConfigured = Boolean(
+      environment.VAPID_PUBLIC_KEY || environment.VAPID_PRIVATE_KEY || environment.VAPID_SUBJECT,
+    );
+    if (
+      vapidConfigured &&
+      (!environment.VAPID_PUBLIC_KEY ||
+        !environment.VAPID_PRIVATE_KEY ||
+        !environment.VAPID_SUBJECT ||
+        !/^(mailto:.+|https:\/\/.+)$/.test(environment.VAPID_SUBJECT))
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['VAPID_PUBLIC_KEY'],
+        message: 'Push exige VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY e VAPID_SUBJECT válidos',
+      });
+    }
     const origins = environment.CORS_ORIGINS.split(',').map((origin) => origin.trim());
     if (origins.some((origin) => origin === '*')) {
       context.addIssue({

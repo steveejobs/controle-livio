@@ -14,13 +14,26 @@ type Stage = {
 };
 type Pipeline = { id: string; name: string; kind: string; stages: Stage[] };
 
+const pipelineKindLabels: Record<string, string> = {
+  COMMERCIAL: 'Comercial',
+  LEGAL: 'Jurídico',
+  COLLECTION: 'Cobrança',
+};
+
 export function Pipelines({ permissions }: { permissions: readonly string[] }) {
   const pipelines = useApiData<Pipeline[]>('/pipelines');
   const [showForm, setShowForm] = useState(false);
   const [addingTo, setAddingTo] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [pipelineKind, setPipelineKind] = useState('LEGAL');
   const canManage = permissions.includes('pipelines:manage');
+  const firstStageHint =
+    pipelineKind === 'COMMERCIAL'
+      ? 'Novo contato'
+      : pipelineKind === 'COLLECTION'
+        ? 'A vencer'
+        : 'Triagem';
 
   const perform = async (action: () => Promise<unknown>, success: string) => {
     setBusy(true);
@@ -63,6 +76,7 @@ export function Pipelines({ permissions }: { permissions: readonly string[] }) {
     ).then((ok) => {
       if (ok) {
         target.reset();
+        setPipelineKind('LEGAL');
         setShowForm(false);
       }
     });
@@ -124,23 +138,28 @@ export function Pipelines({ permissions }: { permissions: readonly string[] }) {
       {showForm && canManage && (
         <form className="surface form-grid" onSubmit={create}>
           <label>
-            Nome
+            Nome do fluxo
             <input required minLength={2} name="name" />
           </label>
           <label>
-            Tipo
-            <select required name="kind" defaultValue="LEGAL">
+            Tipo de fluxo
+            <select
+              required
+              name="kind"
+              value={pipelineKind}
+              onChange={(event) => setPipelineKind(event.target.value)}
+            >
               <option value="COMMERCIAL">Comercial</option>
               <option value="LEGAL">Jurídico</option>
               <option value="COLLECTION">Cobrança</option>
             </select>
           </label>
           <label>
-            Primeira etapa
-            <input required minLength={2} name="stageName" placeholder="Entrada" />
+            Nome da primeira etapa
+            <input required minLength={2} name="stageName" placeholder={firstStageHint} />
           </label>
           <label>
-            Cor
+            Cor da etapa
             <input required type="color" name="color" defaultValue="#5f766d" />
           </label>
           <button className="primary form-wide" disabled={busy}>
@@ -165,7 +184,7 @@ export function Pipelines({ permissions }: { permissions: readonly string[] }) {
           {pipelines.data.map((pipeline) => (
             <article className="surface" key={pipeline.id}>
               <h2>{pipeline.name}</h2>
-              <p>{pipeline.kind}</p>
+              <p>{pipelineKindLabels[pipeline.kind] ?? pipeline.kind}</p>
               <ol>
                 {[...pipeline.stages]
                   .sort((a, b) => a.position - b.position)
@@ -204,11 +223,11 @@ export function Pipelines({ permissions }: { permissions: readonly string[] }) {
                   onSubmit={(event) => addStage(event, pipeline)}
                 >
                   <label>
-                    Nome
+                    Nome da etapa
                     <input required minLength={2} name="name" />
                   </label>
                   <label>
-                    Cor
+                    Cor da etapa
                     <input required type="color" name="color" defaultValue="#5f766d" />
                   </label>
                   <label className="check">

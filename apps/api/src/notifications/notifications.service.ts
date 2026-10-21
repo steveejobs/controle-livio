@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { Prisma } from '@livio/db';
 import type { AuthenticatedActor } from '@livio/shared';
 import { PrismaService } from '../prisma/prisma.service';
+import { PushNotificationsService } from './push-notifications.service';
 
 type FinancialAlertRow = {
   installment_id: string;
@@ -24,9 +25,42 @@ type AlertMetadata = {
 
 const RECONCILIATION_BATCH_SIZE = 8;
 
+function jsonRecord(value: Prisma.JsonValue): Record<string, Prisma.JsonValue> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, Prisma.JsonValue>)
+    : {};
+}
+
+function digestId(value: string): string {
+  const hex = createHash('sha256').update(value).digest('hex').slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+function localClock(date: Date, timeZone: string): string {
+  const safeTimeZone = validTimeZone(timeZone);
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: safeTimeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(date);
+}
+
+function validTimeZone(timeZone: string): string {
+  try {
+    new Intl.DateTimeFormat('en', { timeZone });
+    return timeZone;
+  } catch {
+    return 'America/Sao_Paulo';
+  }
+}
+
 @Injectable()
 export class NotificationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Optional() private readonly pushNotifications?: PushNotificationsService,
+  ) {}
 
   async reconcileFinancialAlerts(actor: AuthenticatedActor) {
     const clientScope = actor.clientId
@@ -92,6 +126,7 @@ export class NotificationsService {
       .map(({ id }) => id);
 
     const now = new Date();
+    const changedAlerts: FinancialAlertRow[] = [];
     await this.prisma.$transaction([
       ...(resolvedIds.length
         ? [
@@ -136,6 +171,7 @@ export class NotificationsService {
         ) {
           return [];
         }
+        changedAlerts.push(alert);
         return [
           this.prisma.notification.upsert({
             where: { id },
@@ -150,6 +186,15 @@ export class NotificationsService {
         ];
       }),
     ]);
+
+    if (changedAlerts.length)
+      await this.pushNotifications?.notifyUsers(actor.organizationId, [actor.userId], {
+        title:
+          changedAlerts.length === 1
+            ? 'Novo alerta financeiro'
+            : `${changedAlerts.length} novos alertas financeiros`,
+        body: 'Entre no Lívio para conferir os vencimentos.',
+      });
 
     return {
       active: alerts.length,
@@ -207,6 +252,12 @@ export class NotificationsService {
         }),
       ]),
     );
+    if (reminders.length)
+      await this.pushNotifications?.notifyUsers(actor.organizationId, [actor.userId], {
+        title:
+          reminders.length === 1 ? 'Lembrete de tarefa' : `${reminders.length} lembretes de tarefa`,
+        body: 'Entre no Lívio para consultar seus lembretes.',
+      });
     return reminders.length;
   }
 
@@ -216,6 +267,147 @@ export class NotificationsService {
       this.reconcileTaskReminders(actor),
     ]);
     return { ...financial, taskReminders };
+  }
+
+  async reconcileAccessDigests() {
+    const organizations = await this.prisma.organization.findMany({
+      where: { status: 'ACTIVE' },
+      select: { id: true, settings: true, timezone: true },
+    });
+    const now = new Date();
+    let digests = 0;
+    for (const organization of organizations) {
+      const settings = jsonRecord(organization.settings);
+      const configValue = settings.accessAlerts;
+      if (!configValue || typeof configValue !== 'object' || Array.isArray(configValue)) continue;
+      const config = configValue as Record<string, Prisma.JsonValue>;
+      const time = localClock(now, organization.timezone);
+      const times = Array.isArray(config.times)
+        ? config.times.filter((value): value is string => typeof value === 'string')
+        : [];
+      if (config.enabled !== true || !times.includes(time)) continue;
+
+      const digest = await this.prisma.$transaction(async (transaction) => {
+        await transaction.$queryRaw`SELECT id FROM organizations WHERE id = ${organization.id}::uuid FOR UPDATE`;
+        const current = await transaction.organization.findUniqueOrThrow({
+          where: { id: organization.id },
+          select: { settings: true },
+        });
+        const currentSettings = jsonRecord(current.settings);
+        const currentValue = currentSettings.accessAlerts;
+        if (!currentValue || typeof currentValue !== 'object' || Array.isArray(currentValue))
+          return { sent: false, userIds: [] as string[], count: 0 };
+        const currentConfig = currentValue as Record<string, Prisma.JsonValue>;
+        const currentTimes = Array.isArray(currentConfig.times)
+          ? currentConfig.times.filter((value): value is string => typeof value === 'string')
+          : [];
+        if (currentConfig.enabled !== true || !currentTimes.includes(time))
+          return { sent: false, userIds: [] as string[], count: 0 };
+
+        const cursorValue = currentConfig.lastDigestAt;
+        const parsedCursor = typeof cursorValue === 'string' ? new Date(cursorValue) : now;
+        const cursor = Number.isNaN(parsedCursor.getTime()) ? now : parsedCursor;
+        const eventFilter = {
+          organizationId: organization.id,
+          type: 'SYSTEM_ACCESS',
+          occurredAt: { gt: cursor, lte: now },
+        };
+        const eventCount = await transaction.activityEvent.count({ where: eventFilter });
+        const events = await transaction.activityEvent.findMany({
+          where: eventFilter,
+          select: { actorUserId: true, occurredAt: true },
+          orderBy: { occurredAt: 'asc' },
+          take: 20,
+        });
+        let adminUserIds: string[] = [];
+        if (eventCount) {
+          const userIds = [
+            ...new Set(events.flatMap((event) => (event.actorUserId ? [event.actorUserId] : []))),
+          ];
+          const users = await transaction.user.findMany({
+            where: { id: { in: userIds }, organizationId: organization.id },
+            select: { id: true, fullName: true },
+          });
+          const names = new Map(users.map((user) => [user.id, user.fullName]));
+          const admins = await transaction.organizationMember.findMany({
+            where: {
+              organizationId: organization.id,
+              status: 'ACTIVE',
+              user: { status: 'ACTIVE', deletedAt: null },
+              roles: { some: { role: { key: 'administrator' } } },
+            },
+            select: { userId: true },
+          });
+          if (!admins.length) return { sent: false, userIds: [] as string[], count: 0 };
+          adminUserIds = admins.map(({ userId }) => userId);
+          const lines = events.map((event) => {
+            const label = event.actorUserId
+              ? (names.get(event.actorUserId) ?? 'Usuário')
+              : 'Usuário';
+            const occurredAt = new Intl.DateTimeFormat('pt-BR', {
+              timeZone: validTimeZone(organization.timezone),
+              hour: '2-digit',
+              minute: '2-digit',
+              day: '2-digit',
+              month: '2-digit',
+            }).format(event.occurredAt);
+            return `${label} · ${occurredAt}`;
+          });
+          if (eventCount > events.length)
+            lines.push(`mais ${eventCount - events.length} acesso(s)`);
+          const metadata = {
+            source: 'SYSTEM_ACCESS_DIGEST',
+            scheduledTime: time,
+            count: eventCount,
+          } as Prisma.InputJsonValue;
+          for (const admin of admins) {
+            await transaction.notification.upsert({
+              where: {
+                id: digestId(`${organization.id}:${admin.userId}:${time}:${cursor.toISOString()}`),
+              },
+              create: {
+                id: digestId(`${organization.id}:${admin.userId}:${time}:${cursor.toISOString()}`),
+                organizationId: organization.id,
+                userId: admin.userId,
+                channel: 'IN_APP',
+                status: 'SENT',
+                title: `${eventCount} acesso(s) ao sistema`,
+                body: lines.join(' · '),
+                link: 'admin:access-alerts',
+                metadata,
+                sentAt: now,
+              },
+              update: {
+                title: `${eventCount} acesso(s) ao sistema`,
+                body: lines.join(' · '),
+              },
+            });
+          }
+        }
+        await transaction.organization.update({
+          where: { id: organization.id },
+          data: {
+            settings: {
+              ...currentSettings,
+              accessAlerts: { ...currentConfig, lastDigestAt: now.toISOString() },
+            } as Prisma.InputJsonValue,
+          },
+        });
+        return {
+          sent: eventCount > 0 && adminUserIds.length > 0,
+          userIds: adminUserIds,
+          count: eventCount,
+        };
+      });
+      if (digest.sent) {
+        digests += 1;
+        await this.pushNotifications?.notifyUsers(organization.id, digest.userIds, {
+          title: `${digest.count} acesso(s) ao sistema`,
+          body: 'O resumo de acessos está disponível no Lívio.',
+        });
+      }
+    }
+    return { digests };
   }
 
   async reconcileAllFinancialAlerts() {

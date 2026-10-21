@@ -50,7 +50,14 @@ const MatterBoard = dynamic(() =>
 );
 
 type Session = {
-  user: { id: string; name?: string; email: string; clientId?: string; permissions?: string[] };
+  user: {
+    id: string;
+    name?: string;
+    email: string;
+    clientId?: string;
+    permissions?: string[];
+    isAdministrator?: boolean;
+  };
   organization: { name?: string; slug?: string };
 };
 type NavItem = readonly [id: string, name: string, icon: string];
@@ -61,7 +68,6 @@ const navPermissions: Readonly<Record<string, string>> = {
   portal: 'messages:view',
   clients: 'clients:view',
   matters: 'matters:view',
-  commercial: 'matters:view',
   legal: 'matters:view',
   collection: 'matters:view',
   documents: 'documents:view',
@@ -89,8 +95,7 @@ const navGroups: readonly NavGroup[] = [
   {
     label: 'Operação',
     items: [
-      ['commercial', 'CRM comercial', 'CM'],
-      ['legal', 'CRM jurídico', 'CJ'],
+      ['legal', 'CRM jurídico e comercial', 'CJ'],
       ['collection', 'Cobrança', 'CO'],
       ['documents', 'Documentos', 'DO'],
       ['tasks', 'Tarefas', 'TA'],
@@ -263,6 +268,7 @@ export function LegalCrm() {
           active={safeActive}
           setActive={setActive}
           permissions={session.user.permissions ?? []}
+          isAdministrator={session.user.isAdministrator ?? false}
           userId={session.user.id}
           clientId={session.user.clientId}
           selectedClientId={selectedClientId}
@@ -299,6 +305,14 @@ function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
           password: String(data.get('password')),
         });
         if (authError) throw new ApiError(401, 'E-mail ou senha inválidos.');
+        try {
+          await api('/auth/access', {
+            method: 'POST',
+            headers: { 'Idempotency-Key': crypto.randomUUID() },
+          });
+        } catch {
+          // A temporary logging outage must not prevent an authenticated user from entering.
+        }
         await onAuthenticated();
       } else {
         const { error: authError } = await createSupabaseBrowserClient().auth.resetPasswordForEmail(
@@ -391,6 +405,7 @@ function Content({
   active,
   setActive,
   permissions,
+  isAdministrator,
   userId,
   clientId,
   selectedClientId,
@@ -400,6 +415,7 @@ function Content({
   active: string;
   setActive: (value: string) => void;
   permissions: readonly string[];
+  isAdministrator: boolean;
   userId: string;
   clientId?: string;
   selectedClientId?: string;
@@ -420,34 +436,33 @@ function Content({
         }}
       />
     );
-  if (active === 'matters' || ['commercial', 'legal', 'collection'].includes(active))
+  if (active === 'matters' || ['legal', 'collection'].includes(active))
     return (
       <MatterBoard
+        key={active}
         kind={
-          active === 'commercial'
-            ? 'COMMERCIAL'
+          active === 'legal'
+            ? ['COMMERCIAL', 'LEGAL']
             : active === 'collection'
               ? 'COLLECTION'
-              : active === 'legal'
-                ? 'LEGAL'
-                : undefined
+              : undefined
         }
         permissions={permissions}
         title={
-          active === 'commercial'
-            ? 'CRM comercial'
+          active === 'legal'
+            ? 'CRM jurídico e comercial'
             : active === 'collection'
               ? 'CRM de cobranca'
-              : active === 'legal'
-                ? 'CRM juridico'
-                : 'Processos'
+              : 'Processos'
         }
       />
     );
   if (active === 'tasks') return <TasksModule permissions={permissions} />;
   if (active === 'calendar') return <CalendarModule permissions={permissions} />;
-  if (active === 'reports') return <ReportsCenter permissions={permissions} />;
-  if (active === 'admin') return <TeamManagement permissions={permissions} />;
+  if (active === 'reports')
+    return <ReportsCenter permissions={permissions} isAdministrator={isAdministrator} />;
+  if (active === 'admin')
+    return <TeamManagement permissions={permissions} isAdministrator={isAdministrator} />;
   if (active === 'notifications')
     return (
       <NotificationsCenter
@@ -460,7 +475,8 @@ function Content({
   if (active === 'pipelines') return <PipelinesModule permissions={permissions} />;
   if (active === 'audit') return <AuditModule />;
   if (active === 'contracts') return <ContractsModule permissions={permissions} />;
-  if (active === 'finance') return <FinanceOperations permissions={permissions} />;
+  if (active === 'finance')
+    return <FinanceOperations permissions={permissions} isAdministrator={isAdministrator} />;
   if (active === 'documents') return <DocumentsModule permissions={permissions} />;
   return <Unavailable title={nav.find(([id]) => id === active)?.[1] ?? 'Modulo'} />;
 }

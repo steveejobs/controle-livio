@@ -28,6 +28,7 @@ for (const viewport of [
     const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
     const pipelines: Array<Record<string, unknown>> = [];
     const users: Array<Record<string, unknown>> = [];
+    let accessAlertSettings = { enabled: false, times: ['09:00'], timezone: 'America/Sao_Paulo' };
     await page.route('**/v1/**', async (route) => {
       const request = route.request();
       const url = new URL(request.url());
@@ -50,6 +51,7 @@ for (const viewport of [
               'reports:view',
               'reports:export',
             ],
+            isAdministrator: true,
           },
           organization: { name: 'Organização QA' },
         };
@@ -63,6 +65,14 @@ for (const viewport of [
         };
       } else if (path === '/v1/admin/users' && method === 'GET') {
         body = users;
+      } else if (path === '/v1/admin/access-alerts' && method === 'GET') {
+        body = accessAlertSettings;
+      } else if (path === '/v1/admin/access-alerts' && method === 'PATCH') {
+        accessAlertSettings = {
+          ...accessAlertSettings,
+          ...submitted,
+        } as typeof accessAlertSettings;
+        body = accessAlertSettings;
       } else if (path === '/v1/admin/users' && method === 'POST') {
         const user = {
           id: 'user-1',
@@ -134,11 +144,22 @@ for (const viewport of [
     };
     await page.goto('/');
     await navigate('Usuários e permissões');
-    await expect(page.getByRole('heading', { name: 'Advogados e secretaria' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Equipe' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Resumo de acessos' })).toBeVisible();
+    await page.getByLabel('Receber resumo automático de acessos').check();
+    await page.getByLabel('Horário 1').fill('09:15');
+    await page.getByRole('button', { name: 'Adicionar horário' }).click();
+    await page.getByRole('button', { name: 'Salvar horários' }).click();
+    await expect(page.getByRole('status')).toContainText('Horários dos alertas');
+    expect(
+      requests.find(
+        (request) => request.path === '/v1/admin/access-alerts' && request.method === 'PATCH',
+      )?.body,
+    ).toMatchObject({ enabled: true, times: ['09:15', '09:00'] });
     expect(requests.filter((request) => request.path.endsWith('/reconcile'))).toHaveLength(0);
     await page.getByLabel('Nome completo').fill('Profissional QA');
     await page.getByLabel('E-mail profissional').fill('professional@example.test');
-    await page.getByLabel('Função').selectOption('role-lawyer');
+    await page.getByLabel('Perfil de acesso').selectOption('role-lawyer');
     await page.getByRole('button', { name: 'Cadastrar e enviar convite' }).click();
     await expect(page.getByText('Convite enviado.')).toBeVisible();
     expect(
@@ -152,12 +173,23 @@ for (const viewport of [
 
     await navigate('Pipelines');
     await page.getByRole('button', { name: 'Novo pipeline' }).click();
-    await page.getByLabel('Nome', { exact: true }).fill('Fluxo QA');
-    await page.getByLabel('Primeira etapa').fill('Entrada');
+    await page.getByLabel('Nome do fluxo').fill('Fluxo QA');
+    const pipelineKind = page.getByLabel('Tipo de fluxo');
+    await expect(pipelineKind).toHaveValue('LEGAL');
+    await expect(page.getByLabel('Nome da primeira etapa')).toHaveAttribute(
+      'placeholder',
+      'Triagem',
+    );
+    await pipelineKind.selectOption('COMMERCIAL');
+    await expect(page.getByLabel('Nome da primeira etapa')).toHaveAttribute(
+      'placeholder',
+      'Novo contato',
+    );
+    await page.getByLabel('Nome da primeira etapa').fill('Entrada');
     await page.getByRole('button', { name: 'Criar pipeline' }).click();
     await expect(page.getByRole('heading', { name: 'Fluxo QA' })).toBeVisible();
     await page.getByRole('button', { name: 'Adicionar etapa' }).click();
-    await page.getByLabel('Nome', { exact: true }).fill('Conclusão');
+    await page.getByLabel('Nome da etapa').fill('Conclusão');
     await page.getByRole('button', { name: 'Adicionar', exact: true }).click();
     await expect(page.getByText('Etapa adicionada.')).toBeVisible();
     await page.getByRole('button', { name: 'Desativar' }).first().click();

@@ -35,7 +35,39 @@ type Payment = {
   status: string;
   paidAt: string;
   method: string;
+  externalId?: string | null;
   client: Client;
+  allocations: Array<{
+    installmentId: string;
+    amount: string;
+    installment?: { sequence: number; receivable: { reference: string } };
+  }>;
+};
+type PaymentProposal = {
+  reference: string;
+  amount: string;
+  paidAt: string;
+  method: string;
+  externalId?: string | null;
+  allocations: Array<{ installmentId: string; amount: string }>;
+};
+type PaymentChangeRequest = {
+  id: string;
+  status: string;
+  reason: string;
+  createdAt: string;
+  reviewNote?: string | null;
+  requestedByName: string;
+  proposedData: PaymentProposal;
+  payment: {
+    reference: string;
+    amount: string;
+    currency: string;
+    paidAt: string;
+    method: string;
+    externalId?: string | null;
+    client: Client;
+  };
 };
 type Expense = {
   id: string;
@@ -64,11 +96,18 @@ function OperationFeedback({ message }: { message?: string }) {
   );
 }
 
-export function FinanceOperations({ permissions }: { permissions: readonly string[] }) {
+export function FinanceOperations({
+  permissions,
+  isAdministrator,
+}: {
+  permissions: readonly string[];
+  isAdministrator: boolean;
+}) {
   const canCreateReceivable = permissions.includes('receivables:create');
   const canCreatePayment = permissions.includes('payments:create');
   const canViewPayments = permissions.includes('payments:view');
-  const canApprovePayments = permissions.includes('payments:approve');
+  const canApprovePayments = isAdministrator && permissions.includes('payments:approve');
+  const canRequestPaymentChange = permissions.includes('payments:update');
   const canApproveReceivables = permissions.includes('receivables:approve');
   const canCreateExpense = permissions.includes('expenses:create');
   const canViewExpenses = permissions.includes('expenses:view');
@@ -82,6 +121,9 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
   const [selectedClient, setSelectedClient] = useState('');
   const receivables = usePaginatedData<Receivable>('/finance/receivables');
   const payments = usePaginatedData<Payment>(canViewPayments ? '/finance/payments' : undefined);
+  const paymentChangeRequests = usePaginatedData<PaymentChangeRequest>(
+    canRequestPaymentChange ? '/finance/payments/change-requests' : undefined,
+  );
   const expenses = usePaginatedData<Expense>(canViewExpenses ? '/finance/expenses' : undefined);
   const paymentReceivables = usePaginatedData<Receivable>(
     mode === 'payment' && selectedClient
@@ -90,6 +132,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
   );
   const [adjusting, setAdjusting] = useState<string>();
   const [reversing, setReversing] = useState<string>();
+  const [editingPayment, setEditingPayment] = useState<Payment>();
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
 
@@ -269,6 +312,71 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
     });
   };
 
+  const requestPaymentChange = (event: FormEvent<HTMLFormElement>, payment: Payment) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    const amount = String(form.get('amount')).trim().replace(',', '.');
+    const selectedDate = String(form.get('paidAt'));
+    const paidAt =
+      selectedDate === payment.paidAt.slice(0, 10)
+        ? payment.paidAt
+        : `${selectedDate}${payment.paidAt.slice(10)}`;
+    void finish(
+      () =>
+        api(`/finance/payments/${payment.id}/change-requests`, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            reference: form.get('reference'),
+            amount,
+            paidAt,
+            method: form.get('method'),
+            externalId: String(form.get('externalId') ?? '').trim() || null,
+            allocations: payment.allocations.map(({ installmentId, amount: allocated }) => ({
+              installmentId,
+              amount: allocated.trim().replace(',', '.'),
+            })),
+            reason: form.get('reason'),
+          }),
+        }),
+      isAdministrator
+        ? 'Pagamento corrigido com registro de estorno e substituição.'
+        : 'Correção enviada ao Administrador para aprovação.',
+    ).then((succeeded) => {
+      if (succeeded) {
+        setEditingPayment(undefined);
+        paymentChangeRequests.reload();
+      }
+    });
+  };
+
+  const decidePaymentChange = async (
+    request: PaymentChangeRequest,
+    decision: 'approve' | 'reject',
+  ) => {
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      await api(`/finance/payments/change-requests/${request.id}/${decision}`, {
+        method: 'POST',
+        ...(decision === 'reject'
+          ? { body: JSON.stringify({ note: 'Recusado pelo Administrador.' }) }
+          : {}),
+      });
+      setFeedback(
+        decision === 'approve' ? 'Correção aprovada e aplicada.' : 'Solicitação recusada.',
+      );
+      paymentChangeRequests.reload();
+      payments.reload();
+      receivables.reload();
+    } catch (caught) {
+      setFeedback(
+        `Erro: ${caught instanceof ApiError ? caught.message : 'solicitação não atualizada'}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section>
       <header className="page-title">
@@ -347,11 +455,11 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             </select>
           </label>
           <label>
-            Referência
+            Código da cobrança
             <input name="reference" required placeholder="HON-2026-001" />
           </label>
           <label className="form-wide">
-            Descrição
+            Serviço ou motivo da cobrança
             <input name="description" required />
           </label>
           <label>
@@ -488,7 +596,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
             <input required name="category" minLength={2} />
           </label>
           <label className="form-wide">
-            Descrição
+            Detalhes da despesa
             <input required name="description" minLength={2} />
           </label>
           <label>
@@ -647,7 +755,7 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                   <th>Forma</th>
                   <th>Data</th>
                   <th>Status</th>
-                  {canApprovePayments && <th>Ações</th>}
+                  {(canApprovePayments || canRequestPaymentChange) && <th>Ações</th>}
                 </tr>
               </thead>
               <tbody>
@@ -661,19 +769,151 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
                     <td>
                       <span className="badge">{item.status}</span>
                     </td>
-                    {canApprovePayments && (
+                    {(canApprovePayments || canRequestPaymentChange) && (
                       <td>
                         {item.status === 'CONFIRMED' && (
                           <>
-                            <button
-                              className="table-action"
-                              disabled={busy}
-                              onClick={() =>
-                                setReversing(reversing === item.id ? undefined : item.id)
-                              }
-                            >
-                              Estornar
-                            </button>
+                            {canRequestPaymentChange && (
+                              <button
+                                className="table-action"
+                                disabled={busy}
+                                onClick={() => {
+                                  setReversing(undefined);
+                                  setEditingPayment(
+                                    editingPayment?.id === item.id ? undefined : item,
+                                  );
+                                }}
+                              >
+                                Corrigir dados
+                              </button>
+                            )}
+                            {canApprovePayments && (
+                              <button
+                                className="table-action"
+                                disabled={busy}
+                                onClick={() => {
+                                  setEditingPayment(undefined);
+                                  setReversing(reversing === item.id ? undefined : item.id);
+                                }}
+                              >
+                                Estornar
+                              </button>
+                            )}
+                            {editingPayment?.id === item.id && (
+                              <form
+                                className="stack-form compact-form payment-edit-form"
+                                onSubmit={(event) => requestPaymentChange(event, editingPayment)}
+                              >
+                                <strong>Corrigir pagamento</strong>
+                                <label>
+                                  Referência
+                                  <input
+                                    required
+                                    maxLength={100}
+                                    name="reference"
+                                    defaultValue={item.reference}
+                                  />
+                                </label>
+                                <label>
+                                  Valor recebido
+                                  <input
+                                    required
+                                    inputMode="decimal"
+                                    name="amount"
+                                    defaultValue={item.amount}
+                                  />
+                                </label>
+                                <label>
+                                  Data do recebimento
+                                  <input
+                                    required
+                                    type="date"
+                                    name="paidAt"
+                                    defaultValue={item.paidAt.slice(0, 10)}
+                                  />
+                                </label>
+                                <label>
+                                  Forma de pagamento
+                                  <input
+                                    required
+                                    minLength={2}
+                                    maxLength={80}
+                                    name="method"
+                                    defaultValue={item.method}
+                                  />
+                                </label>
+                                <label>
+                                  Identificador externo
+                                  <input
+                                    maxLength={160}
+                                    name="externalId"
+                                    defaultValue={item.externalId ?? ''}
+                                  />
+                                </label>
+                                {editingPayment.allocations.map((allocation, index) => (
+                                  <label key={allocation.installmentId}>
+                                    Parcela {allocation.installment?.sequence ?? index + 1} ·{' '}
+                                    {allocation.installment?.receivable.reference ?? 'cobrança'}
+                                    <span className="inline-control">
+                                      <input
+                                        aria-label={`Valor alocado à parcela ${allocation.installment?.sequence ?? index + 1}`}
+                                        inputMode="decimal"
+                                        value={allocation.amount}
+                                        onChange={(event) =>
+                                          setEditingPayment((current) =>
+                                            current
+                                              ? {
+                                                  ...current,
+                                                  allocations: current.allocations.map(
+                                                    (value, currentIndex) =>
+                                                      currentIndex === index
+                                                        ? { ...value, amount: event.target.value }
+                                                        : value,
+                                                  ),
+                                                }
+                                              : current,
+                                          )
+                                        }
+                                      />
+                                      <button
+                                        type="button"
+                                        className="table-action"
+                                        onClick={() =>
+                                          setEditingPayment((current) =>
+                                            current
+                                              ? {
+                                                  ...current,
+                                                  allocations: current.allocations.filter(
+                                                    (_, i) => i !== index,
+                                                  ),
+                                                }
+                                              : current,
+                                          )
+                                        }
+                                      >
+                                        Remover
+                                      </button>
+                                    </span>
+                                  </label>
+                                ))}
+                                <label>
+                                  Motivo da correção
+                                  <textarea required minLength={3} maxLength={500} name="reason" />
+                                </label>
+                                <div className="form-actions">
+                                  <button className="secondary" disabled={busy}>
+                                    {isAdministrator ? 'Aplicar correção' : 'Enviar para aprovação'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="table-action"
+                                    onClick={() => setEditingPayment(undefined)}
+                                  >
+                                    Cancelar
+                                  </button>
+                                </div>
+                              </form>
+                            )}
                             {reversing === item.id && (
                               <form
                                 className="stack-form compact-form"
@@ -714,6 +954,131 @@ export function FinanceOperations({ permissions }: { permissions: readonly strin
           )}
         </section>
       )}
+      {isAdministrator && canApprovePayments && canRequestPaymentChange && (
+        <section className="section-block" data-reveal>
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Revisão administrativa</p>
+              <h2>Correções de pagamento pendentes</h2>
+              <p>
+                Aprovar estorna o lançamento original e registra a versão corrigida no histórico.
+              </p>
+            </div>
+            <span>{paymentChangeRequests.data?.total ?? 0} solicitações</span>
+          </div>
+          {paymentChangeRequests.error && (
+            <div className="notice notice-error" role="alert">
+              {paymentChangeRequests.error.message}
+              <button onClick={paymentChangeRequests.retry}>Tentar novamente</button>
+            </div>
+          )}
+          <div className="payment-approval-list">
+            {paymentChangeRequests.data?.items.map((request) => (
+              <article className="surface payment-approval-card" key={request.id}>
+                <div>
+                  <p className="eyebrow">{request.payment.client.displayName}</p>
+                  <h3>{request.payment.reference}</h3>
+                  <p>Solicitado por {request.requestedByName}</p>
+                  <p>Motivo: {request.reason}</p>
+                </div>
+                <dl>
+                  <div>
+                    <dt>Valor atual</dt>
+                    <dd>{formatMoney(request.payment.amount, request.payment.currency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Novo valor</dt>
+                    <dd>{formatMoney(request.proposedData.amount, request.payment.currency)}</dd>
+                  </div>
+                  <div>
+                    <dt>Forma</dt>
+                    <dd>
+                      {request.payment.method} → {request.proposedData.method}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Data</dt>
+                    <dd>
+                      {formatDate(request.payment.paidAt)} →{' '}
+                      {formatDate(request.proposedData.paidAt)}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Referência</dt>
+                    <dd>
+                      {request.payment.reference} → {request.proposedData.reference}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>Parcelas vinculadas</dt>
+                    <dd>{request.proposedData.allocations.length}</dd>
+                  </div>
+                </dl>
+                <div className="form-actions">
+                  <button
+                    className="primary"
+                    disabled={busy}
+                    onClick={() => void decidePaymentChange(request, 'approve')}
+                  >
+                    Aprovar e corrigir
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={busy}
+                    onClick={() => void decidePaymentChange(request, 'reject')}
+                  >
+                    Recusar
+                  </button>
+                </div>
+              </article>
+            ))}
+            {paymentChangeRequests.data && !paymentChangeRequests.data.items.length && (
+              <div className="surface empty">
+                <strong>Nenhuma correção pendente</strong>
+                <span>Novas solicitações de pagamento aparecerão aqui.</span>
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+      {!isAdministrator && canRequestPaymentChange && paymentChangeRequests.data?.items.length ? (
+        <section className="section-block" data-reveal>
+          <div className="section-heading">
+            <div>
+              <p className="eyebrow">Acompanhamento</p>
+              <h2>Minhas correções de pagamento</h2>
+            </div>
+          </div>
+          <div className="surface table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Pagamento</th>
+                  <th>Motivo</th>
+                  <th>Status</th>
+                  <th>Retorno</th>
+                </tr>
+              </thead>
+              <tbody>
+                {paymentChangeRequests.data.items.map((request) => (
+                  <tr key={request.id}>
+                    <td>{request.payment.reference}</td>
+                    <td>{request.reason}</td>
+                    <td>
+                      {request.status === 'PENDING'
+                        ? 'Aguardando Administrador'
+                        : request.status === 'APPROVED'
+                          ? 'Aprovada'
+                          : 'Recusada'}
+                    </td>
+                    <td>{request.reviewNote || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
       {canViewExpenses && (
         <section className="section-block" data-reveal>
           <div className="section-heading">

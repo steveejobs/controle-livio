@@ -16,7 +16,13 @@ function cell(value: unknown, key: string) {
   return String(value);
 }
 
-export function ReportsCenter({ permissions }: { permissions: readonly string[] }) {
+export function ReportsCenter({
+  permissions,
+  isAdministrator,
+}: {
+  permissions: readonly string[];
+  isAdministrator: boolean;
+}) {
   const [report, setReport] = useState('receivables-due');
   const [from, setFrom] = useState(initialFrom);
   const [to, setTo] = useState(initialTo);
@@ -44,7 +50,7 @@ export function ReportsCenter({ permissions }: { permissions: readonly string[] 
             Consulte contas a receber e resultados por período, com exportação CSV autenticada.
           </span>
         </div>
-        {permissions.includes('reports:export') && (
+        {isAdministrator && permissions.includes('reports:export') && (
           <button className="secondary" onClick={() => void exportCsv()}>
             Exportar CSV
           </button>
@@ -58,7 +64,7 @@ export function ReportsCenter({ permissions }: { permissions: readonly string[] 
             <option value="received">Recebimentos</option>
             <option value="accrual">Competência</option>
             <option value="overdue">Títulos vencidos</option>
-            <option value="aging">Aging</option>
+            <option value="aging">Faixas de atraso</option>
             <option value="cash-forecast">Previsão de caixa</option>
             <option value="partial-payments">Pagamentos parciais</option>
             <option value="active-contracts">Contratos ativos</option>
@@ -71,15 +77,15 @@ export function ReportsCenter({ permissions }: { permissions: readonly string[] 
         {rangedReports.has(report) && (
           <>
             <label>
-              De
+              Data inicial
               <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
             </label>
             <label>
-              Até
+              Data final
               <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
             </label>
             <label>
-              Agrupar
+              Agrupar por
               <select value={groupBy} onChange={(event) => setGroupBy(event.target.value)}>
                 <option value="day">Dia</option>
                 <option value="week">Semana</option>

@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'node:crypto';
 import {
+  Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
@@ -17,13 +19,46 @@ import { CurrentActor } from '../auth/current-actor.decorator';
 import { Public } from '../auth/public.decorator';
 import { RequirePermission } from '../auth/require-permission.decorator';
 import { NotificationsService } from './notifications.service';
+import { PushNotificationsService } from './push-notifications.service';
+import {
+  deletePushSubscriptionSchema,
+  pushSubscriptionSchema,
+  type DeletePushSubscriptionInput,
+  type PushSubscriptionInput,
+} from './push.schemas';
+import { ZodValidationPipe } from '../common/zod-validation.pipe';
 
 @Controller('notifications')
 export class NotificationsController {
   constructor(
     private readonly notifications: NotificationsService,
+    private readonly pushNotifications: PushNotificationsService,
     private readonly config: ConfigService<ApiEnvironment, true>,
   ) {}
+
+  @Get('push/config')
+  @RequirePermission('notifications:update')
+  pushConfig(@CurrentActor() actor: AuthenticatedActor) {
+    return this.pushNotifications.publicConfig(actor);
+  }
+
+  @Post('push-subscriptions')
+  @RequirePermission('notifications:update')
+  subscribeToPush(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Body(new ZodValidationPipe(pushSubscriptionSchema)) input: PushSubscriptionInput,
+  ) {
+    return this.pushNotifications.subscribe(actor, input);
+  }
+
+  @Delete('push-subscriptions')
+  @RequirePermission('notifications:update')
+  unsubscribeFromPush(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Body(new ZodValidationPipe(deletePushSubscriptionSchema)) input: DeletePushSubscriptionInput,
+  ) {
+    return this.pushNotifications.unsubscribe(actor, input.endpoint);
+  }
 
   @Get('cron')
   @Public()
@@ -36,6 +71,19 @@ export class NotificationsController {
       throw new UnauthorizedException('Credencial da rotina inválida');
     }
     return this.notifications.reconcileAllFinancialAlerts();
+  }
+
+  @Get('access-alerts/cron')
+  @Public()
+  accessAlertsCron(@Headers('authorization') authorization?: string) {
+    const secret = this.config.get('CRON_SECRET', { infer: true });
+    if (!secret) throw new ServiceUnavailableException('Rotina automática não configurada');
+    const expected = Buffer.from(`Bearer ${secret}`);
+    const received = Buffer.from(authorization ?? '');
+    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+      throw new UnauthorizedException('Credencial da rotina inválida');
+    }
+    return this.notifications.reconcileAccessDigests();
   }
 
   @Post('reconcile')

@@ -113,11 +113,11 @@ export function Documents({ permissions }: { permissions: readonly string[] }) {
       {showUpload && canCreate && (
         <form className="surface form-grid" onSubmit={upload}>
           <label>
-            Título
+            Nome do documento
             <input required minLength={2} name="title" />
           </label>
           <label>
-            Categoria
+            Tipo de documento (opcional)
             <input name="category" maxLength={120} />
           </label>
           <label>

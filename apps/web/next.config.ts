@@ -104,7 +104,11 @@ const nextConfig: NextConfig = {
   transpilePackages: ['@livio/ui', '@livio/shared'],
   experimental: { optimizePackageImports: ['@livio/ui'] },
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      { source: '/sw.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
+      { source: '/pwa-install.js', headers: [{ key: 'Cache-Control', value: 'no-cache' }] },
+    ];
   },
   env: {
     NEXT_PUBLIC_API_URL: publicApiUrl,

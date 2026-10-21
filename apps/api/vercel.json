@@ -17,6 +17,9 @@
       "permanent": true
     }
   ],
-  "crons": [{ "path": "/v1/notifications/cron", "schedule": "0 11 * * *" }],
+  "crons": [
+    { "path": "/v1/notifications/cron", "schedule": "0 11 * * *" },
+    { "path": "/v1/notifications/access-alerts/cron", "schedule": "*/5 * * * *" }
+  ],
   "fluid": true
 }

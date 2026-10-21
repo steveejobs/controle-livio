@@ -35,10 +35,15 @@ export type ClientOverview = {
     number: string;
     title: string;
     status: string;
+    feeModel: string;
     fixedAmount?: string;
+    successRate?: string;
     currency: string;
+    serviceName?: string;
+    terms?: { services?: string[] };
   }>;
   financial: {
+    outstanding: Array<{ currency: string; amount: string }>;
     receivables: Array<{
       id: string;
       reference: string;
@@ -53,6 +58,7 @@ export type ClientOverview = {
         amount: string;
         dueDate: string;
         allocations: Array<{ amount: string }>;
+        adjustments: Array<{ amount: string; kind: string }>;
       }>;
     }>;
     payments: Array<{

@@ -102,6 +102,19 @@ export class MattersService {
 
   async create(actor: AuthenticatedActor, input: CreateMatterInput) {
     await this.assertReferences(actor.organizationId, input);
+    if (input.collectionObjective) {
+      const pipeline = input.pipelineId
+        ? await this.prisma.pipeline.findFirst({
+            where: { id: input.pipelineId, organizationId: actor.organizationId, isActive: true },
+            select: { kind: true },
+          })
+        : null;
+      if (pipeline?.kind !== 'COLLECTION') {
+        throw new BadRequestException(
+          'Objetivos sem valor financeiro só podem ser usados em cobranças',
+        );
+      }
+    }
     return this.prisma.$transaction(async (transaction) => {
       const matter = await transaction.matter.create({
         data: {
@@ -127,6 +140,16 @@ export class MattersService {
           ...(input.nextAction ? { nextAction: input.nextAction } : {}),
           ...(input.nextActionAt ? { nextActionAt: input.nextActionAt } : {}),
           ...(input.lostReason ? { lostReason: input.lostReason } : {}),
+          ...(input.collectionObjective
+            ? {
+                customFields: {
+                  collectionObjective: {
+                    kind: 'NON_FINANCIAL',
+                    description: input.collectionObjective.description,
+                  },
+                },
+              }
+            : {}),
         },
       });
       if (input.currentStageId) {

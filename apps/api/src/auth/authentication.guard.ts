@@ -67,6 +67,7 @@ export class AuthenticationGuard implements CanActivate {
           select: {
             role: {
               select: {
+                key: true,
                 permissions: {
                   select: { permission: { select: { resource: true, action: true } } },
                 },
@@ -91,11 +92,15 @@ export class AuthenticationGuard implements CanActivate {
         ({ permission }) => `${permission.resource}:${permission.action}` as PermissionCode,
       ),
     );
+    const isAdministrator = membership.roles.some(({ role }) => role.key === 'administrator');
+    const sessionId = data?.claims.session_id;
     const actor: AuthenticatedActor = {
       profileId,
       membershipId: membership.id,
       userId: membership.userId,
       organizationId: membership.organizationId,
+      isAdministrator,
+      ...(typeof sessionId === 'string' ? { sessionId } : {}),
       permissions: [...new Set(permissions)],
       ...(membership.clientId ? { clientId: membership.clientId } : {}),
     };

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { useApiData } from '../shared/use-api-data';
 
@@ -14,14 +14,31 @@ type User = {
   roles?: Array<{ role: Role }>;
 };
 
-export function TeamManagement({ permissions }: { permissions: readonly string[] }) {
+export function TeamManagement({
+  permissions,
+  isAdministrator,
+}: {
+  permissions: readonly string[];
+  isAdministrator: boolean;
+}) {
   const users = useApiData<User[]>('/admin/users');
-  const canManageUsers = permissions.includes('users:manage');
+  const canManageUsers = isAdministrator && permissions.includes('users:manage');
   const canViewRoles = permissions.includes('roles:view');
-  const canManageRoles = permissions.includes('roles:manage');
+  const canManageRoles = isAdministrator && permissions.includes('roles:manage');
   const roles = useApiData<Role[]>(canViewRoles ? '/admin/roles' : undefined);
+  const accessAlerts = useApiData<{ enabled: boolean; times: string[]; timezone: string }>(
+    isAdministrator ? '/admin/access-alerts' : undefined,
+  );
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [alertsEnabled, setAlertsEnabled] = useState(false);
+  const [alertTimes, setAlertTimes] = useState(['09:00']);
+
+  useEffect(() => {
+    if (!accessAlerts.data) return;
+    setAlertsEnabled(accessAlerts.data.enabled);
+    setAlertTimes(accessAlerts.data.times.length ? accessAlerts.data.times : ['09:00']);
+  }, [accessAlerts.data]);
 
   const setStatus = async (user: User) => {
     setBusy(true);
@@ -85,17 +102,39 @@ export function TeamManagement({ permissions }: { permissions: readonly string[]
     }
   };
 
+  const saveAccessAlerts = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setFeedback(undefined);
+    try {
+      await api('/admin/access-alerts', {
+        method: 'PATCH',
+        body: JSON.stringify({ enabled: alertsEnabled, times: alertTimes }),
+      });
+      setFeedback('Horários dos alertas de acesso salvos.');
+      accessAlerts.reload();
+    } catch (caught) {
+      setFeedback(
+        `Erro: ${caught instanceof ApiError ? caught.message : 'alertas não atualizados'}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const operationalRoles =
-    roles.data?.filter(({ key }) => ['lawyer', 'secretary', 'finance'].includes(key)) ?? [];
+    roles.data?.filter(
+      ({ key }) =>
+        ['lawyer', 'secretary', 'finance'].includes(key) ||
+        (isAdministrator && key === 'administrator'),
+    ) ?? [];
   return (
     <section>
       <header className="page-title">
         <div>
           <p>Administração</p>
-          <h1>Advogados e secretaria</h1>
-          <span>
-            Cadastre profissionais por convite e aplique permissões próprias para cada função.
-          </span>
+          <h1>Equipe</h1>
+          <span>Convide profissionais e escolha o perfil de acesso adequado.</span>
         </div>
       </header>
       {feedback && (
@@ -117,7 +156,7 @@ export function TeamManagement({ permissions }: { permissions: readonly string[]
             <input required name="email" type="email" />
           </label>
           <label>
-            Função
+            Perfil de acesso
             <select required name="roleId" defaultValue="">
               <option value="" disabled>
                 Selecione
@@ -129,15 +168,83 @@ export function TeamManagement({ permissions }: { permissions: readonly string[]
               ))}
             </select>
           </label>
-          <div className="role-explainer">
-            <strong>Acesso por função</strong>
-            <span>
-              Advogado: clientes, processos, documentos e relatórios. Secretaria: cadastro, agenda,
-              documentos e operação, sem gestão financeira sensível.
-            </span>
-          </div>
           <button className="primary form-wide" disabled={busy || !operationalRoles.length}>
             {busy ? 'Enviando…' : 'Cadastrar e enviar convite'}
+          </button>
+        </form>
+      )}
+      {isAdministrator && (
+        <form className="surface form-grid" data-reveal onSubmit={saveAccessAlerts}>
+          <div className="form-wide">
+            <p className="eyebrow">Segurança da equipe</p>
+            <h2>Resumo de acessos</h2>
+            <p>Registra cada entrada e reúne os acessos em notificações nos horários escolhidos.</p>
+          </div>
+          {accessAlerts.error && (
+            <div className="notice notice-error form-wide" role="alert">
+              {accessAlerts.error.message}
+            </div>
+          )}
+          <label className="form-wide checkbox-label">
+            <input
+              type="checkbox"
+              checked={alertsEnabled}
+              onChange={(event) => setAlertsEnabled(event.target.checked)}
+            />
+            Receber resumo automático de acessos
+          </label>
+          {alertTimes.map((time, index) => (
+            <label key={index}>
+              Horário {index + 1}
+              <span className="inline-control">
+                <input
+                  type="time"
+                  step={300}
+                  required={alertsEnabled}
+                  value={time}
+                  onChange={(event) =>
+                    setAlertTimes((current) =>
+                      current.map((value, currentIndex) =>
+                        currentIndex === index ? event.target.value : value,
+                      ),
+                    )
+                  }
+                />
+                {alertTimes.length > 1 && (
+                  <button
+                    type="button"
+                    className="table-action"
+                    aria-label={`Remover horário ${index + 1}`}
+                    onClick={() =>
+                      setAlertTimes((current) => current.filter((_, i) => i !== index))
+                    }
+                  >
+                    Remover
+                  </button>
+                )}
+              </span>
+            </label>
+          ))}
+          <div className="form-wide inline-control">
+            <button
+              type="button"
+              className="secondary"
+              disabled={alertTimes.length >= 5}
+              onClick={() =>
+                setAlertTimes((current) => {
+                  const available = ['09:00', '12:00', '15:00', '18:00', '20:00'].find(
+                    (time) => !current.includes(time),
+                  );
+                  return available ? [...current, available] : current;
+                })
+              }
+            >
+              Adicionar horário
+            </button>
+            <span>Fuso horário: {accessAlerts.data?.timezone ?? 'America/Sao_Paulo'}</span>
+          </div>
+          <button className="primary form-wide" disabled={busy}>
+            {busy ? 'Salvando…' : 'Salvar horários'}
           </button>
         </form>
       )}
@@ -164,7 +271,7 @@ export function TeamManagement({ permissions }: { permissions: readonly string[]
               <tr>
                 <th>Profissional</th>
                 <th>E-mail</th>
-                <th>Função</th>
+                <th>Perfil de acesso</th>
                 <th>Status</th>
                 {canManageUsers && <th>Ações</th>}
               </tr>

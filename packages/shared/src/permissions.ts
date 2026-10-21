@@ -64,7 +64,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('tasks', workActions),
     ...codes('calendar', workActions),
     ...codes('notifications', ['view', 'update']),
-    ...codes('reports', ['view', 'export']),
+    ...codes('reports', ['view']),
   ],
   secretary: [
     ...codes('clients', workActions),
@@ -76,7 +76,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('tasks', workActions),
     ...codes('calendar', workActions),
     ...codes('notifications', ['view', 'update']),
-    ...codes('reports', ['view', 'export']),
+    ...codes('reports', ['view']),
   ],
   finance: [
     ...codes('clients', viewOnly),
@@ -90,7 +90,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('tasks', workActions),
     ...codes('calendar', viewOnly),
     ...codes('notifications', ['view', 'update']),
-    ...codes('reports', ['view', 'export']),
+    ...codes('reports', ['view']),
   ],
   client: [
     ...codes('clients', viewOnly),

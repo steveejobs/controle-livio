@@ -63,11 +63,11 @@ function EventForm({
   return (
     <form className="surface form-grid" onSubmit={submit}>
       <label>
-        Título
+        Nome do compromisso
         <input name="title" required minLength={2} defaultValue={event?.title} />
       </label>
       <label>
-        Tipo
+        Tipo de compromisso
         <select name="type" defaultValue={event?.type ?? 'MEETING'}>
           {eventTypes.map(([value, label]) => (
             <option key={value} value={value}>
@@ -108,7 +108,7 @@ function EventForm({
         </select>
       </label>
       <label className="form-wide">
-        Descrição
+        Detalhes do compromisso (opcional)
         <textarea
           name="description"
           rows={3}

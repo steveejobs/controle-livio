@@ -11,3 +11,6 @@ Esta pasta é a fonte única do sistema visual do `apps/web`.
 Componentes e features não devem criar cores, breakpoints ou timings globais novos. Para conteúdo
 que aparece em runtime, use `data-reveal`; o controlador observa também as seções principais da
 tela legada para manter uma migração incremental segura.
+
+Campos `<select>` usam o tratamento visual centralizado em `operations.css`, com seta e estados do
+tema; mantenha o comportamento nativo de formulário e teclado sem criar variações por módulo.

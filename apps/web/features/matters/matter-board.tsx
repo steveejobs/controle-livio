@@ -23,6 +23,9 @@ type Matter = {
   nextAction?: string;
   nextActionAt?: string;
   description?: string;
+  customFields?: {
+    collectionObjective?: { kind?: string; description?: string };
+  };
   area?: string;
   courtNumberNormalized?: string;
   updatedAt?: string;
@@ -34,6 +37,8 @@ type Pipeline = {
   kind: 'COMMERCIAL' | 'LEGAL' | 'COLLECTION';
   stages: Stage[];
 };
+type PipelineKind = Pipeline['kind'];
+type PipelineKindFilter = PipelineKind | readonly PipelineKind[];
 const labels: Record<string, string> = {
   LOW: 'Baixa',
   MEDIUM: 'Media',
@@ -49,19 +54,37 @@ const labels: Record<string, string> = {
   CLOSED: 'Encerrado',
 };
 const asText = (value: string) => labels[value] ?? value;
+const matchesPipelineKind = (
+  kind: PipelineKindFilter | undefined,
+  candidate?: PipelineKind | null,
+) => {
+  if (!kind) return true;
+  if (!candidate) return false;
+  return typeof kind === 'string' ? kind === candidate : kind.includes(candidate);
+};
+
 export function MatterBoard({
   kind,
   title,
   permissions,
 }: {
-  kind?: Pipeline['kind'];
+  kind?: PipelineKindFilter;
   title: string;
   permissions: readonly string[];
 }) {
   const canViewPipelines = permissions.includes('pipelines:view');
   const canCreate = permissions.includes('matters:create');
   const canMove = permissions.includes('matters:update');
+  const description = Array.isArray(kind)
+    ? 'Acompanhe oportunidades e processos jurídicos em seus respectivos fluxos.'
+    : kind === 'COMMERCIAL'
+      ? 'Acompanhe contatos, propostas e oportunidades comerciais.'
+      : kind === 'COLLECTION'
+        ? 'Acompanhe negociações de cobrança e as próximas ações de recuperação.'
+        : 'Cadastre processos jurídicos e acompanhe etapas e próximas ações.';
   const [showForm, setShowForm] = useState(false);
+  const [createPipelineId, setCreatePipelineId] = useState('');
+  const [objectiveWithoutValue, setObjectiveWithoutValue] = useState(false);
   const {
     data: pipelines,
     error: pipeError,
@@ -81,7 +104,7 @@ export function MatterBoard({
   const [moving, setMoving] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
   const filtered = useMemo(
-    () => matters?.items.filter((item) => !kind || item.pipeline?.kind === kind) ?? [],
+    () => matters?.items.filter((item) => matchesPipelineKind(kind, item.pipeline?.kind)) ?? [],
     [matters, kind],
   );
   const move = async (matter: Matter, stageId: string) => {
@@ -103,7 +126,47 @@ export function MatterBoard({
       if (previous) void previous;
     }
   };
-  const selectedPipelines = (pipelines ?? []).filter((p) => !kind || p.kind === kind);
+  const selectedPipelines = (pipelines ?? []).filter((pipeline) =>
+    matchesPipelineKind(kind, pipeline.kind),
+  );
+  const isUnifiedCrm = Array.isArray(kind);
+  const createPipeline = selectedPipelines.find((pipeline) => pipeline.id === createPipelineId);
+  const createKind = createPipeline?.kind ?? (typeof kind === 'string' ? kind : undefined);
+  const isCommercialCreate = createKind === 'COMMERCIAL';
+  const isCollectionCreate = createKind === 'COLLECTION';
+  const showLegalFields =
+    createKind === 'LEGAL' || (!isUnifiedCrm && createKind === undefined && kind === undefined);
+  const recordNameLabel =
+    isUnifiedCrm && !createPipeline
+      ? 'Nome do processo ou da oportunidade'
+      : isCommercialCreate
+        ? 'Nome da oportunidade'
+        : isCollectionCreate
+          ? 'Identificação da cobrança'
+          : 'Nome do processo';
+  const referenceLabel =
+    isUnifiedCrm && !createPipeline
+      ? 'Identificador interno'
+      : isCommercialCreate
+        ? 'Código da oportunidade'
+        : isCollectionCreate
+          ? 'Código da cobrança'
+          : 'Referência interna do processo';
+  const descriptionLabel = isCommercialCreate
+    ? 'Resumo da oportunidade (opcional)'
+    : isCollectionCreate
+      ? 'Detalhes da cobrança (opcional)'
+      : isUnifiedCrm && !createPipeline
+        ? 'Resumo do processo ou da oportunidade (opcional)'
+        : 'Resumo do processo (opcional)';
+  const createButtonLabel =
+    isUnifiedCrm && !createPipeline
+      ? 'Cadastrar processo ou oportunidade'
+      : isCommercialCreate
+        ? 'Cadastrar oportunidade'
+        : isCollectionCreate
+          ? 'Cadastrar cobrança'
+          : 'Cadastrar processo';
   const configuredStageIds = new Set(
     selectedPipelines.flatMap((pipeline) => pipeline.stages.map((stage) => stage.id)),
   );
@@ -126,9 +189,12 @@ export function MatterBoard({
           reference: form.get('reference'),
           title: form.get('title'),
           description: form.get('description') || undefined,
+          collectionObjective:
+            form.get('objectiveWithoutValue') === 'on'
+              ? { description: form.get('objectiveDescription') }
+              : undefined,
           courtNumber: form.get('courtNumber') || undefined,
           area: form.get('area') || undefined,
-          status: form.get('status'),
           priority: form.get('priority'),
           nextAction: form.get('nextAction') || undefined,
           nextActionAt: form.get('nextActionAt') || undefined,
@@ -140,8 +206,16 @@ export function MatterBoard({
           confidential: form.get('confidential') === 'on',
         }),
       });
-      setFeedback('Processo cadastrado.');
+      setFeedback(
+        pipeline?.kind === 'COMMERCIAL'
+          ? 'Oportunidade cadastrada.'
+          : pipeline?.kind === 'COLLECTION'
+            ? 'Cobrança cadastrada.'
+            : 'Processo cadastrado.',
+      );
       setShowForm(false);
+      setCreatePipelineId('');
+      setObjectiveWithoutValue(false);
       target.reset();
       await reload();
     } catch (caught) {
@@ -199,11 +273,27 @@ export function MatterBoard({
     <section>
       <Title
         title={title}
-        description="Cadastre processos, acompanhe etapas, prioridades e próximas ações."
+        description={description}
         action={
           canCreate ? (
-            <button className="primary" onClick={() => setShowForm((value) => !value)}>
-              {showForm ? 'Fechar' : 'Novo processo'}
+            <button
+              className="primary"
+              onClick={() => {
+                const opening = !showForm;
+                setCreatePipelineId(
+                  opening && kind === 'COLLECTION' ? (selectedPipelines[0]?.id ?? '') : '',
+                );
+                setObjectiveWithoutValue(false);
+                setShowForm(opening);
+              }}
+            >
+              {showForm
+                ? 'Fechar'
+                : isUnifiedCrm
+                  ? 'Nova oportunidade ou processo'
+                  : kind === 'COLLECTION'
+                    ? 'Nova cobrança'
+                    : 'Novo processo'}
             </button>
           ) : undefined
         }
@@ -244,25 +334,19 @@ export function MatterBoard({
             </div>
           )}
           <label>
-            Referência
-            <input required name="reference" maxLength={80} />
-          </label>
-          <label>
-            Título
-            <input required name="title" minLength={2} />
-          </label>
-          <label>
-            Número judicial
-            <input name="courtNumber" maxLength={80} />
-          </label>
-          <label>
-            Área
-            <input name="area" maxLength={120} />
-          </label>
-          <label>
-            Pipeline
-            <select name="pipelineId" defaultValue="">
-              <option value="">Sem pipeline</option>
+            Fluxo de atendimento
+            <select
+              name="pipelineId"
+              value={createPipelineId}
+              required={isUnifiedCrm || (isCollectionCreate && objectiveWithoutValue)}
+              onChange={(event) => {
+                setCreatePipelineId(event.target.value);
+                setObjectiveWithoutValue(false);
+              }}
+            >
+              <option value="" disabled={isUnifiedCrm}>
+                {isUnifiedCrm ? 'Selecione o tipo de atendimento' : 'Sem fluxo específico'}
+              </option>
               {selectedPipelines.map((pipeline) => (
                 <option value={pipeline.id} key={pipeline.id}>
                   {pipeline.name}
@@ -270,41 +354,102 @@ export function MatterBoard({
               ))}
             </select>
           </label>
-          <label>
-            Status
-            <select name="status" defaultValue="LEAD">
-              <option value="LEAD">Lead</option>
-              <option value="ACTIVE">Ativo</option>
-              <option value="SUSPENDED">Suspenso</option>
-              <option value="CLOSED">Encerrado</option>
-            </select>
-          </label>
-          <label>
-            Prioridade
-            <select name="priority" defaultValue="MEDIUM">
-              <option value="LOW">Baixa</option>
-              <option value="MEDIUM">Média</option>
-              <option value="HIGH">Alta</option>
-              <option value="URGENT">Urgente</option>
-            </select>
-          </label>
-          <label>
-            Próxima ação
-            <input name="nextAction" maxLength={500} />
-          </label>
-          <label>
-            Data da próxima ação
-            <input type="datetime-local" name="nextActionAt" />
-          </label>
-          <label className="form-wide">
-            Descrição
-            <textarea name="description" rows={3} maxLength={10_000} />
-          </label>
-          <label className="check">
-            <input type="checkbox" name="confidential" /> Confidencial
-          </label>
-          <button className="primary form-wide" disabled={moving === 'create'}>
-            {moving === 'create' ? 'Cadastrando…' : 'Cadastrar processo'}
+          {isUnifiedCrm && !selectedPipelines.length && (
+            <p className="section-note form-wide">
+              Crie um fluxo comercial ou jurídico antes de cadastrar neste CRM.
+            </p>
+          )}
+          {(!isUnifiedCrm || createPipeline) && (
+            <>
+              <label>
+                {referenceLabel}
+                <input required name="reference" maxLength={80} />
+              </label>
+              <label>
+                {isCollectionCreate && objectiveWithoutValue
+                  ? 'Objetivo da negociação'
+                  : recordNameLabel}
+                <input required name="title" minLength={2} />
+              </label>
+              {isCollectionCreate && (
+                <>
+                  <label className="checkbox-label form-wide">
+                    <input
+                      type="checkbox"
+                      name="objectiveWithoutValue"
+                      checked={objectiveWithoutValue}
+                      onChange={(event) => setObjectiveWithoutValue(event.target.checked)}
+                    />
+                    Registrar objetivo sem valor financeiro
+                  </label>
+                  {objectiveWithoutValue && (
+                    <label className="form-wide">
+                      Descreva o objetivo da negociação
+                      <textarea name="objectiveDescription" required rows={3} maxLength={2_000} />
+                    </label>
+                  )}
+                </>
+              )}
+              {showLegalFields && (
+                <>
+                  <label>
+                    Número judicial ou CNJ (opcional)
+                    <input name="courtNumber" maxLength={80} />
+                  </label>
+                  <label>
+                    Área jurídica (opcional)
+                    <input name="area" maxLength={120} />
+                  </label>
+                </>
+              )}
+              <details className="optional-fields form-wide matter-extra-details">
+                <summary>
+                  {isCommercialCreate
+                    ? 'Acompanhamento da oportunidade (opcional)'
+                    : isCollectionCreate
+                      ? 'Acompanhamento da cobrança (opcional)'
+                      : 'Dados complementares do processo (opcional)'}
+                </summary>
+                <div className="form-grid">
+                  <label>
+                    Prioridade
+                    <select name="priority" defaultValue="MEDIUM">
+                      <option value="LOW">Baixa</option>
+                      <option value="MEDIUM">Média</option>
+                      <option value="HIGH">Alta</option>
+                      <option value="URGENT">Urgente</option>
+                    </select>
+                  </label>
+                  <label>
+                    {isCommercialCreate ? 'Próximo contato (opcional)' : 'Próxima ação (opcional)'}
+                    <input name="nextAction" maxLength={500} />
+                  </label>
+                  <label>
+                    {isCommercialCreate
+                      ? 'Data do próximo contato (opcional)'
+                      : 'Data da próxima ação (opcional)'}
+                    <input type="datetime-local" name="nextActionAt" />
+                  </label>
+                  {!(isCollectionCreate && objectiveWithoutValue) && (
+                    <label className="form-wide">
+                      {descriptionLabel}
+                      <textarea name="description" rows={3} maxLength={10_000} />
+                    </label>
+                  )}
+                  {showLegalFields && (
+                    <label className="check">
+                      <input type="checkbox" name="confidential" /> Processo confidencial
+                    </label>
+                  )}
+                </div>
+              </details>
+            </>
+          )}
+          <button
+            className="primary form-wide"
+            disabled={moving === 'create' || (isUnifiedCrm && !selectedPipelines.length)}
+          >
+            {moving === 'create' ? 'Cadastrando…' : createButtonLabel}
           </button>
         </form>
       )}
@@ -349,7 +494,12 @@ export function MatterBoard({
           {selectedPipelines.map((pipeline) => (
             <section className="board" key={pipeline.id}>
               <h2>{pipeline.name}</h2>
-              <div className="kanban">
+              <div
+                className="kanban"
+                role="region"
+                aria-label={`Etapas do fluxo ${pipeline.name}`}
+                tabIndex={0}
+              >
                 {[...pipeline.stages]
                   .sort((a, b) => a.position - b.position)
                   .map((stage) => (
@@ -367,6 +517,12 @@ export function MatterBoard({
                           <article className="kanban-card" key={matter.id}>
                             <b>{matter.reference}</b>
                             <strong>{matter.title}</strong>
+                            {matter.customFields?.collectionObjective?.description && (
+                              <small>
+                                <span className="badge">Objetivo sem valor financeiro</span>{' '}
+                                {matter.customFields.collectionObjective.description}
+                              </small>
+                            )}
                             <small>{matter.client?.displayName ?? 'Cliente nao informado'}</small>
                             <div>
                               <span className={`badge priority-${matter.priority.toLowerCase()}`}>

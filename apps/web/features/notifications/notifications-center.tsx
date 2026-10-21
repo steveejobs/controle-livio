@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import { formatDate } from '../shared/format';
 import { useApiData } from '../shared/use-api-data';
+import { PushNotificationSettings } from './push-notification-settings';
 
 type Notification = {
   id: string;
@@ -90,6 +91,13 @@ export function NotificationsCenter({
       openClient(item.link.slice('client:'.length));
     else if (item.link?.startsWith('client:')) openModule('portal');
     if (permissions.includes('tasks:view') && item.link?.startsWith('task:')) openModule('tasks');
+    if (
+      permissions.includes('payments:view') &&
+      (item.link === 'finance:payment-approvals' || item.link === 'finance:payments')
+    )
+      openModule('finance');
+    if (permissions.includes('users:view') && item.link === 'admin:access-alerts')
+      openModule('admin');
   };
   return (
     <section>
@@ -121,6 +129,7 @@ export function NotificationsCenter({
           {reconcileError}
         </div>
       )}
+      {canUpdate && <PushNotificationSettings />}
       <div className="notification-summary" data-reveal>
         <strong>{data?.unread ?? 0}</strong>
         <span>alertas não lidos</span>

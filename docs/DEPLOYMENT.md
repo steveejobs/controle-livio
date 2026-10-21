@@ -145,3 +145,7 @@ ensaio de restauração ainda forem requisitos pendentes para o uso real pretend
   separada dos objetos Storage, restaurar ambos nesse destino e conferir Auth, memberships, 39 tabelas,
   RLS, políticas, integridade e acesso a documentos. Registrar duração e perda máxima observadas. Nunca
   fazer o ensaio sobre o projeto ativo.
+
+## Browser push setup
+
+Generate a VAPID pair with `npx web-push generate-vapid-keys` and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` in the API project. The public key is used by browser subscription; the private key stays in the API. Apply the subscription migration before enabling the feature. Each phone or computer opts in under Notifications → This device. On iPhone/iPad, first add the site to the Home Screen and open the installed app. HTTPS and browser/OS permission are required. Real delivery is confirmed only after setting the keys and testing on a push-capable device/browser.

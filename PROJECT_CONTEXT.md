@@ -1,6 +1,6 @@
 # Contexto vivo do projeto Lívio
 
-Última atualização: 2026-10-20
+Última atualização: 2026-10-21
 
 ## Estado atual
 
@@ -451,3 +451,75 @@ o timestamp retornado pela API, mas isso não impediu a aplicação versionada p
   17 E2E no Chrome local após build. Nenhuma migration, reset ou escrita de negócio remota foi feita
   nesta verificação. O SMTP continua ausente, então entrega real de convite/recuperação não foi validada;
   RLS/Storage local requer Docker ou Podman e backup/restauração e carga representativa seguem pendentes.
+
+## Cadastro de clientes: conflito de CPF/CNPJ em 2026-10-21
+
+- A unicidade por organização do CPF/CNPJ já era garantida pelo banco. Quando o documento já existia,
+  o Prisma retornava `P2002`, mas a API tratava o conflito como erro interno genérico. O `POST /clients`
+  agora devolve HTTP 409 com mensagem para pesquisar/usar o cadastro existente; a restrição de
+  duplicidade permanece intacta. Nenhuma migration foi necessária.
+- Testes do serviço cobrem o conflito de documento duplicado e o caminho válido sem CPF/CNPJ, incluindo
+  registro de auditoria. Passaram format check, lint, TypeScript, 54 testes automatizados, Prisma
+  validate, build completo e os dois cenários E2E de cadastro no Chrome em 360 e 1440 px. O E2E usa
+  API simulada; não altera nem valida dados persistidos.
+- A consulta de logs da API publicada nas últimas 24 horas não retornou requisições, então não foi
+  possível confirmar se esse conflito foi a causa da tentativa relatada. Não houve deploy nem escrita
+  em dados de negócio remotos. Se o cadastro falhar com documento novo, ainda é necessário observar a
+  mensagem e o `requestId` para localizar a causa específica.
+
+## Tratamento transversal de erros e seletores em 2026-10-21
+
+- O filtro global da API converte conflitos e referências Prisma conhecidos (P2002, P2003, P2025 e P2034) em respostas 409/404 com mensagens seguras. Erros inesperados continuam como 500 genérico e são registrados no servidor. O cadastro de clientes mantém uma mensagem específica para CPF/CNPJ já vinculado à organização.
+- Os 33 campos `<select>` da interface recebem uma seta, espaçamento e cores do tema em uma regra central; permanecem controles nativos, com teclado e semântica de formulário preservados. A cobertura E2E verifica o estilo dos seletores renderizados em cada módulo.
+- A suíte das 16 abas passou em 360 px e 1440 px com checagem axe e overflow. O teste de axe do painel aguarda o fim da animação de entrada para avaliar o contraste no estado estável. Também passaram os dois E2E de cadastro de cliente, o de fluxo de desempenho e o E2E de paginação executado isoladamente.
+- Passaram format check, lint, TypeScript, 59 testes automatizados, Prisma validate e build completo. Em execução agrupada da E2E, o Chromium excedeu o timeout de 30 segundos ao criar um contexto para o teste de paginação; a repetição isolada passou. Nenhuma migration, escrita de negócio no banco ou publicação foi feita.
+
+## CRM comercial e jurídico no mesmo módulo em 2026-10-21
+
+- A aba “CRM comercial” foi removida da navegação. O módulo unificado “CRM jurídico e comercial” mantém os dois tipos de pipeline separados e visíveis no mesmo espaço; Cobrança continua em módulo próprio. A alteração é somente de interface e não muda permissões, API ou banco.
+- No cadastro, o seletor agora apresenta “Conta individual (pessoa física)” e “Conta jurídica (empresa)”. Representantes e outros contatos continuam sendo cadastrados separadamente após salvar a conta; essa é a interpretação aplicada à expressão “contas a partes”. Sem migration.
+- A matriz E2E percorreu as 15 abas em 360 e 1440 px, confirmou a ausência da aba antiga e a presença dos pipelines Comercial e Jurídico no módulo unificado. O E2E de cadastro enviou `COMPANY` para Conta jurídica e passou nas duas larguras.
+- Format check, lint, TypeScript, 59 testes, Prisma validate, build e os quatro E2E focados passaram. Nenhuma escrita de negócio remota nem publicação foi feita.
+
+## Fluxo de cadastro e preparação do cliente em 2026-10-21
+
+- O cadastro foi organizado em identificação, contato e endereço. CPF/CNPJ recebe máscara durante a digitação, limita 11/14 dígitos, muda para pessoa jurídica ao passar de 11 dígitos e continua validado no servidor antes de salvar. CNPJ exige razão social; o cadastro concluído abre a ficha do cliente.
+- Após salvar um cliente novo, a interface inicia um assistente sem abas para procurar: abre o financeiro, avança automaticamente ao salvar a cobrança, depois avança para honorários ao salvar o contrato e para documentos após o contrato. Há botões de continuar/pular e voltar; anexar os três documentos conclui o fluxo e oferece a ficha completa. Edição de cliente já existente preserva a navegação por seções. O resumo `financial.outstanding` em `GET /clients/:id/overview` soma parcelas, alocações confirmadas e ajustes aprovados em Decimal/string e separa moedas. Com permissão, o assistente permite lançar cobrança parcelada com divisão exata de centavos; o cálculo e as ações seguem condicionados às permissões do usuário.
+- Contratos de honorários podem ser registrados para o cliente sem trocar de módulo. A tela organiza os valores, percentual de êxito e vigência; quando há um único contrato, o arquivo de honorários é associado a ele automaticamente. Contrato, procuração e declaração de hipossuficiência aparecem em checklist e são anexados com visibilidade interna. Geração por templates permanece para a próxima etapa.
+- Passaram format check, lint, TypeScript, 62 testes automatizados, Prisma validate, build completo e build web após o último ajuste. Os dois E2E do fluxo passaram no Chrome em 360 e 1440 px, incluindo cobrança, contrato e documentos; a API foi simulada, sem validar persistência ou Storage real. Nenhuma migration, escrita de negócio remota ou publicação foi feita.
+- O resumo financeiro carrega os valores de todas as parcelas do cliente para calcular o saldo exato; o custo dessa consulta ainda não foi medido com volume grande. Os anexos desta etapa guardam arquivos existentes e não produzem documentos jurídicos automaticamente.
+
+## Coerência dos formulários em 2026-10-21
+
+- A revisão dos formulários não encontrou campos duplicados de assunto e título com a mesma finalidade. Rótulos foram ajustados para indicar o dado e o objeto de cada módulo, incluindo cobrança, etapa de pipeline e perfil de acesso; uma explicação estática incompleta sobre permissões foi removida.
+- A criação no CRM ocultou o status redundante com o primeiro estágio do fluxo; a escolha do pipeline aparece antes e determina os campos do processo ou da oportunidade. Campos jurídicos não são mostrados antes da escolha nem para oportunidades. O formulário de pipeline mostra exemplos de etapa inicial próprios para Comercial, Jurídico e Cobrança e apresenta os tipos em português.
+- Os formulários de honorários condicionam valor fixo/por hora e percentual ao modelo escolhido. O cadastro geral agora envia `successRate`, normaliza moeda brasileira sem ponto flutuante, e as listas mostram modelo e percentual em linguagem compreensível. A API do resumo do cliente passou a devolver o percentual armazenado.
+- Campos de classificação de serviço usados apenas em relatórios foram movidos para uma área opcional recolhida, e o serviço genérico automático foi removido. Rótulos de filtros de relatório ficaram explícitos; “Aging” agora aparece como “Faixas de atraso”.
+- Testes unitários e E2E cobrem as conversões e estados condicionais. Passaram format check, lint, TypeScript, 66 testes unitários, Prisma validate, build completo e os 17 cenários E2E no Chrome em 360/1440 px; a matriz também verifica axe e overflow. A primeira execução ampla revelou apenas um localizador instável no próprio teste, corrigido antes da execução final aprovada.
+- Os E2E usam API simulada e não comprovam gravação/persistência real. Nenhuma migration, escrita remota ou publicação foi feita nesta revisão.
+
+## Controle de acesso, aprovação financeira e alertas em 2026-10-21
+
+- A identidade de Administrador é derivada do papel de sistema `administrator` autenticado; permissões personalizadas não concedem esse papel. A API restringe exportação CSV de relatórios, administração de usuários/papéis, reversão e aprovação de correções de pagamentos. A interface também esconde ações de exportação/gestão para perfis que não são Administradores. A consulta de relatórios continua disponível conforme `reports:view`.
+- A confirmação de login por senha ou link registra um evento idempotente de acesso por sessão e atualiza `lastLoginAt`. Administradores podem configurar até cinco horários locais, em intervalos de cinco minutos, para receber resumo na central de notificações. Um cron autenticado consolida acessos desde o último cursor e evita uma notificação por chamada de API. A migration torna o evento de acesso imutável e indexa a consulta.
+- Correções de pagamentos confirmados preservam o lançamento original: demais perfis enviam proposta com motivo; a proposta fica pendente e notifica os Administradores ativos. Só Administrador pode aprovar/recusar. Aprovar reverte o lançamento e alocações anteriores e cria o lançamento corrigido na mesma transação, mantendo trilha de auditoria. Administrador pode aplicar sua própria correção diretamente.
+- Adicionada a migration `20261021150000_access_alerts_and_payment_change_requests.sql`, com tabela de solicitações, RLS sem acesso direto do navegador, vínculos e proteção de imutabilidade do histórico de acesso. Ela **não foi aplicada**: o `AGENTS.md` exige confirmação do banco de desenvolvimento antes de migrations. Validar a migration SQL no ambiente de desenvolvimento também permanece pendente.
+- A agenda de alertas usa cron a cada cinco minutos e o fuso da organização; na Vercel essa frequência exige plano Pro, pois o plano Hobby permite no máximo uma execução diária. Alertas são notificações internas. A entrega depende de `CRON_SECRET` e da migration aplicada.
+- Passaram format check, lint, TypeScript, Prisma validate, build completo, 74 testes unitários e 17 E2E no Chromium em 360/1440 px. Nenhuma migration, escrita no banco ou publicação foi feita. A instalação do Chromium ocorreu somente no cache local de ferramentas.
+
+## PWA installation and browser push - 2026-10-21
+
+- The install prompt is captured by a `beforeInteractive` script so it survives login and client component mounting. The install button opens the browser prompt when available and otherwise gives device-specific installation instructions. The root service worker serves push and notification-click events; its file is returned with no-cache headers.
+- Native push subscriptions are opt-in per user/browser, scoped by organization and user, validated to HTTPS push-provider hosts, and stored only by the API. The service worker displays generic notices so legal/financial details stay behind login. Push is connected to payment-change requests/decisions, financial alerts, task reminders, and administrator access digests. Delivery errors are contained and expired endpoints are removed.
+- VAPID keys are optional as an all-or-none API configuration. `.env.example` documents placeholders; no secret keys were created or added. The web UI reports pending server configuration until the API has the keys.
+- Added migration `20261021160000_web_push_subscriptions.sql`. Neither it nor the previous `20261021150000_access_alerts_and_payment_change_requests.sql` was applied. The repository `AGENTS.md` requires explicit confirmation before applying migrations to the development database. SQL execution against a database remains pending.
+- Final local checks passed: format check, lint, strict TypeScript, Prisma validate, full build, 88 unit tests, and 19 Chromium E2E tests. The E2E uses a synthetic install event and simulated notification permission/service worker/push API; it proves UI/API contract behavior, not real OS/provider delivery. No production deployment or remote business-data write was made.
+- `npm audit --omit=dev` reports five transitive vulnerabilities in the resolved tree (three high, two moderate) through `deepmerge-ts`/Prisma config and `js-yaml`/Nest Swagger. npm's suggested fixes require Prisma 7 and Swagger 12 major upgrades; those upgrades were not part of this change and were not applied.
+
+## Objetivos de cobrança e serviços contratados em 2026-10-21
+
+- O formulário de cobrança permite marcar “Registrar objetivo sem valor financeiro”. A opção abre uma descrição obrigatória, muda o nome curto para “Objetivo da negociação” e grava a anotação em `matters.custom_fields.collectionObjective`; não cria nem altera recebíveis, parcelas ou saldo. O objetivo aparece nos cartões do CRM.
+- O fluxo entre Processos/CRM/Cobrança remonta o quadro ao mudar de módulo, evitando reaproveitar um formulário aberto de outro módulo. Os quadros Kanban agora são regiões nomeadas e focáveis por teclado; a nova etiqueta recebeu contraste de tema suficiente. A matriz axe/overflow verifica isso em 360 e 1440 px.
+- Os formulários de contrato geral e da ficha do cliente permitem marcar vários serviços comuns, agrupados por área, incluindo acompanhamento em delegacia, inquérito, audiência de custódia, habeas corpus e execução penal. A equipe pode salvar um serviço para a organização e selecioná-lo; o primeiro marcado permanece como classificação principal de relatórios, e a seleção completa fica em `contracts.terms.services`.
+- O catálogo customizado usa `service_catalog_items`, escopo da organização, nome normalizado, RLS forçada sem acesso direto pelo navegador, permissionamento `contracts:view/create` e auditoria. A migration `20261021170000_service_catalog.sql` foi adicionada, mas não aplicada. Junto das migrations de alertas de acesso e Web Push, há três migrations locais pendentes; as regras de `AGENTS.md` exigem confirmação antes de qualquer aplicação ao banco de desenvolvimento.
+- QA executado após a alteração: format check, lint, TypeScript estrito, Prisma validate, build completo, 100 testes unitários (65 API, 18 web, 17 shared) e os 19 E2E no Chromium passaram. Os E2E usam API simulada; não comprovam persistência do catálogo no banco até aplicar a migration e executar teste de integração. Nenhuma escrita no banco remoto ou publicação foi feita.

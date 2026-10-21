@@ -80,6 +80,12 @@ enum PaymentStatus {
   FAILED
 }
 
+enum PaymentChangeStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum AdjustmentKind {
   DISCOUNT
   INTEREST
@@ -181,79 +187,83 @@ enum AuditAction {
 }
 
 model Organization {
-  id                   String                   @id @default(uuid()) @db.Uuid
-  legalName            String                   @map("legal_name")
-  slug                 String                   @unique @db.VarChar(80)
-  tradeName            String?                  @map("trade_name")
-  taxId                String?                  @map("tax_id")
-  status               OrganizationStatus       @default(ACTIVE)
-  timezone             String                   @default("America/Sao_Paulo")
-  settings             Json                     @default("{}")
-  createdAt            DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
-  users                User[]
-  memberships          OrganizationMember[]
-  memberRoles          OrganizationMemberRole[]
-  roles                Role[]
-  permissions          Permission[]
-  userRoles            UserRole[]
-  rolePermissions      RolePermission[]
-  sessions             Session[]
-  passwordResetTokens  PasswordResetToken[]
-  clients              Client[]
-  clientContacts       ClientContact[]
-  matters              Matter[]
-  matterParties        MatterParty[]
-  pipelines            Pipeline[]
-  pipelineStages       PipelineStage[]
-  matterStageHistory   MatterStageHistory[]
-  contracts            Contract[]
-  receivables          Receivable[]
-  installments         ReceivableInstallment[]
-  payments             Payment[]
-  paymentAllocations   PaymentAllocation[]
-  paymentReversals     PaymentReversal[]
-  financialAdjustments FinancialAdjustment[]
-  renegotiations       Renegotiation[]
-  expenses             Expense[]
-  documents            Document[]
-  documentVersions     DocumentVersion[]
-  internalNotes        InternalNote[]
-  clientMessages       ClientMessage[]
-  tasks                Task[]
-  taskComments         TaskComment[]
-  taskReminders        TaskReminder[]
-  taskHistory          TaskHistory[]
-  calendarEvents       CalendarEvent[]
-  notifications        Notification[]
-  auditLogs            AuditLog[]
-  activityEvents       ActivityEvent[]
+  id                    String                   @id @default(uuid()) @db.Uuid
+  legalName             String                   @map("legal_name")
+  slug                  String                   @unique @db.VarChar(80)
+  tradeName             String?                  @map("trade_name")
+  taxId                 String?                  @map("tax_id")
+  status                OrganizationStatus       @default(ACTIVE)
+  timezone              String                   @default("America/Sao_Paulo")
+  settings              Json                     @default("{}")
+  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  users                 User[]
+  memberships           OrganizationMember[]
+  memberRoles           OrganizationMemberRole[]
+  roles                 Role[]
+  permissions           Permission[]
+  userRoles             UserRole[]
+  rolePermissions       RolePermission[]
+  sessions              Session[]
+  passwordResetTokens   PasswordResetToken[]
+  clients               Client[]
+  clientContacts        ClientContact[]
+  matters               Matter[]
+  matterParties         MatterParty[]
+  pipelines             Pipeline[]
+  pipelineStages        PipelineStage[]
+  matterStageHistory    MatterStageHistory[]
+  contracts             Contract[]
+  serviceCatalogItems   ServiceCatalogItem[]
+  receivables           Receivable[]
+  installments          ReceivableInstallment[]
+  payments              Payment[]
+  paymentChangeRequests PaymentChangeRequest[]
+  paymentAllocations    PaymentAllocation[]
+  paymentReversals      PaymentReversal[]
+  financialAdjustments  FinancialAdjustment[]
+  renegotiations        Renegotiation[]
+  expenses              Expense[]
+  documents             Document[]
+  documentVersions      DocumentVersion[]
+  internalNotes         InternalNote[]
+  clientMessages        ClientMessage[]
+  tasks                 Task[]
+  taskComments          TaskComment[]
+  taskReminders         TaskReminder[]
+  taskHistory           TaskHistory[]
+  calendarEvents        CalendarEvent[]
+  notifications         Notification[]
+  auditLogs             AuditLog[]
+  activityEvents        ActivityEvent[]
+  webPushSubscriptions  WebPushSubscription[]
 
   @@map("organizations")
 }
 
 model User {
-  id                  String               @id @default(uuid()) @db.Uuid
-  authUserId          String?              @map("auth_user_id") @db.Uuid
-  organizationId      String               @map("organization_id") @db.Uuid
-  clientId            String?              @map("client_id") @db.Uuid
-  email               String               @db.VarChar(320)
-  passwordHash        String?              @map("password_hash")
-  fullName            String               @map("full_name")
-  status              UserStatus           @default(INVITED)
-  lastLoginAt         DateTime?            @map("last_login_at") @db.Timestamptz(3)
-  passwordChangedAt   DateTime?            @map("password_changed_at") @db.Timestamptz(3)
-  failedLoginAttempts Int                  @default(0) @map("failed_login_attempts")
-  lockedUntil         DateTime?            @map("locked_until") @db.Timestamptz(3)
-  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt           DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt           DateTime?            @map("deleted_at") @db.Timestamptz(3)
-  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client              Client?              @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  roles               UserRole[]
-  sessions            Session[]
-  passwordResetTokens PasswordResetToken[]
-  membership          OrganizationMember?
+  id                   String                @id @default(uuid()) @db.Uuid
+  authUserId           String?               @map("auth_user_id") @db.Uuid
+  organizationId       String                @map("organization_id") @db.Uuid
+  clientId             String?               @map("client_id") @db.Uuid
+  email                String                @db.VarChar(320)
+  passwordHash         String?               @map("password_hash")
+  fullName             String                @map("full_name")
+  status               UserStatus            @default(INVITED)
+  lastLoginAt          DateTime?             @map("last_login_at") @db.Timestamptz(3)
+  passwordChangedAt    DateTime?             @map("password_changed_at") @db.Timestamptz(3)
+  failedLoginAttempts  Int                   @default(0) @map("failed_login_attempts")
+  lockedUntil          DateTime?             @map("locked_until") @db.Timestamptz(3)
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt            DateTime?             @map("deleted_at") @db.Timestamptz(3)
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client               Client?               @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  roles                UserRole[]
+  sessions             Session[]
+  passwordResetTokens  PasswordResetToken[]
+  membership           OrganizationMember?
+  webPushSubscriptions WebPushSubscription[]
 
   @@unique([organizationId, email])
   @@index([authUserId])
@@ -626,6 +636,21 @@ model Contract {
   @@map("contracts")
 }
 
+model ServiceCatalogItem {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  name           String       @db.VarChar(160)
+  normalizedName String       @map("normalized_name") @db.VarChar(160)
+  area           String       @default("GENERAL") @db.VarChar(20)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, normalizedName])
+  @@index([organizationId, area, name])
+  @@map("service_catalog_items")
+}
+
 model Receivable {
   id                      String                  @id @default(uuid()) @db.Uuid
   organizationId          String                  @map("organization_id") @db.Uuid
@@ -684,30 +709,31 @@ model ReceivableInstallment {
 }
 
 model Payment {
-  id              String                @id @default(uuid()) @db.Uuid
-  organizationId  String                @map("organization_id") @db.Uuid
-  clientId        String                @map("client_id") @db.Uuid
-  reference       String                @db.VarChar(100)
-  status          PaymentStatus         @default(PENDING)
-  amount          Decimal               @db.Decimal(19, 4)
-  currency        String                @default("BRL") @db.Char(3)
-  paidAt          DateTime              @map("paid_at") @db.Timestamptz(3)
-  method          String                @db.VarChar(80)
-  externalId      String?               @map("external_id") @db.VarChar(160)
-  idempotencyKey  String                @map("idempotency_key") @db.VarChar(160)
-  idempotencyHash String                @map("idempotency_hash") @db.Char(64)
-  version         Int                   @default(1)
-  confirmedById   String?               @map("confirmed_by_id") @db.Uuid
-  confirmedAt     DateTime?             @map("confirmed_at") @db.Timestamptz(3)
-  reversedAt      DateTime?             @map("reversed_at") @db.Timestamptz(3)
-  metadata        Json                  @default("{}")
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt       DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization    Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client          Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  id              String                 @id @default(uuid()) @db.Uuid
+  organizationId  String                 @map("organization_id") @db.Uuid
+  clientId        String                 @map("client_id") @db.Uuid
+  reference       String                 @db.VarChar(100)
+  status          PaymentStatus          @default(PENDING)
+  amount          Decimal                @db.Decimal(19, 4)
+  currency        String                 @default("BRL") @db.Char(3)
+  paidAt          DateTime               @map("paid_at") @db.Timestamptz(3)
+  method          String                 @db.VarChar(80)
+  externalId      String?                @map("external_id") @db.VarChar(160)
+  idempotencyKey  String                 @map("idempotency_key") @db.VarChar(160)
+  idempotencyHash String                 @map("idempotency_hash") @db.Char(64)
+  version         Int                    @default(1)
+  confirmedById   String?                @map("confirmed_by_id") @db.Uuid
+  confirmedAt     DateTime?              @map("confirmed_at") @db.Timestamptz(3)
+  reversedAt      DateTime?              @map("reversed_at") @db.Timestamptz(3)
+  metadata        Json                   @default("{}")
+  createdAt       DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization    Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client          Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
   allocations     PaymentAllocation[]
   adjustments     FinancialAdjustment[]
   reversals       PaymentReversal[]
+  changeRequests  PaymentChangeRequest[]
   documents       Document[]
 
   @@unique([organizationId, reference])
@@ -730,6 +756,26 @@ model PaymentReversal {
 
   @@index([organizationId, reversedAt])
   @@map("payment_reversals")
+}
+
+model PaymentChangeRequest {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @map("organization_id") @db.Uuid
+  paymentId      String              @map("payment_id") @db.Uuid
+  createdById    String              @map("created_by_id") @db.Uuid
+  proposedData   Json                @map("proposed_data")
+  reason         String
+  status         PaymentChangeStatus @default(PENDING)
+  reviewedById   String?             @map("reviewed_by_id") @db.Uuid
+  reviewedAt     DateTime?           @map("reviewed_at") @db.Timestamptz(3)
+  reviewNote     String?             @map("review_note")
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  payment        Payment             @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, paymentId, createdAt])
+  @@map("payment_change_requests")
 }
 
 model PaymentAllocation {
@@ -1040,6 +1086,22 @@ model Notification {
 
   @@index([organizationId, userId, status, createdAt])
   @@map("notifications")
+}
+
+model WebPushSubscription {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @map("organization_id") @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  endpoint       String       @unique @db.Text
+  p256dh         String       @db.VarChar(255)
+  auth           String       @db.VarChar(255)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([organizationId, userId])
+  @@map("web_push_subscriptions")
 }
 
 model AuditLog {

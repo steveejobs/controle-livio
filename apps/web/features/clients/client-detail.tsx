@@ -1,14 +1,38 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
-import { formatDate, formatMoney } from '../shared/format';
+import { addMonths, decimalToCents, formatDate, formatMoney, splitAmount } from '../shared/format';
+import {
+  feeModelLabel,
+  formatSuccessRate,
+  normalizeMoneyInput,
+  percentageToRate,
+} from '../finance/contract-values';
 import { useApiData } from '../shared/use-api-data';
+import { ServiceSelection } from '../finance/service-selection';
 import type { ClientOverview } from './client.types';
+import { formatTaxIdField } from './tax-id-format';
 
-function ClientPanel({ title, children }: { title: string; children: React.ReactNode }) {
+const documentTypes = [
+  { category: 'CONTRATO_HONORARIOS', label: 'Contrato de honorários' },
+  { category: 'PROCURACAO', label: 'Procuração' },
+  { category: 'HIPOSSUFICIENCIA', label: 'Declaração de hipossuficiência' },
+] as const;
+
+const onboardingSteps = ['Cadastro', 'Financeiro', 'Honorários', 'Documentos'] as const;
+
+function ClientPanel({
+  title,
+  children,
+  id,
+}: {
+  title: string;
+  children: React.ReactNode;
+  id?: string;
+}) {
   return (
-    <section className="surface client-panel" data-reveal>
+    <section className="surface client-panel" data-reveal id={id}>
       <h2>{title}</h2>
       {children}
     </section>
@@ -19,19 +43,69 @@ export function ClientDetail({
   clientId,
   onBack,
   permissions,
+  startGuidedOnboarding = false,
+  onGuidedOnboardingComplete,
 }: {
   clientId: string;
   onBack: () => void;
   permissions: readonly string[];
+  startGuidedOnboarding?: boolean;
+  onGuidedOnboardingComplete?: () => void;
 }) {
   const { data, error, reload } = useApiData<ClientOverview>(`/clients/${clientId}/overview`);
+  const [onboardingStep, setOnboardingStep] = useState<number | null>(
+    startGuidedOnboarding ? 2 : null,
+  );
+  const [guidedUploadedCategories, setGuidedUploadedCategories] = useState<string[]>([]);
+  const onboardingHeadingRef = useRef<HTMLHeadingElement>(null);
   const [feedback, setFeedback] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [showReceivableForm, setShowReceivableForm] = useState(false);
+  const [showContractForm, setShowContractForm] = useState(false);
+  const [contractFeeModel, setContractFeeModel] = useState('FIXED');
+  const [documentCategory, setDocumentCategory] = useState<string>(documentTypes[0].category);
+  const [documentTitle, setDocumentTitle] = useState<string>(documentTypes[0].label);
   const canUpdateClient = permissions.includes('clients:update');
   const canAddContact = permissions.includes('clients:create');
   const canUpload = permissions.includes('documents:create');
+  const canViewDocuments = permissions.includes('documents:view');
+  const canViewContracts = permissions.includes('contracts:view');
+  const canCreateContract = permissions.includes('contracts:create');
+  const canViewReceivables = permissions.includes('receivables:view');
+  const canCreateReceivable = permissions.includes('receivables:create');
+  const canViewPayments = permissions.includes('payments:view');
   const canMessage = permissions.includes('messages:create');
   const canNote = permissions.includes('notes:create');
+  const guidedOnboarding = onboardingStep !== null;
+
+  useEffect(() => {
+    if (onboardingStep === 2 && canCreateReceivable) setShowReceivableForm(true);
+    if (onboardingStep === 3 && canCreateContract) setShowContractForm(true);
+    if (onboardingStep !== null) onboardingHeadingRef.current?.focus({ preventScroll: true });
+  }, [onboardingStep, canCreateReceivable, canCreateContract, data]);
+
+  useEffect(() => {
+    if (onboardingStep !== 4 || !data) return;
+    const completedCategories = new Set([
+      ...data.documents.map((document) => document.category),
+      ...guidedUploadedCategories,
+    ]);
+    const nextDocument = documentTypes.find(
+      (document) => !completedCategories.has(document.category),
+    );
+    if (nextDocument) {
+      setDocumentCategory(nextDocument.category);
+      setDocumentTitle(nextDocument.label);
+    } else {
+      setOnboardingStep(5);
+    }
+  }, [onboardingStep, data, guidedUploadedCategories]);
+
+  const moveToOnboardingStep = (step: number | null) => setOnboardingStep(step);
+  const finishGuidedOnboarding = () => {
+    setOnboardingStep(null);
+    onGuidedOnboardingComplete?.();
+  };
 
   const run = async (action: () => Promise<unknown>, message: string) => {
     setSaving(true);
@@ -97,7 +171,9 @@ export function ClientDetail({
           }),
         }),
       'Cadastro atualizado.',
-    );
+    ).then((succeeded) => {
+      if (succeeded && onboardingStep === 1) moveToOnboardingStep(2);
+    });
   };
 
   const addContact = (event: FormEvent<HTMLFormElement>) => {
@@ -122,6 +198,94 @@ export function ClientDetail({
     });
   };
 
+  const createContract = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const target = event.currentTarget;
+    const form = new FormData(target);
+    const feeModel = String(form.get('feeModel'));
+    void run(
+      () =>
+        api('/finance/contracts', {
+          method: 'POST',
+          body: JSON.stringify({
+            clientId,
+            number: String(form.get('number') || '').trim(),
+            title: String(form.get('title') || '').trim(),
+            feeModel,
+            fixedAmount: normalizeMoneyInput(String(form.get('fixedAmount') || '')),
+            successRate:
+              feeModel === 'SUCCESS' || feeModel === 'MIXED'
+                ? percentageToRate(String(form.get('successRate') || ''))
+                : undefined,
+            currency: 'BRL',
+            serviceNames: form
+              .getAll('serviceNames')
+              .filter((value): value is string => typeof value === 'string'),
+            startsAt: form.get('startsAt') || undefined,
+            endsAt: form.get('endsAt') || undefined,
+          }),
+        }),
+      'Contrato de honorários cadastrado.',
+    ).then((succeeded) => {
+      if (succeeded) {
+        target.reset();
+        setContractFeeModel('FIXED');
+        setShowContractForm(false);
+        if (onboardingStep === 3) moveToOnboardingStep(4);
+      }
+    });
+  };
+
+  const createReceivable = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const target = event.currentTarget;
+    const form = new FormData(target);
+    try {
+      const originalAmount = normalizeMoneyInput(String(form.get('total') || ''));
+      if (!originalAmount || decimalToCents(originalAmount) <= 0n) {
+        throw new Error('Informe um valor maior que zero.');
+      }
+      const issueDate = String(form.get('issueDate') || '');
+      const firstDueDate = String(form.get('firstDueDate') || '');
+      const installmentCount = Number(form.get('installmentCount'));
+      const installments = splitAmount(originalAmount, '', installmentCount).map(
+        (amount, index) => ({
+          sequence: index + 1,
+          amount,
+          dueDate: addMonths(firstDueDate, index),
+        }),
+      );
+      const contractId = String(form.get('contractId') || '');
+      void run(
+        () =>
+          api('/finance/receivables', {
+            method: 'POST',
+            body: JSON.stringify({
+              clientId,
+              reference: String(form.get('reference') || '').trim(),
+              description: String(form.get('description') || '').trim(),
+              originalAmount,
+              currency: 'BRL',
+              issueDate,
+              installments,
+              ...(contractId ? { contractId } : {}),
+            }),
+          }),
+        'Cobrança e parcelas cadastradas.',
+      ).then((succeeded) => {
+        if (succeeded) {
+          target.reset();
+          setShowReceivableForm(false);
+          if (onboardingStep === 2) moveToOnboardingStep(3);
+        }
+      });
+    } catch (caught) {
+      setFeedback(
+        `Erro: ${caught instanceof Error ? caught.message : 'informe valores e vencimento válidos.'}`,
+      );
+    }
+  };
+
   const addText = (event: FormEvent<HTMLFormElement>, kind: 'message' | 'note') => {
     event.preventDefault();
     const target = event.currentTarget;
@@ -135,7 +299,7 @@ export function ClientDetail({
     });
   };
 
-  const uploadReceipt = (event: FormEvent<HTMLFormElement>) => {
+  const uploadClientDocument = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const target = event.currentTarget;
     const source = new FormData(target);
@@ -144,16 +308,25 @@ export function ClientDetail({
     const payload = new FormData();
     payload.set('file', file);
     payload.set('title', String(source.get('title')));
-    payload.set('category', 'COMPROVANTE');
-    payload.set('visibility', source.get('visibility') === 'CLIENT' ? 'CLIENT' : 'INTERNAL');
+    const category = String(source.get('category'));
+    payload.set('category', category);
+    payload.set('visibility', 'INTERNAL');
     payload.set('clientId', clientId);
-    const paymentId = String(source.get('paymentId') || '');
-    if (paymentId) payload.set('paymentId', paymentId);
+    const contractId = String(source.get('contractId') || '');
+    if (category === 'CONTRATO_HONORARIOS' && contractId) payload.set('contractId', contractId);
     void run(
       () => api('/documents', { method: 'POST', body: payload }),
-      'Comprovante anexado.',
+      'Documento anexado com acesso interno.',
     ).then((succeeded) => {
-      if (succeeded) target.reset();
+      if (succeeded) {
+        target.reset();
+        if (onboardingStep === 4) {
+          setGuidedUploadedCategories((current) => [...new Set([...current, category])]);
+        } else {
+          setDocumentCategory(documentTypes[0].category);
+          setDocumentTitle(documentTypes[0].label);
+        }
+      }
     });
   };
 
@@ -174,7 +347,13 @@ export function ClientDetail({
         <div>
           <p>Cliente</p>
           <h1>{data.client.displayName}</h1>
-          <span>Cadastro, contatos, financeiro, comprovantes e comunicação em um só lugar.</span>
+          <span>
+            {data.client.type === 'COMPANY' ? 'Pessoa jurídica' : 'Pessoa física'}
+            {data.client.taxIdNormalized
+              ? ` · ${formatTaxIdField(data.client.taxIdNormalized, data.client.type)}`
+              : ''}
+            {' · '}Dados, financeiro e documentos do cliente em um só lugar.
+          </span>
         </div>
         <button className="secondary compact-action" onClick={onBack}>
           Voltar à lista
@@ -189,322 +368,711 @@ export function ClientDetail({
         </div>
       )}
 
-      <div className="client-grid">
-        <ClientPanel title="Dados do cliente">
-          <form className="stack-form" onSubmit={edit}>
-            <label>
-              Nome
-              <input
-                name="displayName"
-                required
-                disabled={!canUpdateClient}
-                defaultValue={data.client.displayName}
-              />
-            </label>
-            <label>
-              Razão social
-              <input
-                name="legalName"
-                disabled={!canUpdateClient}
-                defaultValue={data.client.legalName}
-              />
-            </label>
-            <label>
-              E-mail
-              <input
-                name="email"
-                type="email"
-                disabled={!canUpdateClient}
-                defaultValue={data.client.email}
-              />
-            </label>
-            <label>
-              Telefone
-              <input name="phone" disabled={!canUpdateClient} defaultValue={data.client.phone} />
-            </label>
-            <label>
-              Origem
-              <input name="source" disabled={!canUpdateClient} defaultValue={data.client.source} />
-            </label>
-            <fieldset className="optional-address">
-              <legend>
-                Endereço <span>(opcional)</span>
-              </legend>
-              <div className="stack-form">
-                <label>
-                  Logradouro
-                  <input
-                    name="address.street"
-                    autoComplete="street-address"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.street}
-                  />
-                </label>
-                <label>
-                  Número
-                  <input
-                    name="address.number"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.number}
-                  />
-                </label>
-                <label>
-                  Complemento
-                  <input
-                    name="address.complement"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.complement}
-                  />
-                </label>
-                <label>
-                  Bairro
-                  <input
-                    name="address.district"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.district}
-                  />
-                </label>
-                <label>
-                  Cidade
-                  <input
-                    name="address.city"
-                    autoComplete="address-level2"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.city}
-                  />
-                </label>
-                <label>
-                  Estado (UF)
-                  <input
-                    name="address.state"
-                    maxLength={2}
-                    autoComplete="address-level1"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.state}
-                  />
-                </label>
-                <label>
-                  CEP
-                  <input
-                    name="address.postalCode"
-                    inputMode="numeric"
-                    autoComplete="postal-code"
-                    disabled={!canUpdateClient}
-                    defaultValue={data.client.address?.postalCode}
-                  />
-                </label>
-              </div>
-            </fieldset>
-            {canUpdateClient && (
-              <button className="primary" disabled={saving}>
-                Salvar alterações
-              </button>
-            )}
-          </form>
-        </ClientPanel>
-
-        <ClientPanel title="Contatos">
-          <div className="record-list">
-            {data.contacts.length ? (
-              data.contacts.map((item) => (
-                <article key={item.id}>
-                  <strong>
-                    {item.name}
-                    {item.isPrimary ? ' · principal' : ''}
-                  </strong>
-                  <span>
-                    {item.role || 'Contato'} · {item.email || item.phone || 'Sem canal informado'}
-                  </span>
-                </article>
-              ))
-            ) : (
-              <p className="section-note">Nenhuma outra pessoa vinculada a este cliente.</p>
-            )}
+      {guidedOnboarding && (
+        <section
+          className="client-onboarding"
+          id="client-onboarding"
+          aria-label="Fluxo de cadastro"
+        >
+          <ol className="client-onboarding-progress">
+            {onboardingSteps.map((label, index) => {
+              const step = index + 1;
+              const complete = onboardingStep === 5 || onboardingStep! > step;
+              const active = onboardingStep === step;
+              return (
+                <li
+                  className={complete ? 'is-complete' : active ? 'is-current' : ''}
+                  aria-current={active ? 'step' : undefined}
+                  key={label}
+                >
+                  <span>{complete ? '✓' : step}</span>
+                  <b>{label}</b>
+                </li>
+              );
+            })}
+          </ol>
+          <div aria-live="polite">
+            <h2 ref={onboardingHeadingRef} tabIndex={-1}>
+              {onboardingStep === 5
+                ? 'Fluxo inicial concluído'
+                : `Etapa ${onboardingStep}: ${onboardingSteps[onboardingStep! - 1]}`}
+            </h2>
+            <p>
+              {onboardingStep === 5
+                ? 'Cadastro, financeiro, honorários e documentos foram organizados. Você pode abrir a ficha completa para continuar o atendimento.'
+                : 'Preencha esta etapa e o fluxo seguirá automaticamente para a próxima.'}
+            </p>
           </div>
-          {canAddContact && (
-            <details className="optional-fields contact-entry">
-              <summary>Adicionar outra pessoa</summary>
-              <p className="section-note">
-                O telefone e o e-mail do próprio cliente ficam no cadastro acima. Use este
-                formulário para alguém ligado a ele, como representante, familiar ou responsável
-                financeiro.
-              </p>
-              <form className="stack-form compact-form" onSubmit={addContact}>
-                <label>
-                  Nome da pessoa
-                  <input required name="name" autoComplete="name" />
-                </label>
-                <label>
-                  Relação ou função
-                  <input name="role" placeholder="Ex.: representante legal" />
-                </label>
-                <label>
-                  E-mail
-                  <input name="email" type="email" autoComplete="email" />
-                </label>
-                <label>
-                  Telefone
-                  <input name="phone" autoComplete="tel" />
-                </label>
-                <label className="check">
-                  <input name="isPrimary" type="checkbox" /> Contato principal
-                </label>
-                <button className="secondary" disabled={saving}>
-                  Salvar contato
-                </button>
-              </form>
-            </details>
+          {onboardingStep === 5 && (
+            <button className="primary" type="button" onClick={finishGuidedOnboarding}>
+              Abrir ficha completa
+            </button>
           )}
-        </ClientPanel>
-      </div>
+        </section>
+      )}
 
-      <ClientPanel title="Financeiro do cliente">
-        <div className="summary-strip">
-          <span>
-            <b>{data.financial.receivables.length}</b> recebíveis
-          </span>
-          <span>
-            <b>{data.financial.payments.length}</b> pagamentos
-          </span>
-          <span>
-            <b>{data.documents.length}</b> documentos
-          </span>
-        </div>
-        <div className="table-wrap embedded-table">
-          <table>
-            <thead>
-              <tr>
-                <th>Referência</th>
-                <th>Valor</th>
-                <th>Vencimento</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.financial.receivables.map((item) => (
-                <tr key={item.id}>
-                  <td>{item.reference}</td>
-                  <td>{formatMoney(item.originalAmount, item.currency)}</td>
-                  <td>{formatDate(item.dueDate)}</td>
-                  <td>
-                    <span className="badge">{item.status}</span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </ClientPanel>
+      {!guidedOnboarding && (
+        <nav className="client-flow-nav" aria-label="Etapas do cadastro do cliente">
+          <a href="#dados-cliente">
+            <b>1</b> Cadastro
+          </a>
+          <a href="#financeiro-cliente">
+            <b>2</b> Financeiro
+          </a>
+          <a href="#honorarios-cliente">
+            <b>3</b> Honorários
+          </a>
+          <a href="#documentos-cliente">
+            <b>4</b> Documentos
+          </a>
+        </nav>
+      )}
 
-      <div className="client-grid">
-        <ClientPanel title="Comprovantes e documentos">
-          <div className="record-list">
-            {data.documents.map((item) => (
-              <button
-                className="record-button"
-                key={item.id}
-                onClick={() => void openDocument(item.id)}
-              >
-                <strong>{item.title}</strong>
-                <span>
-                  {item.category || 'Documento'} ·{' '}
-                  {item.visibility === 'CLIENT' ? 'visível ao cliente' : 'interno'}
-                </span>
-              </button>
-            ))}
-          </div>
-          {canUpload && (
-            <form className="stack-form compact-form" onSubmit={uploadReceipt}>
+      {(!guidedOnboarding || onboardingStep === 1) && (
+        <div className="client-grid">
+          <ClientPanel id="dados-cliente" title="Dados do cliente">
+            <form className="stack-form" onSubmit={edit}>
               <label>
-                Título
-                <input name="title" required placeholder="Comprovante de pagamento" />
-              </label>
-              <label>
-                Pagamento
-                <select name="paymentId" defaultValue="">
-                  <option value="">Sem vínculo específico</option>
-                  {data.financial.payments.map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.reference} · {formatMoney(item.amount, item.currency)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Visibilidade
-                <select name="visibility" defaultValue="CLIENT">
-                  <option value="CLIENT">Cliente pode visualizar</option>
-                  <option value="INTERNAL">Somente equipe</option>
-                </select>
-              </label>
-              <label>
-                Arquivo
+                {data.client.type === 'COMPANY' ? 'Nome da empresa' : 'Nome completo'}
                 <input
-                  name="file"
+                  name="displayName"
                   required
-                  type="file"
-                  accept="application/pdf,image/png,image/jpeg,.docx"
+                  disabled={!canUpdateClient}
+                  defaultValue={data.client.displayName}
                 />
               </label>
-              <button className="secondary" disabled={saving}>
-                Anexar comprovante
-              </button>
+              {data.client.type === 'COMPANY' && (
+                <label>
+                  Razão social
+                  <input
+                    name="legalName"
+                    disabled={!canUpdateClient}
+                    defaultValue={data.client.legalName}
+                  />
+                </label>
+              )}
+              <label>
+                E-mail
+                <input
+                  name="email"
+                  type="email"
+                  disabled={!canUpdateClient}
+                  defaultValue={data.client.email}
+                />
+              </label>
+              <label>
+                Telefone
+                <input name="phone" disabled={!canUpdateClient} defaultValue={data.client.phone} />
+              </label>
+              <label>
+                Origem do cliente (opcional)
+                <input
+                  name="source"
+                  disabled={!canUpdateClient}
+                  defaultValue={data.client.source}
+                />
+              </label>
+              <fieldset className="optional-address">
+                <legend>
+                  Endereço <span>(opcional)</span>
+                </legend>
+                <div className="stack-form">
+                  <label>
+                    Logradouro
+                    <input
+                      name="address.street"
+                      autoComplete="street-address"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.street}
+                    />
+                  </label>
+                  <label>
+                    Número
+                    <input
+                      name="address.number"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.number}
+                    />
+                  </label>
+                  <label>
+                    Complemento
+                    <input
+                      name="address.complement"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.complement}
+                    />
+                  </label>
+                  <label>
+                    Bairro
+                    <input
+                      name="address.district"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.district}
+                    />
+                  </label>
+                  <label>
+                    Cidade
+                    <input
+                      name="address.city"
+                      autoComplete="address-level2"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.city}
+                    />
+                  </label>
+                  <label>
+                    Estado (UF)
+                    <input
+                      name="address.state"
+                      maxLength={2}
+                      autoComplete="address-level1"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.state}
+                    />
+                  </label>
+                  <label>
+                    CEP
+                    <input
+                      name="address.postalCode"
+                      inputMode="numeric"
+                      autoComplete="postal-code"
+                      disabled={!canUpdateClient}
+                      defaultValue={data.client.address?.postalCode}
+                    />
+                  </label>
+                </div>
+              </fieldset>
+              {canUpdateClient && (
+                <button className="primary" disabled={saving}>
+                  Salvar alterações
+                </button>
+              )}
             </form>
+          </ClientPanel>
+
+          <ClientPanel title="Contatos">
+            <div className="record-list">
+              {data.contacts.length ? (
+                data.contacts.map((item) => (
+                  <article key={item.id}>
+                    <strong>
+                      {item.name}
+                      {item.isPrimary ? ' · principal' : ''}
+                    </strong>
+                    <span>
+                      {item.role || 'Contato'} · {item.email || item.phone || 'Sem canal informado'}
+                    </span>
+                  </article>
+                ))
+              ) : (
+                <p className="section-note">Nenhuma outra pessoa vinculada a este cliente.</p>
+              )}
+            </div>
+            {canAddContact && (
+              <details className="optional-fields contact-entry">
+                <summary>Adicionar outra pessoa</summary>
+                <p className="section-note">
+                  O telefone e o e-mail do próprio cliente ficam no cadastro acima. Use este
+                  formulário para alguém ligado a ele, como representante, familiar ou responsável
+                  financeiro.
+                </p>
+                <form className="stack-form compact-form" onSubmit={addContact}>
+                  <label>
+                    Nome da pessoa
+                    <input required name="name" autoComplete="name" />
+                  </label>
+                  <label>
+                    Relação ou função
+                    <input name="role" placeholder="Ex.: representante legal" />
+                  </label>
+                  <label>
+                    E-mail
+                    <input name="email" type="email" autoComplete="email" />
+                  </label>
+                  <label>
+                    Telefone
+                    <input name="phone" autoComplete="tel" />
+                  </label>
+                  <label className="check">
+                    <input name="isPrimary" type="checkbox" /> Contato principal
+                  </label>
+                  <button className="secondary" disabled={saving}>
+                    Salvar contato
+                  </button>
+                </form>
+              </details>
+            )}
+          </ClientPanel>
+        </div>
+      )}
+
+      {(!guidedOnboarding || onboardingStep === 2) && (
+        <ClientPanel id="financeiro-cliente" title="Financeiro do cliente">
+          <div className="summary-strip">
+            {!canViewReceivables ? (
+              <span className="balance-summary">
+                <small>Saldo em aberto</small>
+                <b>Sem permissão de consulta</b>
+              </span>
+            ) : data.financial.outstanding.length ? (
+              data.financial.outstanding.map((item) => (
+                <span className="balance-summary" key={item.currency}>
+                  <small>Em aberto</small>
+                  <b>{formatMoney(item.amount, item.currency)}</b>
+                </span>
+              ))
+            ) : (
+              <span className="balance-summary">
+                <small>Em aberto</small>
+                <b>R$ 0,00</b>
+              </span>
+            )}
+            <span>
+              <b>{canViewReceivables ? data.financial.receivables.length : '—'}</b> recebíveis
+            </span>
+            <span>
+              <b>{canViewPayments ? data.financial.payments.length : '—'}</b> pagamentos
+            </span>
+            <span>
+              <b>{canViewDocuments ? data.documents.length : '—'}</b> documentos
+            </span>
+          </div>
+          {canCreateReceivable && (
+            <>
+              <button
+                className="secondary"
+                type="button"
+                aria-expanded={showReceivableForm}
+                onClick={() => setShowReceivableForm((value) => !value)}
+              >
+                {showReceivableForm ? 'Fechar cobrança' : 'Registrar valor a receber'}
+              </button>
+              {showReceivableForm && (
+                <form
+                  className="form-grid compact-form receivable-entry"
+                  onSubmit={createReceivable}
+                >
+                  <label>
+                    Referência da cobrança
+                    <input name="reference" required maxLength={80} placeholder="HON-2026-001" />
+                  </label>
+                  <label>
+                    O que está sendo cobrado
+                    <input
+                      name="description"
+                      required
+                      minLength={2}
+                      maxLength={500}
+                      defaultValue={`Honorários — ${data.client.displayName}`}
+                    />
+                  </label>
+                  <label>
+                    Valor total (R$)
+                    <input name="total" required inputMode="decimal" placeholder="1.500,00" />
+                  </label>
+                  <label>
+                    Quantidade de parcelas
+                    <input
+                      name="installmentCount"
+                      required
+                      type="number"
+                      min={1}
+                      max={240}
+                      step={1}
+                      defaultValue={1}
+                    />
+                  </label>
+                  <label>
+                    Data de emissão
+                    <input name="issueDate" required type="date" />
+                  </label>
+                  <label>
+                    Vencimento da primeira parcela
+                    <input name="firstDueDate" required type="date" />
+                  </label>
+                  {canViewContracts && data.contracts.length > 0 && (
+                    <label>
+                      Contrato relacionado
+                      <select
+                        key={data.contracts.length}
+                        name="contractId"
+                        defaultValue={data.contracts.length === 1 ? data.contracts[0]!.id : ''}
+                      >
+                        <option value="">Sem vínculo específico</option>
+                        {data.contracts.map((contract) => (
+                          <option value={contract.id} key={contract.id}>
+                            {contract.number} · {contract.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <p className="section-note form-wide">
+                    As parcelas são divididas em centavos e distribuídas mensalmente a partir do
+                    primeiro vencimento.
+                  </p>
+                  <button className="primary form-wide" disabled={saving}>
+                    {saving ? 'Salvando…' : 'Salvar cobrança'}
+                  </button>
+                </form>
+              )}
+            </>
+          )}
+          {!canViewReceivables ? (
+            <p className="section-note">
+              Você não tem permissão para consultar o financeiro deste cliente.
+            </p>
+          ) : data.financial.receivables.length ? (
+            <div className="table-wrap embedded-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Referência</th>
+                    <th>Valor original</th>
+                    <th>Vencimento</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.financial.receivables.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.reference}</td>
+                      <td>{formatMoney(item.originalAmount, item.currency)}</td>
+                      <td>{formatDate(item.dueDate)}</td>
+                      <td>
+                        <span className="badge">{item.status}</span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="section-note">Ainda não há cobranças ou recebimentos vinculados.</p>
+          )}
+          {guidedOnboarding && onboardingStep === 2 && (
+            <div className="client-onboarding-actions">
+              <button className="secondary" type="button" onClick={() => moveToOnboardingStep(1)}>
+                Voltar ao cadastro
+              </button>
+              <button className="primary" type="button" onClick={() => moveToOnboardingStep(3)}>
+                Continuar para honorários
+              </button>
+            </div>
           )}
         </ClientPanel>
+      )}
 
-        <ClientPanel title="Observações para o cliente">
-          <p className="section-note">Este conteúdo fica visível no portal do cliente.</p>
-          {canMessage && (
-            <form className="stack-form" onSubmit={(event) => addText(event, 'message')}>
-              <label>
-                Nova observação
-                <textarea name="body" required maxLength={20000} rows={4} />
+      {(!guidedOnboarding || onboardingStep === 3) && (
+        <ClientPanel id="honorarios-cliente" title="Contrato de honorários">
+          {canViewContracts && data.contracts.length ? (
+            <div className="record-list">
+              {data.contracts.map((contract) => (
+                <article key={contract.id}>
+                  <strong>
+                    {contract.number} · {contract.title}
+                  </strong>
+                  <span>
+                    {feeModelLabel(contract.feeModel)} ·{' '}
+                    {contract.feeModel === 'SUCCESS'
+                      ? `${formatSuccessRate(contract.successRate)}% do êxito`
+                      : formatMoney(contract.fixedAmount, contract.currency)}
+                    {contract.feeModel === 'MIXED' && contract.successRate
+                      ? ` + ${formatSuccessRate(contract.successRate)}% do êxito`
+                      : ''}{' '}
+                    · {contract.status}
+                  </span>
+                  {(contract.terms?.services?.length || contract.serviceName) && (
+                    <small>
+                      Serviços: {contract.terms?.services?.join(', ') ?? contract.serviceName}
+                    </small>
+                  )}
+                </article>
+              ))}
+            </div>
+          ) : canViewContracts ? (
+            <p className="section-note">Nenhum contrato cadastrado para este cliente.</p>
+          ) : null}
+          <p className="section-note">
+            Os dados e valores ficam vinculados à ficha do cliente. A geração automática do modelo
+            do contrato será feita na próxima etapa.
+          </p>
+          {canCreateContract && (
+            <>
+              <button
+                className="secondary"
+                type="button"
+                aria-expanded={showContractForm}
+                onClick={() => {
+                  setShowContractForm((value) => !value);
+                  setContractFeeModel('FIXED');
+                }}
+              >
+                {showContractForm ? 'Fechar formulário' : 'Novo contrato de honorários'}
+              </button>
+              {showContractForm && (
+                <form className="form-grid compact-form contract-entry" onSubmit={createContract}>
+                  <label>
+                    Número do contrato
+                    <input name="number" required maxLength={80} />
+                  </label>
+                  <label>
+                    Nome do contrato
+                    <input
+                      name="title"
+                      required
+                      minLength={2}
+                      defaultValue={`Honorários — ${data.client.displayName}`}
+                    />
+                  </label>
+                  <label>
+                    Modelo de honorários
+                    <select
+                      name="feeModel"
+                      value={contractFeeModel}
+                      onChange={(event) => setContractFeeModel(event.target.value)}
+                    >
+                      <option value="FIXED">Valor fixo</option>
+                      <option value="HOURLY">Por hora</option>
+                      <option value="SUCCESS">Êxito</option>
+                      <option value="MIXED">Misto</option>
+                    </select>
+                  </label>
+                  {contractFeeModel !== 'SUCCESS' && (
+                    <label>
+                      {contractFeeModel === 'HOURLY' ? 'Valor por hora (R$)' : 'Valor fixo (R$)'}
+                      <input
+                        name="fixedAmount"
+                        inputMode="decimal"
+                        placeholder="1.500,00"
+                        required
+                      />
+                    </label>
+                  )}
+                  {(contractFeeModel === 'SUCCESS' || contractFeeModel === 'MIXED') && (
+                    <label>
+                      Percentual de êxito
+                      <input
+                        name="successRate"
+                        inputMode="decimal"
+                        placeholder="Ex.: 15"
+                        required
+                      />
+                    </label>
+                  )}
+                  <ServiceSelection disabled={saving} />
+                  <label>
+                    Início da vigência (opcional)
+                    <input name="startsAt" type="date" />
+                  </label>
+                  <label>
+                    Fim da vigência (opcional)
+                    <input name="endsAt" type="date" />
+                  </label>
+                  <button className="primary form-wide" disabled={saving}>
+                    {saving ? 'Salvando…' : 'Salvar contrato'}
+                  </button>
+                </form>
+              )}
+            </>
+          )}
+          {guidedOnboarding && onboardingStep === 3 && (
+            <div className="client-onboarding-actions">
+              <button className="secondary" type="button" onClick={() => moveToOnboardingStep(2)}>
+                Voltar ao financeiro
+              </button>
+              <button className="primary" type="button" onClick={() => moveToOnboardingStep(4)}>
+                Continuar para documentos
+              </button>
+            </div>
+          )}
+        </ClientPanel>
+      )}
+
+      <div className="client-grid">
+        {(!guidedOnboarding || onboardingStep === 4) && (
+          <ClientPanel id="documentos-cliente" title="Documentos do cliente">
+            <p className="section-note">
+              Anexe os arquivos existentes. Eles ficam restritos à equipe; os modelos preenchidos
+              automaticamente entram na próxima etapa.
+            </p>
+            <div className="document-checklist">
+              {documentTypes.map((required) => {
+                const matchingDocuments = data.documents.filter(
+                  (document) => document.category === required.category,
+                );
+                return (
+                  <div className="document-check-item" key={required.category}>
+                    <span>
+                      <strong>{required.label}</strong>
+                      <small>
+                        {canViewDocuments
+                          ? matchingDocuments.length
+                            ? `${matchingDocuments.length} arquivo(s) anexado(s)`
+                            : 'Pendente'
+                          : 'Consulta de documentos indisponível'}
+                      </small>
+                    </span>
+                    <b className={matchingDocuments.length ? 'badge badge-done' : 'badge'}>
+                      {canViewDocuments
+                        ? matchingDocuments.length
+                          ? 'Recebido'
+                          : 'Pendente'
+                        : '—'}
+                    </b>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="record-list">
+              {data.documents.map((item) => (
+                <button
+                  className="record-button"
+                  key={item.id}
+                  onClick={() => void openDocument(item.id)}
+                >
+                  <strong>{item.title}</strong>
+                  <span>
+                    {item.category || 'Documento'} ·{' '}
+                    {item.visibility === 'CLIENT' ? 'visível ao cliente' : 'interno'}
+                  </span>
+                </button>
+              ))}
+            </div>
+            {canUpload && (
+              <form className="stack-form compact-form" onSubmit={uploadClientDocument}>
+                <label>
+                  Tipo de documento
+                  <select
+                    name="category"
+                    value={documentCategory}
+                    onChange={(event) => {
+                      const nextCategory = event.target.value;
+                      setDocumentCategory(nextCategory);
+                      setDocumentTitle(
+                        documentTypes.find((item) => item.category === nextCategory)?.label ??
+                          'Documento do cliente',
+                      );
+                    }}
+                  >
+                    {documentTypes.map((item) => (
+                      <option key={item.category} value={item.category}>
+                        {item.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  Nome do documento
+                  <input
+                    name="title"
+                    required
+                    minLength={2}
+                    maxLength={240}
+                    value={documentTitle}
+                    onChange={(event) => setDocumentTitle(event.target.value)}
+                  />
+                </label>
+                {documentCategory === 'CONTRATO_HONORARIOS' && canViewContracts && (
+                  <label>
+                    Contrato relacionado
+                    <select
+                      key={data.contracts.length}
+                      name="contractId"
+                      defaultValue={data.contracts.length === 1 ? data.contracts[0]!.id : ''}
+                    >
+                      <option value="">Sem vínculo específico</option>
+                      {data.contracts.map((contract) => (
+                        <option value={contract.id} key={contract.id}>
+                          {contract.number} · {contract.title}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label>
+                  Arquivo
+                  <input
+                    name="file"
+                    required
+                    type="file"
+                    accept="application/pdf,image/png,image/jpeg,.docx"
+                  />
+                </label>
+                <button className="secondary" disabled={saving}>
+                  Anexar documento
+                </button>
+              </form>
+            )}
+          </ClientPanel>
+        )}
+
+        {!guidedOnboarding && (
+          <ClientPanel title="Observações para o cliente">
+            <p className="section-note">Este conteúdo fica visível no portal do cliente.</p>
+            {canMessage && (
+              <form className="stack-form" onSubmit={(event) => addText(event, 'message')}>
+                <label>
+                  Nova observação
+                  <textarea name="body" required maxLength={20000} rows={4} />
+                </label>
+                <button className="primary" disabled={saving}>
+                  Publicar observação
+                </button>
+              </form>
+            )}
+            <div className="record-list">
+              {data.clientMessages.map((item) => (
+                <article key={item.id}>
+                  <strong>{formatDate(item.publishedAt)}</strong>
+                  <span>{item.body}</span>
+                </article>
+              ))}
+            </div>
+          </ClientPanel>
+        )}
+      </div>
+
+      {guidedOnboarding && onboardingStep === 4 && (
+        <div className="client-onboarding-actions">
+          <button className="secondary" type="button" onClick={() => moveToOnboardingStep(3)}>
+            Voltar aos honorários
+          </button>
+          <button className="primary" type="button" onClick={finishGuidedOnboarding}>
+            Concluir por agora
+          </button>
+        </div>
+      )}
+
+      {!guidedOnboarding && (
+        <ClientPanel title="Notas internas da equipe">
+          <p className="section-note">Nunca são exibidas ao cliente.</p>
+          {canNote && (
+            <form className="inline-note" onSubmit={(event) => addText(event, 'note')}>
+              <label className="sr-only" htmlFor="internal-note">
+                Nova nota interna
               </label>
-              <button className="primary" disabled={saving}>
-                Publicar observação
+              <textarea
+                id="internal-note"
+                name="body"
+                required
+                rows={3}
+                placeholder="Registre uma informação interna…"
+              />
+              <button className="secondary" disabled={saving}>
+                Salvar nota
               </button>
             </form>
           )}
           <div className="record-list">
-            {data.clientMessages.map((item) => (
+            {data.internalNotes.map((item) => (
               <article key={item.id}>
-                <strong>{formatDate(item.publishedAt)}</strong>
+                <strong>{formatDate(item.createdAt)}</strong>
                 <span>{item.body}</span>
               </article>
             ))}
           </div>
         </ClientPanel>
-      </div>
-
-      <ClientPanel title="Notas internas da equipe">
-        <p className="section-note">Nunca são exibidas ao cliente.</p>
-        {canNote && (
-          <form className="inline-note" onSubmit={(event) => addText(event, 'note')}>
-            <label className="sr-only" htmlFor="internal-note">
-              Nova nota interna
-            </label>
-            <textarea
-              id="internal-note"
-              name="body"
-              required
-              rows={3}
-              placeholder="Registre uma informação interna…"
-            />
-            <button className="secondary" disabled={saving}>
-              Salvar nota
-            </button>
-          </form>
-        )}
-        <div className="record-list">
-          {data.internalNotes.map((item) => (
-            <article key={item.id}>
-              <strong>{formatDate(item.createdAt)}</strong>
-              <span>{item.body}</span>
-            </article>
-          ))}
-        </div>
-      </ClientPanel>
+      )}
     </section>
   );
 }

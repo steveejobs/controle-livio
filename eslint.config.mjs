@@ -25,6 +25,14 @@ export default tseslint.config(
     languageOptions: { globals: globals.node },
   },
   {
+    files: ['apps/web/public/sw.js'],
+    languageOptions: { globals: globals.serviceworker },
+  },
+  {
+    files: ['apps/web/public/pwa-install.js'],
+    languageOptions: { globals: globals.browser },
+  },
+  {
     files: ['apps/api/**/*.ts'],
     rules: {
       // Nest usa metadados de decorators em runtime para injeção de dependência.

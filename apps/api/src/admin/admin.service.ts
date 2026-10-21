@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@livio/db';
 import {
   initialRolePermissions,
   systemRoleKeys,
@@ -8,7 +9,30 @@ import {
 import { SupabaseAdminService } from '../auth/supabase-admin.service';
 import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
-import type { CreateRoleInput, CreateUserInput, UserStatusInput } from './admin.schemas';
+import type {
+  AccessAlertSettingsInput,
+  CreateRoleInput,
+  CreateUserInput,
+  UserStatusInput,
+} from './admin.schemas';
+
+const defaultAccessAlerts: AccessAlertSettingsInput = { enabled: false, times: ['09:00'] };
+
+function settingsObject(value: Prisma.JsonValue): Record<string, Prisma.JsonValue> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, Prisma.JsonValue>)
+    : {};
+}
+
+function readAccessAlerts(settings: Record<string, Prisma.JsonValue>): AccessAlertSettingsInput {
+  const value = settings.accessAlerts;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return defaultAccessAlerts;
+  const candidate = value as Record<string, Prisma.JsonValue>;
+  const times = Array.isArray(candidate.times)
+    ? candidate.times.filter((time): time is string => typeof time === 'string')
+    : defaultAccessAlerts.times;
+  return { enabled: candidate.enabled === true, times };
+}
 
 @Injectable()
 export class AdminService {
@@ -182,6 +206,51 @@ export class AdminService {
       where: { organizationId: actor.organizationId },
       include: { permissions: { include: { permission: true } } },
       orderBy: { name: 'asc' },
+    });
+  }
+
+  async getAccessAlertSettings(actor: AuthenticatedActor) {
+    if (!actor.isAdministrator) throw new ForbiddenException('Acesso exclusivo para Administrador');
+    const organization = await this.prisma.organization.findUniqueOrThrow({
+      where: { id: actor.organizationId },
+      select: { settings: true, timezone: true },
+    });
+    return {
+      ...readAccessAlerts(settingsObject(organization.settings)),
+      timezone: organization.timezone,
+    };
+  }
+
+  async updateAccessAlertSettings(actor: AuthenticatedActor, input: AccessAlertSettingsInput) {
+    if (!actor.isAdministrator) throw new ForbiddenException('Acesso exclusivo para Administrador');
+    return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM organizations WHERE id = ${actor.organizationId}::uuid FOR UPDATE`;
+      const organization = await transaction.organization.findUniqueOrThrow({
+        where: { id: actor.organizationId },
+        select: { settings: true, timezone: true },
+      });
+      const settings = settingsObject(organization.settings);
+      const before = readAccessAlerts(settings);
+      const after = {
+        enabled: input.enabled,
+        times: [...input.times].sort(),
+        ...(input.enabled ? { lastDigestAt: new Date().toISOString() } : {}),
+      };
+      await transaction.organization.update({
+        where: { id: actor.organizationId },
+        data: { settings: { ...settings, accessAlerts: after } as Prisma.InputJsonValue },
+      });
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'organization',
+        resourceId: actor.organizationId,
+        before: { accessAlerts: before },
+        after: { accessAlerts: input },
+      });
+      return { ...input, times: after.times, timezone: organization.timezone };
     });
   }
 

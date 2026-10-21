@@ -133,7 +133,7 @@ export function Tasks({ permissions }: { permissions: readonly string[] }) {
       {showForm && canCreate && (
         <form className="surface form-grid" onSubmit={create}>
           <label>
-            Título
+            O que precisa ser feito
             <input name="title" required minLength={2} />
           </label>
           <label>
@@ -151,7 +151,7 @@ export function Tasks({ permissions }: { permissions: readonly string[] }) {
             <input name="dueAt" type="datetime-local" />
           </label>
           <label className="form-wide">
-            Descrição
+            Detalhes da tarefa (opcional)
             <textarea name="description" rows={3} maxLength={10_000} />
           </label>
           <button className="primary form-wide" disabled={busy}>

@@ -2,9 +2,16 @@
 
 import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
+import {
+  feeModelLabel,
+  formatSuccessRate,
+  normalizeMoneyInput,
+  percentageToRate,
+} from './contract-values';
 import { formatDate, formatMoney } from '../shared/format';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
+import { ServiceSelection } from './service-selection';
 
 type Client = { id: string; displayName: string };
 type Contract = {
@@ -14,9 +21,12 @@ type Contract = {
   status: string;
   feeModel: string;
   fixedAmount?: string;
+  successRate?: string;
   currency: string;
   startsAt?: string;
   endsAt?: string;
+  serviceName?: string;
+  terms?: { services?: string[] };
   client?: Client;
 };
 
@@ -29,6 +39,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
   const [showForm, setShowForm] = useState(false);
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [feeModel, setFeeModel] = useState('FIXED');
   const canCreate = permissions.includes('contracts:create');
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
@@ -45,21 +56,30 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
           number: form.get('number'),
           title: form.get('title'),
           feeModel: form.get('feeModel'),
-          fixedAmount: String(form.get('fixedAmount') ?? '').replace(',', '.') || undefined,
+          fixedAmount: normalizeMoneyInput(String(form.get('fixedAmount') ?? '')),
+          successRate: percentageToRate(String(form.get('successRate') ?? '')),
           currency: 'BRL',
-          serviceCode: form.get('serviceCode') || undefined,
-          serviceName: form.get('serviceName') || undefined,
+          serviceNames: form
+            .getAll('serviceNames')
+            .filter((value): value is string => typeof value === 'string'),
           startsAt: form.get('startsAt') || undefined,
           endsAt: form.get('endsAt') || undefined,
         }),
       });
       setFeedback('Contrato cadastrado.');
       setShowForm(false);
+      setFeeModel('FIXED');
       target.reset();
       contracts.reload();
     } catch (error) {
       setFeedback(
-        `Erro: ${error instanceof ApiError ? error.message : 'não foi possível cadastrar'}`,
+        `Erro: ${
+          error instanceof ApiError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : 'não foi possível cadastrar'
+        }`,
       );
     } finally {
       setBusy(false);
@@ -72,10 +92,16 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
         <div>
           <p>Financeiro</p>
           <h1>Contratos</h1>
-          <span>Cadastre honorários, vigência e serviço contratado por cliente.</span>
+          <span>Cadastre os honorários e a vigência de cada contrato.</span>
         </div>
         {canCreate && (
-          <button className="primary" onClick={() => setShowForm((value) => !value)}>
+          <button
+            className="primary"
+            onClick={() => {
+              setShowForm((value) => !value);
+              setFeeModel('FIXED');
+            }}
+          >
             {showForm ? 'Fechar' : 'Novo contrato'}
           </button>
         )}
@@ -116,40 +142,46 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
             </div>
           )}
           <label>
-            Número
+            Número do contrato
             <input required name="number" maxLength={80} />
           </label>
           <label>
-            Título
+            Nome do contrato
             <input required name="title" minLength={2} />
           </label>
           <label>
             Modelo de honorários
-            <select required name="feeModel" defaultValue="FIXED">
+            <select
+              required
+              name="feeModel"
+              value={feeModel}
+              onChange={(event) => setFeeModel(event.target.value)}
+            >
               <option value="FIXED">Valor fixo</option>
               <option value="HOURLY">Por hora</option>
               <option value="SUCCESS">Êxito</option>
               <option value="MIXED">Misto</option>
             </select>
           </label>
+          {feeModel !== 'SUCCESS' && (
+            <label>
+              {feeModel === 'HOURLY' ? 'Valor por hora (R$)' : 'Valor fixo (R$)'}
+              <input name="fixedAmount" inputMode="decimal" placeholder="0,00" required />
+            </label>
+          )}
+          {(feeModel === 'SUCCESS' || feeModel === 'MIXED') && (
+            <label>
+              Percentual de êxito
+              <input name="successRate" inputMode="decimal" placeholder="Ex.: 15" required />
+            </label>
+          )}
+          <ServiceSelection disabled={busy} />
           <label>
-            Valor fixo
-            <input name="fixedAmount" inputMode="decimal" placeholder="0,00" />
-          </label>
-          <label>
-            Código do serviço
-            <input name="serviceCode" maxLength={80} />
-          </label>
-          <label>
-            Serviço
-            <input name="serviceName" maxLength={160} />
-          </label>
-          <label>
-            Início
+            Início da vigência (opcional)
             <input name="startsAt" type="date" />
           </label>
           <label>
-            Fim
+            Fim da vigência (opcional)
             <input name="endsAt" type="date" />
           </label>
           <button className="primary form-wide" disabled={busy}>
@@ -181,6 +213,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
                 <th>Contrato</th>
                 <th>Cliente</th>
                 <th>Modelo</th>
+                <th>Serviços</th>
                 <th>Valor</th>
                 <th>Vigência</th>
                 <th>Status</th>
@@ -194,8 +227,16 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
                     <small>{contract.title}</small>
                   </td>
                   <td>{contract.client?.displayName ?? '—'}</td>
-                  <td>{contract.feeModel}</td>
-                  <td>{formatMoney(contract.fixedAmount, contract.currency)}</td>
+                  <td>{feeModelLabel(contract.feeModel)}</td>
+                  <td>{contract.terms?.services?.join(', ') ?? contract.serviceName ?? '—'}</td>
+                  <td>
+                    {contract.feeModel === 'SUCCESS'
+                      ? `${formatSuccessRate(contract.successRate)}% do êxito`
+                      : formatMoney(contract.fixedAmount, contract.currency)}
+                    {contract.feeModel === 'MIXED' && contract.successRate
+                      ? ` + ${formatSuccessRate(contract.successRate)}% do êxito`
+                      : ''}
+                  </td>
                   <td>
                     {formatDate(contract.startsAt)} – {formatDate(contract.endsAt)}
                   </td>

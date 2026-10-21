@@ -100,7 +100,7 @@ for (const viewport of [
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Tarefas' })).toBeVisible();
     await page.getByRole('button', { name: 'Nova tarefa' }).click();
-    await page.getByLabel('Título').fill('Preparar audiência');
+    await page.getByLabel('O que precisa ser feito').fill('Preparar audiência');
     await page.getByLabel('Prazo').fill('2026-11-03T15:00');
     await page.getByRole('button', { name: 'Criar tarefa' }).click();
     await expect(page.getByText('Tarefa criada.')).toBeVisible();
@@ -126,10 +126,10 @@ for (const viewport of [
 
     await navigate('Agenda');
     await page.getByRole('button', { name: 'Novo compromisso' }).click();
-    await page.getByLabel('Título').fill('Audiência QA');
+    await page.getByLabel('Nome do compromisso').fill('Audiência QA');
     await page.getByLabel('Início').fill('2026-11-03T15:00');
     await page.getByLabel('Fim').fill('2026-11-03T16:00');
-    await page.getByLabel('Tipo').selectOption('HEARING');
+    await page.getByLabel('Tipo de compromisso').selectOption('HEARING');
     await page.getByRole('button', { name: 'Criar evento' }).click();
     await expect(page.getByRole('heading', { name: 'Audiência QA' })).toBeVisible();
     expect(

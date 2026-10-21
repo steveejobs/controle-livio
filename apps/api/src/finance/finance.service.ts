@@ -1,8 +1,11 @@
+import { createHash, randomUUID } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { Prisma } from '@livio/db';
 import type { AuthenticatedActor } from '@livio/shared';
@@ -10,6 +13,7 @@ import { AuditService } from '../common/audit.service';
 import { sha256 } from '../common/security';
 import { PrismaService } from '../prisma/prisma.service';
 import { pageResult, pageWindow } from '../common/schemas';
+import { PushNotificationsService } from '../notifications/push-notifications.service';
 import type {
   AdjustmentInput,
   CreateContractInput,
@@ -18,7 +22,10 @@ import type {
   CreateReceivableInput,
   RenegotiationInput,
   ReversalInput,
+  PaymentChangeInput,
+  PaymentChangeDecisionInput,
 } from './finance.schemas';
+import { paymentChangeSchema } from './finance.schemas';
 import {
   assertExactRenegotiation,
   installmentStatus,
@@ -28,15 +35,25 @@ import {
 
 type Transaction = Prisma.TransactionClient;
 
+function paymentChangeInput(value: Prisma.JsonValue): PaymentChangeInput {
+  const parsed = paymentChangeSchema.safeParse(value);
+  if (!parsed.success) throw new ConflictException('Os dados da solicitação estão inválidos');
+  return parsed.data;
+}
+
 @Injectable()
 export class FinanceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    @Optional() private readonly pushNotifications?: PushNotificationsService,
   ) {}
 
   async createContract(actor: AuthenticatedActor, input: CreateContractInput) {
     await this.assertFinancialReferences(actor.organizationId, input.clientId, input.matterId);
+    const serviceNames = [
+      ...new Set(input.serviceNames.map((name) => name.trim()).filter(Boolean)),
+    ];
     return this.prisma.$transaction(async (transaction) => {
       const contract = await transaction.contract.create({
         data: {
@@ -50,7 +67,10 @@ export class FinanceService {
           ...(input.fixedAmount ? { fixedAmount: this.money(input.fixedAmount) } : {}),
           ...(input.successRate ? { successRate: new Prisma.Decimal(input.successRate) } : {}),
           ...(input.serviceCode ? { serviceCode: input.serviceCode } : {}),
-          ...(input.serviceName ? { serviceName: input.serviceName } : {}),
+          ...((serviceNames[0] ?? input.serviceName)
+            ? { serviceName: serviceNames[0] ?? input.serviceName }
+            : {}),
+          ...(serviceNames.length ? { terms: { services: serviceNames } } : {}),
           ...(input.startsAt ? { startsAt: input.startsAt } : {}),
           ...(input.endsAt ? { endsAt: input.endsAt } : {}),
         },
@@ -324,6 +344,279 @@ export class FinanceService {
         },
       ),
     );
+  }
+
+  async requestPaymentChange(
+    actor: AuthenticatedActor,
+    paymentId: string,
+    input: PaymentChangeInput,
+  ) {
+    const result = await this.withSerializableRetry(async () =>
+      this.prisma.$transaction(
+        async (transaction) => {
+          await transaction.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
+          const payment = await transaction.payment.findFirst({
+            where: { id: paymentId, organizationId: actor.organizationId },
+            include: { allocations: { where: { reversedAt: null } } },
+          });
+          if (!payment) throw new NotFoundException('Pagamento não encontrado');
+          if (payment.status !== 'CONFIRMED')
+            throw new ConflictException('Somente pagamentos confirmados podem ser corrigidos');
+          paymentSummary(
+            input.amount,
+            input.allocations.map(({ amount }) => amount),
+          );
+          if (!this.paymentChangeDiffers(payment, input))
+            throw new BadRequestException('Informe ao menos uma alteração no pagamento');
+
+          const request = await transaction.paymentChangeRequest.create({
+            data: {
+              organizationId: actor.organizationId,
+              paymentId: payment.id,
+              createdById: actor.userId,
+              proposedData: {
+                ...input,
+                baseVersion: payment.version,
+              } as unknown as Prisma.InputJsonValue,
+              reason: input.reason,
+            },
+          });
+          if (actor.isAdministrator) {
+            const correctedPayment = await this.applyPaymentChange(
+              transaction,
+              actor,
+              request.id,
+              payment,
+              input,
+            );
+            const approved = await transaction.paymentChangeRequest.update({
+              where: { id: request.id },
+              data: { status: 'APPROVED', reviewedById: actor.userId, reviewedAt: new Date() },
+            });
+            await this.audit.record(transaction, {
+              organizationId: actor.organizationId,
+              actorUserId: actor.userId,
+              actorSessionId: actor.sessionId,
+              action: 'APPROVE',
+              resource: 'payment_change_request',
+              resourceId: request.id,
+              after: { request: approved, replacementPaymentId: correctedPayment.id },
+            });
+            return {
+              request: approved,
+              payment: correctedPayment,
+              applied: true as const,
+              notificationUserIds: [] as string[],
+            };
+          }
+
+          const admins = await transaction.organizationMember.findMany({
+            where: {
+              organizationId: actor.organizationId,
+              status: 'ACTIVE',
+              user: { status: 'ACTIVE', deletedAt: null },
+              roles: { some: { role: { key: 'administrator' } } },
+            },
+            select: { userId: true },
+          });
+          if (!admins.length)
+            throw new ConflictException('Não há Administrador ativo para aprovar alterações');
+          for (const admin of admins) {
+            const notificationId = this.stableUuid(`${request.id}:${admin.userId}:payment-change`);
+            await transaction.notification.upsert({
+              where: { id: notificationId },
+              create: {
+                id: notificationId,
+                organizationId: actor.organizationId,
+                userId: admin.userId,
+                channel: 'IN_APP',
+                status: 'SENT',
+                title: 'Alteração de pagamento aguardando aprovação',
+                body: `${payment.reference} · ${input.reason}`,
+                link: 'finance:payment-approvals',
+                metadata: {
+                  source: 'PAYMENT_CHANGE_REQUEST',
+                  requestId: request.id,
+                  paymentId: payment.id,
+                },
+                sentAt: new Date(),
+              },
+              update: { title: 'Alteração de pagamento aguardando aprovação' },
+            });
+          }
+          await this.audit.record(transaction, {
+            organizationId: actor.organizationId,
+            actorUserId: actor.userId,
+            actorSessionId: actor.sessionId,
+            action: 'CREATE',
+            resource: 'payment_change_request',
+            resourceId: request.id,
+            after: request,
+          });
+          return {
+            request,
+            applied: false as const,
+            notificationUserIds: admins.map(({ userId }) => userId),
+          };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
+      ),
+    );
+    if (result.applied) return { request: result.request, payment: result.payment, applied: true };
+    await this.pushNotifications?.notifyUsers(actor.organizationId, result.notificationUserIds, {
+      title: 'Alteração de pagamento aguardando aprovação',
+      body: 'Entre no Lívio para revisar a solicitação.',
+    });
+    return { request: result.request, applied: false };
+  }
+
+  async listPaymentChangeRequests(actor: AuthenticatedActor) {
+    const requests = await this.prisma.paymentChangeRequest.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        ...(actor.isAdministrator ? { status: 'PENDING' } : { createdById: actor.userId }),
+      },
+      include: {
+        payment: { include: { client: { select: { id: true, displayName: true } } } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    const userIds = [...new Set(requests.map(({ createdById }) => createdById))];
+    const users = await this.prisma.user.findMany({
+      where: { organizationId: actor.organizationId, id: { in: userIds } },
+      select: { id: true, fullName: true },
+    });
+    const names = new Map(users.map((user) => [user.id, user.fullName]));
+    return {
+      items: requests.map((request) => ({
+        ...request,
+        requestedByName: names.get(request.createdById) ?? 'Usuário',
+      })),
+      total: requests.length,
+    };
+  }
+
+  async decidePaymentChange(
+    actor: AuthenticatedActor,
+    requestId: string,
+    decision: 'APPROVED' | 'REJECTED',
+    input: PaymentChangeDecisionInput = {},
+  ) {
+    if (!actor.isAdministrator) throw new ForbiddenException('Acesso exclusivo para Administrador');
+    const result = await this.withSerializableRetry(async () =>
+      this.prisma.$transaction(
+        async (transaction) => {
+          await transaction.$queryRaw`SELECT id FROM payment_change_requests WHERE id = ${requestId}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
+          const request = await transaction.paymentChangeRequest.findFirst({
+            where: { id: requestId, organizationId: actor.organizationId },
+          });
+          if (!request) throw new NotFoundException('Solicitação não encontrada');
+          if (request.status !== 'PENDING')
+            throw new ConflictException('Esta solicitação já foi analisada');
+          if (request.createdById === actor.userId)
+            throw new ConflictException('Quem solicitou a alteração não pode aprová-la');
+
+          let replacementPayment: unknown;
+          if (decision === 'APPROVED') {
+            await transaction.$queryRaw`SELECT id FROM payments WHERE id = ${request.paymentId}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
+            const payment = await transaction.payment.findFirst({
+              where: { id: request.paymentId, organizationId: actor.organizationId },
+              include: { allocations: { where: { reversedAt: null } } },
+            });
+            if (!payment) throw new NotFoundException('Pagamento não encontrado');
+            if (payment.status !== 'CONFIRMED')
+              throw new ConflictException('O pagamento não está mais disponível para correção');
+            const proposed = paymentChangeInput(request.proposedData);
+            const baseVersion = (request.proposedData as { baseVersion?: unknown }).baseVersion;
+            if (baseVersion !== payment.version)
+              throw new ConflictException(
+                'O pagamento mudou desde a solicitação; peça uma nova correção',
+              );
+            replacementPayment = await this.applyPaymentChange(
+              transaction,
+              actor,
+              request.id,
+              payment,
+              proposed,
+            );
+          }
+
+          const reviewedAt = new Date();
+          const reviewed = await transaction.paymentChangeRequest.update({
+            where: { id: request.id },
+            data: {
+              status: decision,
+              reviewedById: actor.userId,
+              reviewedAt,
+              ...(input.note ? { reviewNote: input.note } : {}),
+            },
+          });
+          const notificationId = this.stableUuid(`${request.id}:${request.createdById}:decision`);
+          await transaction.notification.upsert({
+            where: { id: notificationId },
+            create: {
+              id: notificationId,
+              organizationId: actor.organizationId,
+              userId: request.createdById,
+              channel: 'IN_APP',
+              status: 'SENT',
+              title:
+                decision === 'APPROVED'
+                  ? 'Correção de pagamento aprovada'
+                  : 'Correção de pagamento recusada',
+              body: input.note ?? 'A solicitação foi analisada pelo Administrador.',
+              link: 'finance:payments',
+              metadata: {
+                source: 'PAYMENT_CHANGE_DECISION',
+                requestId: request.id,
+                status: decision,
+              },
+              sentAt: reviewedAt,
+            },
+            update: {
+              title:
+                decision === 'APPROVED'
+                  ? 'Correção de pagamento aprovada'
+                  : 'Correção de pagamento recusada',
+              body: input.note ?? 'A solicitação foi analisada pelo Administrador.',
+            },
+          });
+          await this.audit.record(transaction, {
+            organizationId: actor.organizationId,
+            actorUserId: actor.userId,
+            actorSessionId: actor.sessionId,
+            action: decision === 'APPROVED' ? 'APPROVE' : 'UPDATE',
+            resource: 'payment_change_request',
+            resourceId: request.id,
+            before: request,
+            after: { request: reviewed, replacementPayment },
+          });
+          return {
+            request: reviewed,
+            payment: replacementPayment,
+            notificationUserId: request.createdById,
+          };
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          maxWait: 10_000,
+          timeout: 30_000,
+        },
+      ),
+    );
+    await this.pushNotifications?.notifyUsers(actor.organizationId, [result.notificationUserId], {
+      title:
+        decision === 'APPROVED'
+          ? 'Correção de pagamento aprovada'
+          : 'Correção de pagamento recusada',
+      body: 'Entre no Lívio para consultar a resposta.',
+    });
+    return { request: result.request, payment: result.payment };
   }
 
   async addAdjustment(actor: AuthenticatedActor, installmentId: string, input: AdjustmentInput) {
@@ -670,6 +963,192 @@ export class FinanceService {
       this.prisma.expense.count({ where }),
     ]);
     return pageResult(items, total, input);
+  }
+
+  private paymentChangeDiffers(
+    payment: Prisma.PaymentGetPayload<{ include: { allocations: true } }>,
+    input: PaymentChangeInput,
+  ): boolean {
+    const externalId = input.externalId === undefined ? payment.externalId : input.externalId;
+    const currentAllocations = payment.allocations
+      .map(({ installmentId, amount }) => `${installmentId}:${amount.toFixed(4)}`)
+      .sort();
+    const proposedAllocations = input.allocations
+      .map(({ installmentId, amount }) => `${installmentId}:${this.money(amount).toFixed(4)}`)
+      .sort();
+    return (
+      payment.reference !== input.reference ||
+      !payment.amount.equals(this.money(input.amount)) ||
+      payment.paidAt.getTime() !== input.paidAt.getTime() ||
+      payment.method !== input.method ||
+      payment.externalId !== externalId ||
+      currentAllocations.join('|') !== proposedAllocations.join('|')
+    );
+  }
+
+  private async applyPaymentChange(
+    transaction: Transaction,
+    actor: AuthenticatedActor,
+    requestId: string,
+    payment: Prisma.PaymentGetPayload<{ include: { allocations: true } }>,
+    input: PaymentChangeInput,
+  ) {
+    if (!actor.isAdministrator) throw new ForbiddenException('Acesso exclusivo para Administrador');
+    const { amount, allocated } = paymentSummary(
+      input.amount,
+      input.allocations.map(({ amount: value }) => value),
+    );
+    const targetIds = input.allocations.map(({ installmentId }) => installmentId);
+    const previousIds = payment.allocations.map(({ installmentId }) => installmentId);
+    await this.lockInstallments(transaction, actor.organizationId, [
+      ...new Set([...targetIds, ...previousIds]),
+    ]);
+
+    const reversedAt = new Date();
+    const changed = await transaction.payment.updateMany({
+      where: {
+        id: payment.id,
+        organizationId: actor.organizationId,
+        version: payment.version,
+        status: 'CONFIRMED',
+      },
+      data: { status: 'REVERSED', reversedAt, version: { increment: 1 } },
+    });
+    if (changed.count !== 1) throw new ConflictException('Pagamento alterado por outro usuário');
+    await transaction.paymentAllocation.updateMany({
+      where: { paymentId: payment.id, organizationId: actor.organizationId, reversedAt: null },
+      data: { reversedAt, reversedById: actor.userId },
+    });
+    const reversal = await transaction.paymentReversal.create({
+      data: {
+        organizationId: actor.organizationId,
+        originalPaymentId: payment.id,
+        amount: payment.amount,
+        reason: `Correção aprovada: ${input.reason}`,
+        reversedById: actor.userId,
+      },
+    });
+    for (const installmentId of previousIds)
+      await this.refreshInstallmentStatus(transaction, actor.organizationId, installmentId);
+
+    const replacementPaymentId = randomUUID();
+    const archivedReference = `${payment.reference.slice(0, 87)}-EST-${requestId.slice(0, 8)}`;
+    const priorMetadata =
+      payment.metadata && typeof payment.metadata === 'object' && !Array.isArray(payment.metadata)
+        ? (payment.metadata as Record<string, Prisma.JsonValue>)
+        : {};
+    await transaction.payment.update({
+      where: { id: payment.id },
+      data: {
+        reference: archivedReference,
+        metadata: {
+          ...priorMetadata,
+          correctionRequestId: requestId,
+          replacementPaymentId,
+          replacedExternalId: payment.externalId,
+        } as Prisma.InputJsonValue,
+        externalId: null,
+      },
+    });
+
+    const installments = targetIds.length
+      ? await transaction.receivableInstallment.findMany({
+          where: { id: { in: targetIds }, organizationId: actor.organizationId },
+          include: {
+            receivable: true,
+            allocations: { where: { reversedAt: null, payment: { status: 'CONFIRMED' } } },
+            adjustments: { where: { approvedAt: { not: null } } },
+          },
+        })
+      : [];
+    if (installments.length !== targetIds.length)
+      throw new NotFoundException('Uma das parcelas não foi encontrada');
+    const installmentById = new Map(
+      installments.map((installment) => [installment.id, installment]),
+    );
+    for (const allocation of input.allocations) {
+      const installment = installmentById.get(allocation.installmentId)!;
+      if (
+        installment.receivable.clientId !== payment.clientId ||
+        installment.currency !== payment.currency
+      )
+        throw new BadRequestException('Cliente ou moeda incompatível com a parcela corrigida');
+      if (['CANCELLED', 'RENEGOTIATED'].includes(installment.status))
+        throw new BadRequestException('Parcela não aceita pagamentos');
+      if (this.money(allocation.amount).greaterThan(this.balanceFromLoaded(installment)))
+        throw new BadRequestException('Alocação excede o saldo disponível da parcela');
+    }
+
+    const corrected = await transaction.payment.create({
+      data: {
+        id: replacementPaymentId,
+        organizationId: actor.organizationId,
+        clientId: payment.clientId,
+        reference: input.reference,
+        status: 'CONFIRMED',
+        amount,
+        currency: payment.currency,
+        paidAt: input.paidAt,
+        method: input.method,
+        externalId: input.externalId === undefined ? payment.externalId : input.externalId,
+        idempotencyKey: `change-${requestId}`,
+        idempotencyHash: sha256(JSON.stringify({ ...input, requestId })),
+        confirmedById: actor.userId,
+        confirmedAt: new Date(),
+        metadata: { source: 'PAYMENT_CHANGE_REQUEST', requestId, originalPaymentId: payment.id },
+        allocations: {
+          create: input.allocations.map((allocation) => ({
+            organizationId: actor.organizationId,
+            installmentId: allocation.installmentId,
+            amount: this.money(allocation.amount),
+            createdById: actor.userId,
+          })),
+        },
+      },
+      include: { allocations: true },
+    });
+    for (const allocation of input.allocations) {
+      const installment = installmentById.get(allocation.installmentId)!;
+      const remaining = this.balanceFromLoaded(installment).minus(this.money(allocation.amount));
+      await transaction.receivableInstallment.update({
+        where: { id: installment.id },
+        data: {
+          status: this.statusForBalance(remaining, installment.dueDate, true),
+          version: { increment: 1 },
+        },
+      });
+    }
+    await this.audit.record(transaction, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      actorSessionId: actor.sessionId,
+      action: 'REVERSE',
+      resource: 'payment',
+      resourceId: payment.id,
+      before: payment,
+      after: reversal,
+      metadata: { correctionRequestId: requestId, replacementPaymentId },
+    });
+    await this.audit.record(transaction, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      actorSessionId: actor.sessionId,
+      action: 'CREATE',
+      resource: 'payment',
+      resourceId: corrected.id,
+      after: corrected,
+      metadata: {
+        correctionRequestId: requestId,
+        originalPaymentId: payment.id,
+        unappliedAmount: amount.minus(allocated).toFixed(2),
+      },
+    });
+    return corrected;
+  }
+
+  private stableUuid(value: string): string {
+    const hex = createHash('sha256').update(value).digest('hex').slice(0, 32);
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
   }
 
   private money(value: string | Prisma.Decimal): Prisma.Decimal {

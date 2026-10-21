@@ -2,18 +2,22 @@ import { ForbiddenException, type ExecutionContext } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { PermissionGuard } from './permission.guard';
 
-function context(permissions: string[]): ExecutionContext {
+function context(permissions: string[], isAdministrator = false): ExecutionContext {
   return {
     getHandler: () => function handler() {},
     getClass: () => class Controller {},
-    switchToHttp: () => ({ getRequest: () => ({ actor: { permissions } }) }),
+    switchToHttp: () => ({ getRequest: () => ({ actor: { permissions, isAdministrator } }) }),
   } as unknown as ExecutionContext;
 }
 
 describe('PermissionGuard', () => {
   it('autoriza somente a ação granular exigida', () => {
     const reflector = {
-      getAllAndOverride: vi.fn().mockReturnValueOnce(false).mockReturnValueOnce('payments:approve'),
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce('payments:approve')
+        .mockReturnValueOnce(false),
     };
     expect(new PermissionGuard(reflector as never).canActivate(context(['payments:approve']))).toBe(
       true,
@@ -22,13 +26,22 @@ describe('PermissionGuard', () => {
 
   it('nega rota sem política e permissão ausente', () => {
     const noPolicy = {
-      getAllAndOverride: vi.fn().mockReturnValueOnce(false).mockReturnValueOnce(undefined),
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(undefined)
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(undefined),
     };
     expect(() => new PermissionGuard(noPolicy as never).canActivate(context([]))).toThrow(
       ForbiddenException,
     );
     const missing = {
-      getAllAndOverride: vi.fn().mockReturnValueOnce(false).mockReturnValueOnce('payments:approve'),
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce('payments:approve')
+        .mockReturnValueOnce(false),
     };
     expect(() =>
       new PermissionGuard(missing as never).canActivate(context(['payments:view'])),
@@ -41,8 +54,24 @@ describe('PermissionGuard', () => {
         .fn()
         .mockReturnValueOnce(false)
         .mockReturnValueOnce(undefined)
+        .mockReturnValueOnce(false)
         .mockReturnValueOnce(true),
     };
     expect(new PermissionGuard(reflector as never).canActivate(context([]))).toBe(true);
+  });
+
+  it('restringe rotas de administrador ao papel oficial, mesmo com outras permissões', () => {
+    const createGuard = () => ({
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce(undefined)
+        .mockReturnValueOnce(true)
+        .mockReturnValueOnce(true),
+    });
+    expect(() =>
+      new PermissionGuard(createGuard() as never).canActivate(context(['users:manage'])),
+    ).toThrow(ForbiddenException);
+    expect(new PermissionGuard(createGuard() as never).canActivate(context([], true))).toBe(true);
   });
 });

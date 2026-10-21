@@ -21,6 +21,12 @@ O navegador jamais escolhe o tenant. Campos `organizationId` recebidos por body/
 
 ## Persistência e consistência
 
+Logins usam `activity_events` com um identificador determinístico por organização, usuário e sessão.
+Uma rotina agendada agrega esses eventos por horário configurado e grava a notificação junto com o
+cursor do último resumo na mesma transação. `payment_change_requests` separa propostas de correção da
+fonte financeira confirmada; a aprovação registra estorno e pagamento substituto em transação
+serializável, preservando a trilha de auditoria.
+
 O Database PostgreSQL do projeto Supabase é a única fonte de verdade. Operações financeiras e movimentos de etapa usam transações `SERIALIZABLE`, locks de linha em ordem estável, versão otimista e retry limitado para conflito `P2034`. Auditoria é escrita pelo mesmo transaction client.
 
 A migration adiciona checks de domínio, foreign keys restritivas, uma barreira de tenant no banco para referências entre tabelas e triggers append-only. A migration inicial é atômica (`BEGIN`/`COMMIT`) e não contém remoção de dados.

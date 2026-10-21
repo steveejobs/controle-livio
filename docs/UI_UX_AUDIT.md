@@ -88,3 +88,32 @@ Uma tarefa comum deve ser compreensível sem treinamento extra: localizar o mód
 domínio, enxergar o estado atual, reconhecer a ação primária, receber feedback após agir e conseguir
 desfazer/corrigir por um caminho explícito. Toda tela precisa manter foco visível, estados de erro e
 vazio, alvo confortável e funcionamento a 360 px.
+
+## Revisão de coerência dos formulários em 2026-10-21
+
+- A inspeção dos formulários não encontrou título e assunto duplicados com a mesma finalidade. Foram
+  revisados cadastro de cliente, ficha do cliente, CRM, tarefas, agenda, documentos, honorários,
+  financeiro, equipe, pipelines e filtros de relatórios.
+- Os rótulos passaram a indicar a entidade e a tarefa (“O que está sendo cobrado”, “Nome da etapa”,
+  “Perfil de acesso”). No CRM, a escolha do pipeline vem antes dos campos do registro e distingue
+  processo, oportunidade e cobrança; informações judiciais não aparecem em oportunidades comerciais.
+  O estado inicial segue o pipeline, sem solicitar um status redundante na criação.
+- O formulário de honorários exibe só os valores aplicáveis ao modelo. Código e nome do serviço para
+  relatórios ficam em uma área opcional recolhida; contratos não recebem mais um serviço genérico por
+  padrão. Os percentuais são convertidos para a representação decimal da API e exibidos como
+  percentual nas listas.
+- Os nomes técnicos dos modelos de honorários e dos pipelines foram substituídos por rótulos
+  compreensíveis. Ajuda estática de permissões que não correspondia a todos os perfis foi removida.
+- Os novos disclosures são nativos, acessíveis por teclado e não substituem as etapas sequenciais do
+  cadastro inicial do cliente.
+
+## Cobranças e serviços de contrato em 2026-10-21
+
+- O CRM de cobrança oferece uma opção explícita de objetivo sem valor financeiro. Marcá-la abre o
+  campo de descrição; a gravação fica no acompanhamento da cobrança e não altera recebíveis ou saldos.
+- A contratação mostra serviços como opções marcáveis, agrupadas entre jurídico criminal e demais
+  serviços jurídicos. Novos serviços podem ser salvos na organização e reaproveitados, sem exigir um
+  campo de texto livre em cada contrato.
+- A lista inclui atividades criminais comuns e mantém o primeiro serviço marcado como classificação
+  principal dos relatórios atuais. A seleção e o cadastro novo são cobertos em E2E nos viewports de
+  360 e 1440 px.

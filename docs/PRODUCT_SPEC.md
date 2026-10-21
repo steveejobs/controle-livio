@@ -16,6 +16,16 @@ Permissões são combinações de recurso e ação: `view`, `create`, `update`, 
 
 ## Fluxos
 
+### Cadastro e preparação do cliente
+
+O cadastro identifica pessoa física por CPF e pessoa jurídica por CNPJ, aplica a máscara enquanto
+o documento é digitado e muda para pessoa jurídica ao ultrapassar 11 dígitos. Ao salvar um novo
+cliente, um assistente abre automaticamente o financeiro. Salvar a cobrança avança para honorários;
+salvar o contrato avança para documentos. Cada etapa também permite continuar sem preenchê-la e
+voltar à anterior, sem procurar abas. Depois dos três anexos, o assistente oferece a ficha completa.
+O saldo financeiro por moeda, contratos e arquivos permanecem reunidos na ficha. Os anexos desta
+etapa ficam internos; a geração de documentos a partir de modelos é uma etapa posterior.
+
 ### Comercial
 
 Novo contato → Qualificação → Proposta → Contratado ou Perdido. Converter um contato em cliente/processo não apaga o histórico comercial.
@@ -27,6 +37,20 @@ Triagem → Em preparação → Em andamento → Aguardando decisão → Encerra
 ### Cobrança
 
 A vencer → Em atraso → Em negociação → Recebido ou Inadimplente. O pipeline auxilia a operação, mas o saldo é sempre derivado dos lançamentos financeiros, nunca da etapa visual.
+
+Uma cobrança também pode registrar um objetivo sem valor financeiro, como aguardar documentos ou concluir uma diligência. Ao marcar essa opção, a tela abre a descrição do objetivo; esse acompanhamento fica no CRM e não cria recebível, parcela ou saldo.
+
+### Serviços contratados
+
+O contrato permite marcar todos os serviços abrangidos, organizados entre jurídico criminal e demais serviços jurídicos. A lista já inclui atividades criminais comuns, como acompanhamento em delegacia, audiência de custódia e habeas corpus. A equipe pode salvar novos serviços no catálogo da própria organização para reutilização. O primeiro serviço marcado é a classificação principal usada nos relatórios existentes.
+
+## Princípios para formulários
+
+- Cada campo nomeia a informação real do módulo: por exemplo, “Nome da oportunidade” no comercial e “Número judicial” no jurídico. Não repetir “assunto”, “título” ou “descrição” se esses dados não tiverem finalidades distintas.
+- Mostrar apenas campos que se aplicam ao tipo selecionado. O modelo de honorários, por exemplo, determina se a tela pede valor fixo, valor por hora e/ou percentual de êxito.
+- Campos opcionais de classificação e relatório ficam fora do percurso principal e não recebem conteúdo genérico automático.
+- Resumos e listas traduzem valores internos para termos de trabalho usados pela equipe.
+- O fluxo principal avança com a ação que conclui cada etapa; não exige que a pessoa encontre a próxima aba.
 
 ## Regras funcionais essenciais
 

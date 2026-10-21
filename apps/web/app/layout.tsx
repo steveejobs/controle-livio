@@ -1,7 +1,9 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { SpeedInsights } from '@vercel/speed-insights/next';
+import Script from 'next/script';
 import { MotionController } from '../components/motion-controller';
+import { PwaRuntime } from '../components/pwa-runtime';
 import './globals.css';
 import '../theme/index.css';
 
@@ -30,7 +32,9 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
   return (
     <html lang="pt-BR">
       <body>
+        <Script src="/pwa-install.js" strategy="beforeInteractive" />
         {children}
+        <PwaRuntime />
         <MotionController />
         <SpeedInsights />
       </body>

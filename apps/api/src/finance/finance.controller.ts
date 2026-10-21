@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Headers, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Headers,
+  Param,
+  ParseUUIDPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiHeader, ApiTags } from '@nestjs/swagger';
 import type { AuthenticatedActor } from '@livio/shared';
 import { CurrentActor } from '../auth/current-actor.decorator';
@@ -7,15 +17,21 @@ import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import {
   adjustmentSchema,
   createContractSchema,
+  createServiceCatalogItemSchema,
   createExpenseSchema,
   createPaymentSchema,
+  paymentChangeSchema,
+  paymentChangeDecisionSchema,
   createReceivableSchema,
   renegotiationSchema,
   reversalSchema,
   type AdjustmentInput,
   type CreateContractInput,
+  type CreateServiceCatalogItemInput,
   type CreateExpenseInput,
   type CreatePaymentInput,
+  type PaymentChangeInput,
+  type PaymentChangeDecisionInput,
   type CreateReceivableInput,
   type RenegotiationInput,
   type ReversalInput,
@@ -23,11 +39,32 @@ import {
   type FinanceListQuery,
 } from './finance.schemas';
 import { FinanceService } from './finance.service';
+import { RequireAdministrator } from '../auth/require-administrator.decorator';
+import { ServiceCatalogService } from './service-catalog.service';
 
 @ApiTags('Financeiro')
 @Controller('finance')
 export class FinanceController {
-  constructor(private readonly finance: FinanceService) {}
+  constructor(
+    private readonly finance: FinanceService,
+    private readonly serviceCatalog: ServiceCatalogService,
+  ) {}
+
+  @Get('service-catalog')
+  @RequirePermission('contracts:view')
+  serviceCatalogItems(@CurrentActor() actor: AuthenticatedActor) {
+    return this.serviceCatalog.list(actor);
+  }
+
+  @Post('service-catalog')
+  @RequirePermission('contracts:create')
+  createServiceCatalogItem(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Body(new ZodValidationPipe(createServiceCatalogItemSchema))
+    input: CreateServiceCatalogItemInput,
+  ) {
+    return this.serviceCatalog.create(actor, input);
+  }
 
   @Post('contracts')
   @RequirePermission('contracts:create')
@@ -66,12 +103,50 @@ export class FinanceController {
 
   @Post('payments/:id/reversal')
   @RequirePermission('payments:approve')
+  @RequireAdministrator()
   reversePayment(
     @CurrentActor() actor: AuthenticatedActor,
     @Param('id', ParseUUIDPipe) id: string,
     @Body(new ZodValidationPipe(reversalSchema)) input: ReversalInput,
   ) {
     return this.finance.reversePayment(actor, id, input);
+  }
+
+  @Patch('payments/:id/change-requests')
+  @RequirePermission('payments:update')
+  requestPaymentChange(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(paymentChangeSchema)) input: PaymentChangeInput,
+  ) {
+    return this.finance.requestPaymentChange(actor, id, input);
+  }
+
+  @Get('payments/change-requests')
+  @RequirePermission('payments:update')
+  paymentChangeRequests(@CurrentActor() actor: AuthenticatedActor) {
+    return this.finance.listPaymentChangeRequests(actor);
+  }
+
+  @Post('payments/change-requests/:id/approve')
+  @RequirePermission('payments:approve')
+  @RequireAdministrator()
+  approvePaymentChange(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.finance.decidePaymentChange(actor, id, 'APPROVED');
+  }
+
+  @Post('payments/change-requests/:id/reject')
+  @RequirePermission('payments:approve')
+  @RequireAdministrator()
+  rejectPaymentChange(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(paymentChangeDecisionSchema)) input: PaymentChangeDecisionInput,
+  ) {
+    return this.finance.decidePaymentChange(actor, id, 'REJECTED', input);
   }
 
   @Post('installments/:id/adjustments')

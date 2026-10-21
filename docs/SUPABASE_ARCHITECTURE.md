@@ -56,6 +56,16 @@ compatível devem usar convite/recuperação do Supabase.
 
 ## Local e testes
 
+A migration aditiva `20261021150000_access_alerts_and_payment_change_requests.sql` está preparada,
+mas ainda não foi aplicada: falta confirmar o banco de desenvolvimento. Ela ativa RLS forçada na tabela
+de solicitações financeiras sem políticas de acesso direto pelo navegador; a API autentica e autoriza
+essas operações. Também torna os eventos `SYSTEM_ACCESS` imutáveis.
+
+A migration `20261021170000_service_catalog.sql` adiciona o catálogo reutilizável de serviços por
+organização. Ela aplica RLS forçada sem policy de acesso direto pelo navegador; a API escopa consultas
+e gravações pela organização autenticada. Também está preparada e aguarda confirmação do banco de
+desenvolvimento antes de ser aplicada.
+
 `supabase/config.toml` habilita Database, Auth, Storage, Studio, Inbucket e seed. `supabase db reset`
 reproduz o banco do zero. `tools/supabase/rls.test.mjs` autentica seis usuários fictícios e testa acesso
 direto por PostgREST/Storage entre organizações A/B e roles.

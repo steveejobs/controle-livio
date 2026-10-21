@@ -9,6 +9,11 @@ export const createMatterSchema = z.object({
   reference: z.string().trim().min(1).max(80),
   title: z.string().trim().min(2).max(240),
   description: z.string().max(10_000).optional(),
+  collectionObjective: z
+    .object({
+      description: z.string().trim().min(2).max(2_000),
+    })
+    .optional(),
   courtNumber: z.string().trim().max(80).optional(),
   area: z.string().trim().max(120).optional(),
   status: z.enum(['LEAD', 'ACTIVE', 'SUSPENDED', 'CLOSED', 'ARCHIVED']).default('LEAD'),
@@ -21,7 +26,7 @@ export const createMatterSchema = z.object({
 });
 
 export const updateMatterSchema = createMatterSchema
-  .omit({ clientId: true, reference: true, currentStageId: true })
+  .omit({ clientId: true, reference: true, currentStageId: true, collectionObjective: true })
   .partial();
 
 export const moveMatterSchema = z.object({

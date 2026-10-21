@@ -1,18 +1,7 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
-
-type InstallPromptEvent = Event & {
-  prompt: () => Promise<void>;
-  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
-};
-
-function isStandalone(): boolean {
-  return (
-    window.matchMedia('(display-mode: standalone)').matches ||
-    ('standalone' in window.navigator && window.navigator.standalone === true)
-  );
-}
+import { useRef, useState } from 'react';
+import { markPwaInstalled, takeInstallPrompt, usePwaInstall } from '../lib/pwa-install';
 
 function installInstructions(): { title: string; steps: string[] } {
   const userAgent = window.navigator.userAgent;
@@ -48,48 +37,48 @@ function installInstructions(): { title: string; steps: string[] } {
 }
 
 export function InstallAppButton({ className = 'secondary' }: { className?: string }) {
-  const [promptEvent, setPromptEvent] = useState<InstallPromptEvent | null>(null);
-  const [installed, setInstalled] = useState(false);
+  const { available, installed } = usePwaInstall();
+  const [installing, setInstalling] = useState(false);
+  const [error, setError] = useState<string>();
   const [instructions, setInstructions] = useState<ReturnType<typeof installInstructions> | null>(
     null,
   );
   const dialogRef = useRef<HTMLDialogElement>(null);
 
-  useEffect(() => {
-    setInstalled(isStandalone());
+  const showInstructions = () => {
     setInstructions(installInstructions());
-    const onPrompt = (event: Event) => {
-      event.preventDefault();
-      setPromptEvent(event as InstallPromptEvent);
-    };
-    const onInstalled = () => {
-      setPromptEvent(null);
-      setInstalled(true);
-    };
-    window.addEventListener('beforeinstallprompt', onPrompt);
-    window.addEventListener('appinstalled', onInstalled);
-    return () => {
-      window.removeEventListener('beforeinstallprompt', onPrompt);
-      window.removeEventListener('appinstalled', onInstalled);
-    };
-  }, []);
-
-  const showInstructions = () => dialogRef.current?.showModal();
+    dialogRef.current?.showModal();
+  };
   const install = async () => {
+    setError(undefined);
+    const promptEvent = takeInstallPrompt();
     if (!promptEvent) {
       showInstructions();
       return;
     }
-    await promptEvent.prompt();
-    const choice = await promptEvent.userChoice;
-    setPromptEvent(null);
-    if (choice.outcome === 'accepted') setInstalled(true);
+    setInstalling(true);
+    try {
+      await promptEvent.prompt();
+      const choice = await promptEvent.userChoice;
+      if (choice.outcome === 'accepted') markPwaInstalled();
+    } catch {
+      setError('O navegador não conseguiu iniciar a instalação. Use as instruções abaixo.');
+      showInstructions();
+    } finally {
+      setInstalling(false);
+    }
   };
 
   return (
     <>
       <button className={className} type="button" onClick={() => void install()}>
-        {installed ? 'Como abrir o aplicativo' : 'Instalar aplicativo'}
+        {installing
+          ? 'Abrindo instalação…'
+          : installed
+            ? 'Como abrir o aplicativo'
+            : available
+              ? 'Instalar aplicativo'
+              : 'Ver como instalar'}
       </button>
       <dialog className="install-dialog" ref={dialogRef} aria-labelledby="install-title">
         <form method="dialog">
@@ -106,6 +95,11 @@ export function InstallAppButton({ className = 'secondary' }: { className?: stri
             ? 'Procure por Lívio na tela inicial ou na lista de aplicativos.'
             : 'O Lívio pode ser instalado pelo navegador e ficará disponível como um aplicativo.'}
         </p>
+        {error && (
+          <p className="notice notice-error" role="alert">
+            {error}
+          </p>
+        )}
         {instructions && (
           <>
             <h3>{instructions.title}</h3>

@@ -5,6 +5,7 @@ import { z } from 'zod';
 import type { AuthenticatedActor } from '@livio/shared';
 import { CurrentActor } from '../auth/current-actor.decorator';
 import { RequirePermission } from '../auth/require-permission.decorator';
+import { RequireAdministrator } from '../auth/require-administrator.decorator';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
 import { CsvExportService } from './csv-export.service';
 import {
@@ -102,6 +103,7 @@ export class ReportsController {
   @Get(':report/export.csv')
   @ApiProduces('text/csv')
   @RequirePermission('reports:export')
+  @RequireAdministrator()
   async exportCsv(
     @CurrentActor() actor: AuthenticatedActor,
     @Param('report', new ZodValidationPipe(reportNameSchema)) report: ReportName,

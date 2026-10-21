@@ -1,6 +1,11 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@livio/db';
-import type { AuthenticatedActor } from '@livio/shared';
+import { calculateOutstandingByCurrency, type AuthenticatedActor } from '@livio/shared';
 import { AuditService } from '../common/audit.service';
 import { pageResult, pageWindow, type PaginationInput } from '../common/schemas';
 import { normalizeAndValidateTaxId } from '../common/tax-id';
@@ -84,6 +89,7 @@ export class ClientsService {
       matters,
       contracts,
       receivables,
+      balanceReceivables,
       payments,
       documents,
       tasks,
@@ -116,8 +122,12 @@ export class ClientsService {
               number: true,
               title: true,
               status: true,
+              feeModel: true,
               fixedAmount: true,
+              successRate: true,
               currency: true,
+              serviceName: true,
+              terms: true,
               createdAt: true,
             },
             orderBy: { createdAt: 'desc' },
@@ -154,6 +164,29 @@ export class ClientsService {
             },
             orderBy: { dueDate: 'asc' },
             take: 50,
+          })
+        : Promise.resolve([]),
+      can('receivables:view')
+        ? this.prisma.receivable.findMany({
+            where: scope,
+            select: {
+              status: true,
+              currency: true,
+              installments: {
+                select: {
+                  amount: true,
+                  status: true,
+                  allocations: {
+                    where: { reversedAt: null, payment: { status: 'CONFIRMED' } },
+                    select: { amount: true },
+                  },
+                  adjustments: {
+                    where: { approvedAt: { not: null } },
+                    select: { kind: true, amount: true },
+                  },
+                },
+              },
+            },
           })
         : Promise.resolve([]),
       can('payments:view')
@@ -240,12 +273,27 @@ export class ClientsService {
           })
         : Promise.resolve([]),
     ]);
+    const outstanding = calculateOutstandingByCurrency(
+      balanceReceivables.map((receivable) => ({
+        currency: receivable.currency,
+        status: receivable.status,
+        installments: receivable.installments.map((installment) => ({
+          amount: installment.amount.toString(),
+          status: installment.status,
+          allocations: installment.allocations.map(({ amount }) => ({ amount: amount.toString() })),
+          adjustments: installment.adjustments.map(({ amount, kind }) => ({
+            amount: amount.toString(),
+            kind,
+          })),
+        })),
+      })),
+    );
     return {
       client,
       contacts: client.contacts,
       matters,
       contracts,
-      financial: { receivables, payments },
+      financial: { receivables, payments, outstanding },
       documents,
       tasks,
       upcomingEvents: events,
@@ -262,34 +310,45 @@ export class ClientsService {
     } catch {
       throw new BadRequestException('CPF/CNPJ inválido');
     }
-    return this.prisma.$transaction(async (transaction) => {
-      const client = await transaction.client.create({
-        data: {
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const client = await transaction.client.create({
+          data: {
+            organizationId: actor.organizationId,
+            type: input.type,
+            displayName: input.displayName,
+            ...(input.legalName ? { legalName: input.legalName } : {}),
+            ...(taxIdNormalized ? { taxIdNormalized } : {}),
+            ...(input.email ? { email: input.email.toLowerCase() } : {}),
+            ...(input.phone ? { phone: input.phone } : {}),
+            ...(input.source ? { source: input.source } : {}),
+            ...(input.address ? { address: input.address as Prisma.InputJsonValue } : {}),
+            ...(input.customFields
+              ? { customFields: input.customFields as Prisma.InputJsonValue }
+              : {}),
+          },
+        });
+        await this.audit.record(transaction, {
           organizationId: actor.organizationId,
-          type: input.type,
-          displayName: input.displayName,
-          ...(input.legalName ? { legalName: input.legalName } : {}),
-          ...(taxIdNormalized ? { taxIdNormalized } : {}),
-          ...(input.email ? { email: input.email.toLowerCase() } : {}),
-          ...(input.phone ? { phone: input.phone } : {}),
-          ...(input.source ? { source: input.source } : {}),
-          ...(input.address ? { address: input.address as Prisma.InputJsonValue } : {}),
-          ...(input.customFields
-            ? { customFields: input.customFields as Prisma.InputJsonValue }
-            : {}),
-        },
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'CREATE',
+          resource: 'client',
+          resourceId: client.id,
+          after: client,
+        });
+        return client;
       });
-      await this.audit.record(transaction, {
-        organizationId: actor.organizationId,
-        actorUserId: actor.userId,
-        actorSessionId: actor.sessionId,
-        action: 'CREATE',
-        resource: 'client',
-        resourceId: client.id,
-        after: client,
-      });
-      return client;
-    });
+    } catch (error) {
+      if (
+        taxIdNormalized &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('Este CPF/CNPJ já está cadastrado nesta organização.');
+      }
+      throw error;
+    }
   }
 
   async update(actor: AuthenticatedActor, id: string, input: UpdateClientInput) {

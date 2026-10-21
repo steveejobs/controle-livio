@@ -7,6 +7,7 @@ import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 import { ClientDetail } from './client-detail';
 import type { Client } from './client.types';
+import { formatTaxIdField, type ClientType } from './tax-id-format';
 
 export function ClientManagement({
   initialClientId,
@@ -21,8 +22,12 @@ export function ClientManagement({
   const [search, setSearch] = useState('');
   const [query, setQuery] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [guidedClientId, setGuidedClientId] = useState<string>();
   const [submitError, setSubmitError] = useState<string>();
   const [saving, setSaving] = useState(false);
+  const [clientType, setClientType] = useState<ClientType>('PERSON');
+  const [taxId, setTaxId] = useState('');
+  const [autoDetectedCompany, setAutoDetectedCompany] = useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(search.trim()), 300);
     return () => window.clearTimeout(timer);
@@ -44,6 +49,8 @@ export function ClientManagement({
         clientId={selected}
         onBack={() => selectClient(undefined)}
         permissions={permissions}
+        startGuidedOnboarding={selected === guidedClientId}
+        onGuidedOnboardingComplete={() => setGuidedClientId(undefined)}
       />
     );
 
@@ -86,6 +93,7 @@ export function ClientManagement({
       });
       setShowForm(false);
       reload();
+      setGuidedClientId(client.id);
       selectClient(client.id);
     } catch (caught) {
       setSubmitError(
@@ -112,37 +120,83 @@ export function ClientManagement({
       </header>
       {showForm && canCreate && (
         <form className="surface form-grid" data-reveal onSubmit={create}>
-          <label>
-            Tipo
-            <select name="type" defaultValue="PERSON">
-              <option value="PERSON">Pessoa física</option>
-              <option value="COMPANY">Pessoa jurídica</option>
-            </select>
-          </label>
-          <label>
-            Nome
-            <input name="displayName" required minLength={2} />
-          </label>
-          <label>
-            Razão social
-            <input name="legalName" />
-          </label>
-          <label>
-            CPF/CNPJ
-            <input name="taxId" inputMode="numeric" />
-          </label>
-          <label>
-            E-mail
-            <input name="email" type="email" />
-          </label>
-          <label>
-            Telefone
-            <input name="phone" />
-          </label>
-          <label>
-            Origem
-            <input name="source" />
-          </label>
+          <fieldset className="form-wide onboarding-section">
+            <legend>Identificação</legend>
+            <div className="form-grid">
+              <label>
+                Tipo de conta
+                <select
+                  name="type"
+                  value={clientType}
+                  onChange={(event) => {
+                    const nextType = event.target.value as ClientType;
+                    setClientType(nextType);
+                    setAutoDetectedCompany(false);
+                    setTaxId((value) => formatTaxIdField(value, nextType));
+                  }}
+                >
+                  <option value="PERSON">Conta individual (pessoa física)</option>
+                  <option value="COMPANY">Conta jurídica (empresa)</option>
+                </select>
+              </label>
+              <label>
+                {clientType === 'COMPANY' ? 'Nome da empresa' : 'Nome completo'}
+                <input name="displayName" required minLength={2} autoComplete="name" />
+              </label>
+              {clientType === 'COMPANY' && (
+                <label>
+                  Razão social
+                  <input name="legalName" required minLength={2} autoComplete="organization" />
+                </label>
+              )}
+              <label>
+                {clientType === 'COMPANY' ? 'CNPJ' : 'CPF'}
+                <input
+                  name="taxId"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  value={taxId}
+                  maxLength={18}
+                  placeholder={clientType === 'COMPANY' ? '00.000.000/0000-00' : '000.000.000-00'}
+                  aria-describedby="tax-id-help"
+                  onChange={(event) => {
+                    const digits = event.target.value.replace(/\D/g, '').slice(0, 14);
+                    let nextType = clientType;
+                    if (digits.length > 11) {
+                      nextType = 'COMPANY';
+                      setAutoDetectedCompany(true);
+                    } else if (autoDetectedCompany) {
+                      nextType = 'PERSON';
+                      setAutoDetectedCompany(false);
+                    }
+                    setClientType(nextType);
+                    setTaxId(formatTaxIdField(digits, nextType));
+                  }}
+                />
+              </label>
+              <p id="tax-id-help" className="section-note form-wide">
+                Os separadores são inseridos automaticamente. Ao informar mais de 11 dígitos, o
+                cadastro muda para pessoa jurídica.
+              </p>
+            </div>
+          </fieldset>
+          <fieldset className="form-wide onboarding-section">
+            <legend>Contato</legend>
+            <div className="form-grid">
+              <label>
+                E-mail
+                <input name="email" type="email" autoComplete="email" />
+              </label>
+              <label>
+                Telefone
+                <input name="phone" autoComplete="tel" />
+              </label>
+              <label>
+                Origem do cliente (opcional)
+                <input name="source" />
+              </label>
+            </div>
+          </fieldset>
           <fieldset className="form-wide optional-address">
             <legend>
               Endereço <span>(opcional)</span>
@@ -229,7 +283,11 @@ export function ClientManagement({
                     <strong>{client.displayName}</strong>
                     <small>{client.type === 'COMPANY' ? 'Pessoa jurídica' : 'Pessoa física'}</small>
                   </td>
-                  <td>{client.taxIdNormalized || '—'}</td>
+                  <td>
+                    {client.taxIdNormalized
+                      ? formatTaxIdField(client.taxIdNormalized, client.type)
+                      : '—'}
+                  </td>
                   <td>{client.email || client.phone || '—'}</td>
                   <td>{formatDate(client.updatedAt)}</td>
                   <td>

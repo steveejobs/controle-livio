@@ -7,6 +7,7 @@ export interface AuthenticatedActor {
   readonly membershipId?: string;
   readonly sessionId?: string;
   readonly clientId?: string;
+  readonly isAdministrator?: boolean;
   readonly permissions: readonly PermissionCode[];
 }
 

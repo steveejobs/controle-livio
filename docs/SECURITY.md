@@ -31,6 +31,23 @@ O papel PostgreSQL `authenticated` recebe somente `SELECT`, `INSERT`, `UPDATE` e
 públicas. Isso permite que a requisição alcance o RLS, que continua negando por tenant, cliente e
 permissão; o papel não recebe `TRUNCATE`, `REFERENCES`, `TRIGGER` nem privilégios administrativos.
 
+O catálogo de serviços é consultado e gravado somente pela API, sempre filtrado pela organização do
+ator. Criar um serviço exige `contracts:create`, grava auditoria e não concede policy direta no banco
+ao navegador.
+
+## Restrições administrativas e alertas
+
+Algumas operações exigem o papel oficial `administrator`, além da permissão granular: exportar
+relatórios, estornar pagamentos, decidir correções financeiras e configurar alertas de acesso. Um papel
+personalizado com as mesmas permissões não substitui essa verificação. Advogado, secretaria e financeiro
+podem consultar relatórios, mas não exportá-los.
+
+Cada login por senha ou confirmação de convite registra um evento `SYSTEM_ACCESS` idempotente pela
+sessão. O histórico é protegido contra alteração/remoção no banco. O Administrador configura até cinco
+horários no fuso da organização para receber resumos internos de acesso. Correções de pagamento feitas
+por outros perfis criam solicitações pendentes e notificam Administradores; somente a aprovação gera
+estorno e novo pagamento, na mesma transação e com auditoria.
+
 ## Service role
 
 `SUPABASE_SERVICE_ROLE_KEY` é obrigatória somente no servidor para Storage administrativo, convites e
@@ -49,3 +66,7 @@ sistema não declara arquivos como seguros sem scanner.
 Produção exige TLS, CORS explícito, custom SMTP, rotação de chaves, rate limit distribuído, logs/alertas,
 backup restaurável do Database e política separada para Storage. Seeds, resets e testes RLS são
 bloqueados em produção. Bootstrap e migration remotos exigem confirmações independentes.
+
+## Browser push
+
+Push uses VAPID and a separate opt-in for each user/device. The API accepts HTTPS endpoints only from supported push providers, stores endpoint keys in the database, and removes expired subscriptions. System messages contain generic titles and bodies; client, payment, and matter details stay inside Lívio behind authentication. The browser asks for explicit permission. Set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` only in the API project; without all three, the UI reports that server setup is pending.

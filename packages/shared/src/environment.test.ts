@@ -55,6 +55,30 @@ describe('Supabase environment boundary', () => {
     expect(parsed.SMTP_SECURE).toBe(false);
   });
 
+  it('accepts a complete VAPID push configuration', () => {
+    const parsed = parseApiEnvironment({
+      ...base,
+      VAPID_PUBLIC_KEY: 'public-vapid-key-that-is-long-enough',
+      VAPID_PRIVATE_KEY: 'private-vapid-key-that-is-long-enough',
+      VAPID_SUBJECT: 'mailto:suporte@example.com',
+    });
+    expect(parsed.VAPID_SUBJECT).toBe('mailto:suporte@example.com');
+  });
+
+  it('rejects incomplete or unsafe VAPID configuration', () => {
+    expect(() =>
+      parseApiEnvironment({ ...base, VAPID_PUBLIC_KEY: 'public-vapid-key-long-enough' }),
+    ).toThrow();
+    expect(() =>
+      parseApiEnvironment({
+        ...base,
+        VAPID_PUBLIC_KEY: 'public-vapid-key-that-is-long-enough',
+        VAPID_PRIVATE_KEY: 'private-vapid-key-that-is-long-enough',
+        VAPID_SUBJECT: 'http://example.com',
+      }),
+    ).toThrow();
+  });
+
   it('accepts the conventional provider PORT when API_PORT is absent', () => {
     const withoutApiPort = Object.fromEntries(
       Object.entries(base).filter(([key]) => key !== 'API_PORT'),
