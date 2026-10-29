@@ -29,7 +29,9 @@ const toc = run('pg_restore', '-l', archive)
   .filter(
     (line) =>
       !/\b(pg_cron|pg_net)\b/.test(line) &&
-      !/\b(SCHEMA - (cron|net)|(?:TABLE|SEQUENCE|FUNCTION|ACL) (cron|net) )/.test(line),
+      !/\b(SCHEMA - (cron|net)|(?:TABLE|TABLE DATA|SEQUENCE|FUNCTION|ACL|COMMENT|SECURITY LABEL) (cron|net) )/.test(
+        line,
+      ),
   )
   .join('\n');
 execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
