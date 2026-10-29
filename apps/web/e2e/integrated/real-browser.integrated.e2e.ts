@@ -225,7 +225,7 @@ async function login(page: Page, email: string) {
   await enableLocalNetworkOnly(page.context());
   await page.goto('/');
   await page.getByLabel('E-mail').fill(email);
-  await page.getByLabel('Senha').fill(localPassword);
+  await page.getByRole('textbox', { name: 'Senha' }).fill(localPassword);
   await page.getByRole('button', { name: 'Entrar no sistema' }).click();
   await page.locator('#primary-navigation').waitFor({ state: 'visible' });
 }
@@ -713,9 +713,7 @@ test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async
   await paymentForm.getByLabel('Parcela').selectOption(installmentOption);
   await paymentForm.getByLabel('Referência do pagamento').fill(paymentReference);
   await paymentForm.getByLabel('Valor recebido').fill('137,50');
-  await paymentForm
-    .getByLabel('Data do pagamento')
-    .fill(new Date().toISOString().slice(0, 16));
+  await paymentForm.getByLabel('Data do pagamento').fill(new Date().toISOString().slice(0, 16));
   await paymentForm.getByRole('button', { name: 'Confirmar pagamento' }).click();
   await expect(page.getByRole('status').filter({ hasText: 'Pagamento confirmado' })).toBeVisible();
   expect(idempotencyKey).toBeTruthy();
@@ -757,10 +755,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
     await login(financePage, 'financeiro.aurora@example.test');
     const suffix = randomUUID().slice(0, 8);
     const description = `Despesa QA ${suffix}`;
-    await financePage
-      .locator('#primary-navigation')
-      .getByRole('button', { name: /Receb/ })
-      .click();
+    await financePage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
     await financePage.getByRole('button', { name: 'Nova despesa' }).click();
     const expenseForm = financePage.locator('form').filter({
       has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
@@ -774,7 +769,9 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
     await expenseForm.getByLabel('Data da despesa').fill(dateInput());
     await expenseForm.getByLabel('Vencimento').fill(dateInput(10));
     await expenseForm.getByRole('button', { name: 'Cadastrar despesa' }).click();
-    await expect(financePage.getByRole('status').filter({ hasText: 'Despesa cadastrada.' })).toBeVisible();
+    await expect(
+      financePage.getByRole('status').filter({ hasText: 'Despesa cadastrada.' }),
+    ).toBeVisible();
     await pageExpenseSection(financePage);
     let expenseRow = financePage.getByRole('row').filter({ hasText: description });
     await expect(expenseRow).toContainText('Rascunho');
@@ -790,7 +787,9 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
     expenseRow = adminPage.getByRole('row').filter({ hasText: description });
     await expect(expenseRow).toContainText('Aguardando aprovação');
     await expenseRow.getByRole('button', { name: 'Aprovar' }).click();
-    await expect(adminPage.getByRole('status').filter({ hasText: 'Despesa aprovada.' })).toBeVisible();
+    await expect(
+      adminPage.getByRole('status').filter({ hasText: 'Despesa aprovada.' }),
+    ).toBeVisible();
     await expect(expenseRow).toContainText('Aguardando pagamento');
     await expenseRow.getByRole('button', { name: 'Registrar pagamento' }).click();
     await adminPage.getByLabel('Valor integral').fill('42,25');
