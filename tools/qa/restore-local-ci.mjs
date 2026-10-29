@@ -29,7 +29,7 @@ const toc = run('pg_restore', '-l', archive)
   .filter(
     (line) =>
       !/\b(pg_cron|pg_net)\b/.test(line) &&
-      !/\b(SCHEMA - (cron|net)|(?:TABLE|TABLE DATA|SEQUENCE|FUNCTION|ACL|COMMENT|SECURITY LABEL) (cron|net) )/.test(
+      !/\b(SCHEMA - (cron|net)|(?:TABLE|TABLE DATA|SEQUENCE|SEQUENCE SET|FUNCTION|ACL|COMMENT|SECURITY LABEL) (cron|net) )/.test(
         line,
       ),
   )
