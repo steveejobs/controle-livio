@@ -769,6 +769,9 @@ test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async
   await page.reload();
   await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
   await expect(page.getByText(reference, { exact: true })).toBeVisible();
+  await page
+    .getByRole('heading', { name: 'Pagamentos recebidos', exact: true })
+    .scrollIntoViewIfNeeded();
   await expect(page.getByText(paymentReference, { exact: true })).toBeVisible();
   await page.locator('#primary-navigation').getByRole('button', { name: 'Relatórios' }).click();
   await expect(page.getByRole('heading', { name: 'Relatórios', exact: true })).toBeVisible();
