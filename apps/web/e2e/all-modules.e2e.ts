@@ -523,7 +523,11 @@ for (const viewport of [
             const bounds = element.getBoundingClientRect();
             let ancestor = element.parentElement;
             let containedByHorizontalOverflow = false;
+            const ancestry: string[] = [];
             while (ancestor && ancestor !== document.documentElement) {
+              ancestry.push(
+                `${ancestor.tagName.toLowerCase()}.${typeof ancestor.className === 'string' ? ancestor.className : ''}`,
+              );
               if (
                 ['auto', 'clip', 'hidden', 'scroll'].includes(getComputedStyle(ancestor).overflowX)
               ) {
@@ -536,7 +540,15 @@ for (const viewport of [
               tag: element.tagName.toLowerCase(),
               id: element.id,
               className: typeof element.className === 'string' ? element.className : '',
-              parent: `${element.parentElement?.tagName.toLowerCase()}.${typeof element.parentElement?.className === 'string' ? element.parentElement.className : ''}`,
+              name: element.getAttribute('name'),
+              type: element.getAttribute('type'),
+              label: element
+                .closest('label')
+                ?.textContent?.replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 80),
+              ancestry: ancestry.slice(0, 5),
+              left: Math.round(bounds.left * 100) / 100,
               right: Math.round(bounds.right * 100) / 100,
               containedByHorizontalOverflow,
               scrollWidth: element.scrollWidth,
