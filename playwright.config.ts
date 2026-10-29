@@ -5,6 +5,7 @@ const baseURL = 'http://127.0.0.1:3010';
 export default defineConfig({
   testDir: './apps/web/e2e',
   testMatch: '*.e2e.ts',
+  testIgnore: '**/integrated/**',
   fullyParallel: false,
   workers: 1,
   timeout: 30_000,

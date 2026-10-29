@@ -31,6 +31,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -58,21 +60,42 @@ jobs:
           if-no-files-found: ignore
 
   supabase-isolation:
-    # Validation branch runs application tests only; it does not start a local database stack.
-    if: ${{ !startsWith(github.ref, 'refs/heads/validation/') }}
+    # Run against the disposable local stack for PRs, main and the authorized validation branch.
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx supabase start
-      - name: Test RLS and Storage isolation
-        shell: bash
-        run: |
-          eval "$(npx supabase status -o env)"
-          SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" npm run test:supabase
+      - name: Install the single browser used by the integrated suite
+        run: npx playwright install --with-deps chromium
+      - name: Start disposable Supabase and export loopback-only credentials
+        run: node tools/qa/prepare-local-supabase-ci.mjs
+      - name: Test real Auth, PostgreSQL RLS and Storage isolation
+        run: npm run test:supabase
+      - name: Run authenticated browser and workflow journeys
+        run: node tools/qa/run-integrated-browser-ci.mjs
+      - name: Upload sanitized integrated evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-supabase-browser-evidence
+          path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report.json
+            ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log
+            ${{ runner.temp }}/livio-integrated-artifacts/web-server.log
+            ${{ runner.temp }}/livio-integrated-artifacts/screenshots/*.png
+          if-no-files-found: ignore
+      - name: Stop only this disposable Supabase project
+        if: always()
+        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || true
