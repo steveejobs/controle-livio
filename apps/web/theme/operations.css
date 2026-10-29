@@ -283,7 +283,8 @@
 
 .form-grid label,
 .stack-form label,
-.report-filters label {
+.report-filters label,
+.expense-policy label {
   display: grid;
   gap: 7px;
   color: var(--color-ink-soft);
@@ -299,7 +300,8 @@
 .stack-form textarea,
 .inline-note textarea,
 .report-filters input,
-.report-filters select {
+.report-filters select,
+.expense-policy select {
   width: 100%;
   min-height: 44px;
   border: 1px solid color-mix(in srgb, var(--color-forest) 18%, var(--color-line));
@@ -323,10 +325,16 @@
 .stack-form textarea:focus,
 .inline-note textarea:focus,
 .report-filters input:focus,
-.report-filters select:focus {
+.report-filters select:focus,
+.expense-policy select:focus {
   border-color: var(--color-forest);
   outline: 0;
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-mint) 62%, transparent);
+}
+
+.expense-policy label,
+.expense-policy select {
+  min-width: 0;
 }
 
 .form-grid textarea {
