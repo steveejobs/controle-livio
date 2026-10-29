@@ -640,13 +640,24 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
   await login(page, 'admin.aurora@example.test');
   const suffix = randomUUID().slice(0, 8);
   const clientName = `Cliente QA ${suffix}`;
-  const client = await browserApi(page, '/clients', {
-    method: 'POST',
-    body: { type: 'PERSON', displayName: clientName, email: `cliente-${suffix}@example.test` },
+  await page.locator('#primary-navigation').getByRole('button', { name: 'Clientes' }).click();
+  await page.getByRole('button', { name: 'Novo cliente', exact: true }).click();
+  await page.getByLabel('Nome completo', { exact: true }).fill(clientName);
+  await page.getByLabel('E-mail', { exact: true }).fill('cliente-' + suffix + '@example.test');
+  const clientResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/v1/clients' && response.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Cadastrar e abrir cliente' }).click();
+  const client = await clientResponse;
+  expect(client.status()).toBe(201);
+  expect(client.request().postDataJSON()).toMatchObject({
+    type: 'PERSON',
+    displayName: clientName,
   });
-  assertStatus(client, 201, 'create client');
-  const createdClient = bodyAs<{ id: string; displayName: string }>(client);
+  const createdClient = (await client.json()) as { id: string; displayName: string };
   expect(createdClient.displayName).toBe(clientName);
+  await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
 
   const reference = `QA-${suffix}`;
   const matter = await browserApi(page, '/matters', {
@@ -950,27 +961,28 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ page }) =>
   await login(page, 'admin.aurora@example.test');
   const suffix = randomUUID().slice(0, 8);
   const title = `Tarefa QA ${suffix}`;
-  const created = await browserApi(page, '/tasks', {
-    method: 'POST',
-    body: {
-      clientId: clientA,
-      matterId: matterA,
-      assigneeId: lawyerUserA,
-      title,
-      description: 'Tarefa sintética do CI integrado.',
-      priority: 'HIGH',
-      dueAt: dateIso(2),
-    },
+  await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
+  await page.getByRole('button', { name: 'Nova tarefa' }).click();
+  await page.getByLabel('O que precisa ser feito').fill(title);
+  await page.getByLabel('Prioridade', { exact: true }).selectOption('HIGH');
+  await expect(page.getByLabel('Responsável', { exact: true })).toBeEnabled();
+  await page.getByLabel('Responsável', { exact: true }).selectOption(lawyerUserA);
+  const taskResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === '/v1/tasks' && response.request().method() === 'POST',
+  );
+  await page.getByRole('button', { name: 'Criar tarefa', exact: true }).click();
+  const created = await taskResponse;
+  expect(created.status()).toBe(201);
+  expect(created.request().postDataJSON()).toMatchObject({
+    title,
+    assigneeId: lawyerUserA,
+    priority: 'HIGH',
   });
-  assertStatus(created, 201, 'create task');
-  const taskId = bodyAs<{ id: string; assigneeId: string }>(created).id;
-  expect(bodyAs<{ assigneeId: string }>(created).assigneeId).toBe(lawyerUserA);
-  const completed = await browserApi(page, `/tasks/${taskId}`, {
-    method: 'PATCH',
-    body: { status: 'COMPLETED' },
-  });
-  assertStatus(completed, 200, 'complete task');
-  expect(bodyAs<{ status: string }>(completed).status).toBe('COMPLETED');
+  const taskId = ((await created.json()) as { id: string }).id;
+  await expect(page.getByRole('status')).toContainText('Tarefa criada.');
+  await page.getByLabel('Status de ' + title).selectOption('COMPLETED');
+  await expect(page.getByRole('status')).toContainText('Tarefa atualizada.');
   const persisted = await browserApi(page, '/tasks');
   assertStatus(persisted, 200, 'read persisted tasks');
   expect(

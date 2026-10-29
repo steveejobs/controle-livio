@@ -82,6 +82,8 @@ jobs:
         run: npm run test:supabase
       - name: Run authenticated browser and workflow journeys
         run: node tools/qa/run-integrated-browser-ci.mjs
+      - name: Restore synthetic backup into a new disposable database
+        run: node tools/qa/restore-local-ci.mjs
       - name: Upload sanitized integrated evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -89,6 +91,7 @@ jobs:
           name: integrated-supabase-browser-evidence
           path: |
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
             ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report.json

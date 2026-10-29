@@ -10,6 +10,26 @@ const actor: AuthenticatedActor = {
   permissions: ['calendar:update'],
 };
 
+describe('Task responsible directory', () => {
+  it('returns only active, undeleted staff of the authenticated organization without sensitive fields', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const service = new WorkService({ user: { findMany } } as never, {} as never);
+    await service.listTaskResponsibles(actor);
+    expect(findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', status: 'ACTIVE', clientId: null, deletedAt: null },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: 'asc' },
+    });
+  });
+
+  it('denies portal identities even when granted a task permission', () => {
+    const findMany = vi.fn();
+    const service = new WorkService({ user: { findMany } } as never, {} as never);
+    expect(() => service.listTaskResponsibles({ ...actor, clientId: 'client-a' })).toThrow();
+    expect(findMany).not.toHaveBeenCalled();
+  });
+});
+
 function fixture() {
   const event = {
     id: 'event-a',

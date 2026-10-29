@@ -149,6 +149,20 @@ export class WorkService {
     });
   }
 
+  listTaskResponsibles(actor: AuthenticatedActor) {
+    if (actor.clientId) throw new ForbiddenException('Operação restrita à equipe');
+    return this.prisma.user.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        status: 'ACTIVE',
+        clientId: null,
+        deletedAt: null,
+      },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: 'asc' },
+    });
+  }
+
   listTasks(actor: AuthenticatedActor) {
     return this.prisma.task.findMany({
       where: {

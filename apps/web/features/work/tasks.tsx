@@ -37,6 +37,9 @@ export function Tasks({ permissions }: { permissions: readonly string[] }) {
   const [busy, setBusy] = useState(false);
   const canCreate = permissions.includes('tasks:create');
   const canUpdate = permissions.includes('tasks:update');
+  const responsibles = useApiData<Array<{ id: string; fullName: string }>>(
+    showForm && canCreate ? '/tasks/responsibles' : undefined,
+  );
 
   const perform = async (action: () => Promise<unknown>, success: string) => {
     setBusy(true);
@@ -67,6 +70,7 @@ export function Tasks({ permissions }: { permissions: readonly string[] }) {
             description: form.get('description') || undefined,
             status: 'OPEN',
             priority: form.get('priority'),
+            assigneeId: form.get('assigneeId') || undefined,
             dueAt: form.get('dueAt')
               ? new Date(String(form.get('dueAt'))).toISOString()
               : undefined,
@@ -150,6 +154,25 @@ export function Tasks({ permissions }: { permissions: readonly string[] }) {
             Prazo
             <input name="dueAt" type="datetime-local" />
           </label>
+          <label>
+            Responsável
+            <select name="assigneeId" disabled={!responsibles.data}>
+              <option value="">Sem responsável</option>
+              {responsibles.data?.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.fullName}
+                </option>
+              ))}
+            </select>
+          </label>
+          {responsibles.error && (
+            <div role="alert" className="notice notice-error form-wide">
+              Não foi possível carregar a equipe.{' '}
+              <button type="button" onClick={responsibles.reload}>
+                Tentar novamente
+              </button>
+            </div>
+          )}
           <label className="form-wide">
             Detalhes da tarefa (opcional)
             <textarea name="description" rows={3} maxLength={10_000} />
@@ -282,6 +305,11 @@ export function Tasks({ permissions }: { permissions: readonly string[] }) {
         <div className="empty">
           <strong>Nenhuma tarefa</strong>
           <span>Use “Nova tarefa” para começar.</span>
+          {canCreate && (
+            <button className="primary" onClick={() => setShowForm(true)}>
+              Criar primeira tarefa
+            </button>
+          )}
         </div>
       )}
     </section>

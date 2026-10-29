@@ -78,6 +78,11 @@ export class WorkController {
   ) {
     return this.work.createTask(actor, input);
   }
+  @Get('tasks/responsibles')
+  @RequirePermission('tasks:create')
+  taskResponsibles(@CurrentActor() actor: AuthenticatedActor) {
+    return this.work.listTaskResponsibles(actor);
+  }
   @Get('tasks') @RequirePermission('tasks:view') listTasks(
     @CurrentActor() actor: AuthenticatedActor,
   ) {

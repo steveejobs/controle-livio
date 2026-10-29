@@ -40,7 +40,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
     };
 
     if (status >= 500) {
-      request.log?.error({ err: exception, requestId }, 'Falha não tratada');
+      // Exceptions may embed signed URLs, SQL parameters and financial payloads.
+      // Keep correlation and classification without serializing untrusted error data.
+      request.log?.error({ requestId, statusCode: status }, 'Falha não tratada');
     }
     response.status(status).json(body);
   }
