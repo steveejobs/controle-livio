@@ -38,7 +38,10 @@ execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
 });
 // createdb fails if the randomly named destination exists. Never clean or overwrite a database.
 run('createdb', '-U', 'postgres', '-T', 'template0', target);
-sql(target, 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty');
+// PostgreSQL may omit the built-in public schema from the archive. Preserve it in that case.
+if (/\bSCHEMA - public\b/.test(toc)) {
+  sql(target, 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty');
+}
 run(
   'pg_restore',
   '-U',

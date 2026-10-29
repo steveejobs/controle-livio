@@ -42,6 +42,8 @@ for (const viewport of [
           },
           organization: { name: 'Organização QA' },
         };
+      } else if (path === '/v1/tasks/responsibles' && method === 'GET') {
+        body = [{ id: 'qa-lawyer', fullName: 'Advogado QA' }];
       } else if (path === '/v1/tasks' && method === 'GET') {
         body = task ? [task] : [];
       } else if (path === '/v1/tasks' && method === 'POST') {
@@ -102,6 +104,7 @@ for (const viewport of [
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Tarefas' })).toBeVisible();
     await page.getByRole('button', { name: 'Nova tarefa' }).click();
+    await page.locator('select[name="assigneeId"]').selectOption('qa-lawyer');
     await page.getByLabel('O que precisa ser feito').fill('Preparar audiência');
     await page.getByLabel('Prazo').fill('2026-11-03T15:00');
     await page.getByRole('button', { name: 'Criar tarefa' }).click();
@@ -111,6 +114,10 @@ for (const viewport of [
       actions.find((action) => action.path === '/v1/tasks' && action.method === 'POST')?.body
         ?.dueAt,
     ).toBe('2026-11-03T18:00:00.000Z');
+    expect(
+      actions.find((action) => action.path === '/v1/tasks' && action.method === 'POST')?.body
+        ?.assigneeId,
+    ).toBe('qa-lawyer');
     await page
       .getByRole('combobox', { name: 'Status de Preparar audiência' })
       .selectOption('COMPLETED');
