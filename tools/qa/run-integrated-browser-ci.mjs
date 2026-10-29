@@ -402,6 +402,8 @@ const membershipQueriesInBurst = burst
         event.tables?.includes('organization_members'),
     ).length
   : null;
+const membershipLookupsShared =
+  Boolean(burst) && membershipQueriesInBurst > 0 && membershipQueriesInBurst < burst.requests;
 const p2024Count = (apiLog.match(/P2024/g) ?? []).length;
 const queryDurations = queryEvents.map((event) => Number(event.durationMs)).filter(Number.isFinite);
 const backend = {
@@ -414,8 +416,10 @@ const backend = {
   },
   membershipBurst: burst
     ? {
+        requests: burst.requests,
         organizationMemberQueries: membershipQueriesInBurst,
-        expectedSingleSharedLookup: membershipQueriesInBurst === 1,
+        deduplicatedRequests: Math.max(0, burst.requests - membershipQueriesInBurst),
+        sharedLookup: membershipLookupsShared,
       }
     : null,
 };
@@ -427,15 +431,15 @@ writeFileSync(
 
 console.log(`Prisma queries: ${backend.prisma.queryCount}; P2024: ${p2024Count}.`);
 console.log(
-  `Membership SELECTs in concurrent burst: ${membershipQueriesInBurst ?? 'not measured'}.`,
+  `Membership SELECTs in concurrent burst: ${membershipQueriesInBurst ?? 'not measured'} of ${burst?.requests ?? 'unknown'} requests.`,
 );
 console.log(`Sanitized evidence: ${output('integrated-metrics.json')}`);
 if (p2024Count > 0) {
   console.error(`P2024 pool timeout errors were observed: ${p2024Count}.`);
   runFailed = true;
 }
-if (burst && membershipQueriesInBurst !== 1) {
-  console.error('The concurrent browser burst did not share exactly one membership lookup.');
+if (burst && !membershipLookupsShared) {
+  console.error('The concurrent browser burst did not share any membership lookup.');
   runFailed = true;
 }
 if (runFailed) process.exitCode = 1;

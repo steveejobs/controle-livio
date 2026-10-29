@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 
@@ -223,12 +223,13 @@ async function screenshotEvidence(page: Page, name: string) {
   });
 }
 
-async function login(page: Page, email: string) {
+async function login(page: Page, email: string, onSubmit?: () => void) {
   await enableLocalNetworkOnly(page.context());
   await page.goto('/');
   await page.getByLabel('E-mail').fill(email);
   await page.getByRole('textbox', { name: 'Senha' }).fill(localPassword);
   await page.getByRole('button', { name: 'Entrar no sistema' }).click();
+  onSubmit?.();
   await page.locator('#primary-navigation').waitFor({ state: 'visible' });
 }
 
@@ -430,16 +431,21 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
   page,
 }) => {
   const traffic = createTrafficRecorder(page);
-  const startedAt = performance.now();
+  let dashboardStartedAt = performance.now();
   let metricsSaved = false;
   const externalHosts = await enableLocalNetworkOnly(page.context());
-  traffic.setPhase('dashboard');
+  traffic.setPhase('setup');
   try {
-    await login(page, 'admin.aurora@example.test');
+    await login(page, 'admin.aurora@example.test', () => {
+      traffic.setPhase('dashboard');
+      dashboardStartedAt = performance.now();
+    });
     await expect(page.getByRole('heading', { name: /Vis.o geral/ })).toBeVisible();
     await traffic.waitForQuiet();
     await screenshotEvidence(page, 'navigation-dashboard');
-    traffic.phase('dashboard').perceivedLoadMs = Number((performance.now() - startedAt).toFixed(2));
+    traffic.phase('dashboard').perceivedLoadMs = Number(
+      (performance.now() - dashboardStartedAt).toFixed(2),
+    );
 
     const navigations = [
       { phase: 'clients', nav: 'Clientes', heading: 'Clientes' },
@@ -731,7 +737,7 @@ test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async
   const paymentForm = page.locator('form').filter({
     has: page.getByRole('button', { name: 'Confirmar pagamento' }),
   });
-  await paymentForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
+  await paymentForm.getByRole('combobox').nth(0).selectOption(clientA);
   const receivableOption = paymentForm
     .getByLabel('Parcela')
     .locator('option')
@@ -740,7 +746,7 @@ test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async
   const installmentOption = await receivableOption.getAttribute('value');
   if (!installmentOption) throw new Error('A parcela do recebível não foi carregada.');
   expect(installmentOption).toBe(createdReceivable.installments[0]!.id);
-  await paymentForm.getByLabel('Parcela').selectOption(installmentOption);
+  await paymentForm.getByRole('combobox').nth(1).selectOption(installmentOption);
   await paymentForm.getByLabel('Referência do pagamento').fill(paymentReference);
   await paymentForm.getByLabel('Valor recebido').fill('137,50');
   await paymentForm.getByLabel('Data do pagamento').fill(new Date().toISOString().slice(0, 16));
@@ -769,7 +775,7 @@ test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async
   await expect(page.getByText(paymentReference, { exact: true })).toBeVisible();
   await page.locator('#primary-navigation').getByRole('button', { name: 'Relatórios' }).click();
   await expect(page.getByRole('heading', { name: 'Relatórios', exact: true })).toBeVisible();
-  await page.getByLabel('Relatório').selectOption('received');
+  await page.locator('.report-filters').getByRole('combobox').nth(0).selectOption('received');
   await expect(page.locator('tbody')).toContainText('137,50');
   await screenshotEvidence(page, 'journey-contract-receivable-payment');
 });
@@ -859,7 +865,11 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       .getByRole('button', { name: 'Relatórios' })
       .click();
     await expect(adminPage.getByRole('heading', { name: 'Relatórios', exact: true })).toBeVisible();
-    await adminPage.getByLabel('Relatório').selectOption('cash-flow');
+    await adminPage
+      .locator('.report-filters')
+      .getByRole('combobox')
+      .nth(0)
+      .selectOption('cash-flow');
     await expect(adminPage.locator('tbody')).toContainText('42,25');
     await screenshotEvidence(adminPage, 'journey-expense-cash-flow');
   } finally {
@@ -894,9 +904,26 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
   const downloadUrl = bodyAs<{ url: string }>(download).url;
   expect(new URL(downloadUrl).hostname).toBe('127.0.0.1');
   const documentPage = await page.context().newPage();
-  const downloadResponse = await documentPage.goto(downloadUrl, { waitUntil: 'domcontentloaded' });
-  expect(downloadResponse?.status()).toBe(200);
-  expect(downloadResponse?.headers()['content-type']).toContain('application/pdf');
+  const downloadPromise = documentPage.waitForEvent('download');
+  const downloadResponsePromise = documentPage.waitForResponse((response) => {
+    const responseUrl = new URL(response.url());
+    const requestedUrl = new URL(downloadUrl);
+    return (
+      responseUrl.origin === requestedUrl.origin && responseUrl.pathname === requestedUrl.pathname
+    );
+  });
+  await documentPage.goto(downloadUrl).catch((error: unknown) => {
+    if (!(error instanceof Error) || !error.message.includes('Download is starting')) throw error;
+  });
+  const [downloadedFile, downloadResponse] = await Promise.all([
+    downloadPromise,
+    downloadResponsePromise,
+  ]);
+  expect(downloadResponse.status()).toBe(200);
+  expect(downloadResponse.headers()['content-type']).toContain('application/pdf');
+  const downloadedPath = await downloadedFile.path();
+  if (!downloadedPath) throw new Error('O download do PDF sintético não foi salvo.');
+  expect(readFileSync(downloadedPath).subarray(0, 8).toString('ascii')).toContain('%PDF-');
   await documentPage.close();
 
   const requested = await browserApi(page, `/documents/${documentId}/signature-requests`, {
@@ -1018,7 +1045,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       bodyAs<Array<{ body: string }>>(persistedMessages).some((item) => item.body === message),
     ).toBe(true);
 
-    const popupPromise = clientPage.waitForEvent('popup');
+    const popupPromise = clientContext.waitForEvent('page');
     await clientPage.getByRole('button', { name: new RegExp(visibleTitle) }).click();
     const popup = await popupPromise;
     const storageResponse = await popup.waitForResponse((response) =>
