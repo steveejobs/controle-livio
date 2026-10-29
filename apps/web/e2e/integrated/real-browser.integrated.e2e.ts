@@ -240,22 +240,22 @@ async function browserAccessToken(page: Page): Promise<string | undefined> {
       .map((cookie) => {
         const separator = cookie.indexOf('=');
         return separator < 0
-          ? [cookie, '']
-          : [cookie.slice(0, separator), cookie.slice(separator + 1)];
+          ? { name: cookie, value: '' }
+          : { name: cookie.slice(0, separator), value: cookie.slice(separator + 1) };
       });
-    const unchunked = cookies.find(([name]) => name === cookieName);
-    if (unchunked) return decodeURIComponent(unchunked[1]);
+    const unchunked = cookies.find(({ name }) => name === cookieName);
+    if (unchunked) return decodeURIComponent(unchunked.value);
 
     return cookies
       .filter(
-        ([name]) =>
+        ({ name }) =>
           name.startsWith(`${cookieName}.`) && /^\d+$/.test(name.slice(cookieName.length + 1)),
       )
       .sort(
-        ([left], [right]) =>
+        ({ name: left }, { name: right }) =>
           Number(left.slice(cookieName.length + 1)) - Number(right.slice(cookieName.length + 1)),
       )
-      .map(([, value]) => decodeURIComponent(value))
+      .map(({ value }) => decodeURIComponent(value))
       .join('');
   }, supabaseAuthCookieName);
 
