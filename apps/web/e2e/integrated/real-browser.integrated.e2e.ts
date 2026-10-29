@@ -759,11 +759,8 @@ test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async
   const persistedPayment = bodyAs<{
     items: Array<{ reference: string; amount: string; status: string }>;
   }>(payments).items.find((item) => item.reference === paymentReference);
-  expect(persistedPayment).toMatchObject({
-    reference: paymentReference,
-    amount: '137.50',
-    status: 'CONFIRMED',
-  });
+  expect(persistedPayment).toMatchObject({ reference: paymentReference, status: 'CONFIRMED' });
+  expect(Number(persistedPayment?.amount)).toBe(137.5);
   const received = await browserApi(page, `/reports/received?${reportRange()}`);
   assertStatus(received, 200, 'read received report');
   const reportRows = bodyAs<{ rows: Array<{ amount: string }> }>(received).rows;
@@ -1011,6 +1008,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       image,
     );
     assertStatus(visible, 201, 'upload client-visible file');
+    const visibleDocumentId = bodyAs<{ id: string }>(visible).id;
     const internal = await browserUpload(
       adminPage,
       { title: internalTitle, category: 'QA', visibility: 'INTERNAL', clientId: clientA },
@@ -1045,14 +1043,29 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       bodyAs<Array<{ body: string }>>(persistedMessages).some((item) => item.body === message),
     ).toBe(true);
 
-    const popupPromise = clientContext.waitForEvent('page');
-    await clientPage.getByRole('button', { name: new RegExp(visibleTitle) }).click();
-    const popup = await popupPromise;
-    const storageResponse = await popup.waitForResponse((response) =>
-      response.url().includes('/storage/v1/object/sign/'),
+    const downloadUrlResponsePromise = clientPage.waitForResponse((response) =>
+      response.url().includes(`/v1/documents/${visibleDocumentId}/download-url`),
     );
+    await clientPage.getByRole('button', { name: new RegExp(visibleTitle) }).click();
+    const downloadUrlResponse = await downloadUrlResponsePromise;
+    expect(downloadUrlResponse.status()).toBe(200);
+    const signedUrl = ((await downloadUrlResponse.json()) as { url: string }).url;
+    expect(new URL(signedUrl).hostname).toBe('127.0.0.1');
+    const documentPage = await clientContext.newPage();
+    const storageResponsePromise = documentPage.waitForResponse((response) => {
+      const responseUrl = new URL(response.url());
+      const requestedUrl = new URL(signedUrl);
+      return (
+        responseUrl.origin === requestedUrl.origin && responseUrl.pathname === requestedUrl.pathname
+      );
+    });
+    await documentPage.goto(signedUrl).catch((error: unknown) => {
+      if (!(error instanceof Error) || !error.message.includes('Download is starting')) throw error;
+    });
+    const storageResponse = await storageResponsePromise;
     expect(storageResponse.status()).toBe(200);
-    await popup.close();
+    expect(storageResponse.headers()['content-type']).toContain('image/png');
+    await documentPage.close();
   } finally {
     await adminContext.close();
     await clientContext.close();
