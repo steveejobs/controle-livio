@@ -20,9 +20,9 @@ const run = (...args) =>
     maxBuffer: 8 * 1024 * 1024,
   }).trim();
 const sql = (database, query) =>
-  run('psql', '-U', 'postgres', '-d', database, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query);
+  run('psql', '-U', 'supabase_admin', '-d', database, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query);
 const started = Date.now();
-run('pg_dump', '-U', 'postgres', '-d', 'postgres', '-Fc', '-f', archive);
+run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
 const toc = run('pg_restore', '-l', archive)
   .split('\n')
@@ -37,7 +37,7 @@ execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
   stdio: ['pipe', 'ignore', 'pipe'],
 });
 // createdb fails if the randomly named destination exists. Never clean or overwrite a database.
-run('createdb', '-U', 'postgres', '-T', 'template0', target);
+run('createdb', '-U', 'supabase_admin', '-T', 'template0', target);
 // PostgreSQL may omit the built-in public schema from the archive. Preserve it in that case.
 if (/\bSCHEMA - public\b/.test(toc)) {
   sql(target, 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty');
@@ -45,7 +45,7 @@ if (/\bSCHEMA - public\b/.test(toc)) {
 run(
   'pg_restore',
   '-U',
-  'postgres',
+  'supabase_admin',
   '-d',
   target,
   '--exit-on-error',
