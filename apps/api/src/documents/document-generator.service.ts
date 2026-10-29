@@ -448,7 +448,9 @@ export class DocumentGeneratorService {
     pdf.setSubject('Documento preenchido com os dados atuais do cliente e do cadastro.');
     const regular = await pdf.embedFont(StandardFonts.TimesRoman);
     const bold = await pdf.embedFont(StandardFonts.TimesRomanBold);
-    const logo = await pdf.embedJpg(this.logo);
+    // pdf-lib reads from the backing ArrayBuffer and ignores Buffer.byteOffset.
+    const logoBytes = Uint8Array.from(this.logo);
+    const logo = await pdf.embedJpg(logoBytes);
     const pageWidth = 595.28;
     const pageHeight = 841.89;
     const margin = 58;
