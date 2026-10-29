@@ -37,7 +37,19 @@ const calendarEventFields = z.object({
   type: z.enum(['HEARING', 'MEETING', 'LEGAL_DEADLINE', 'APPOINTMENT', 'OTHER']),
   startsAt: z.coerce.date(),
   endsAt: z.coerce.date(),
-  timezone: z.string().min(3).max(80).default('America/Sao_Paulo'),
+  timezone: z
+    .string()
+    .min(3)
+    .max(80)
+    .refine((value) => {
+      try {
+        new Intl.DateTimeFormat('pt-BR', { timeZone: value });
+        return true;
+      } catch {
+        return false;
+      }
+    }, 'Fuso horário inválido')
+    .default('America/Sao_Paulo'),
   allDay: z.boolean().default(false),
   attendees: z
     .array(z.object({ name: z.string().min(1).max(200), email: z.string().email().optional() }))
@@ -46,6 +58,13 @@ const calendarEventFields = z.object({
   recurrenceRule: z
     .string()
     .regex(/^FREQ=(DAILY|WEEKLY|MONTHLY)(;INTERVAL=\d{1,2})?(;COUNT=\d{1,3})?$/)
+    .optional(),
+  reminderMinutes: z
+    .array(z.number().int().min(1).max(10_080))
+    .max(8)
+    .refine((values) => new Set(values).size === values.length, {
+      message: 'Não repita o mesmo intervalo de aviso',
+    })
     .optional(),
 });
 
@@ -59,6 +78,7 @@ export const calendarEventSchema = calendarEventFields.refine(
 
 export const updateCalendarEventSchema = calendarEventFields
   .partial()
+  .extend({ status: z.enum(['SCHEDULED', 'COMPLETED', 'CANCELLED']).optional() })
   .refine((value) => !value.startsAt || !value.endsAt || value.endsAt > value.startsAt, {
     message: 'Fim deve ser posterior ao início',
     path: ['endsAt'],

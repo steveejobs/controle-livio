@@ -11,14 +11,20 @@ import {
 } from '../finance/contract-values';
 import { useApiData } from '../shared/use-api-data';
 import { ServiceSelection } from '../finance/service-selection';
+import { ContractHearings, type ContractHearingDraft } from '../finance/contract-hearings';
 import type { ClientOverview } from './client.types';
 import { formatTaxIdField } from './tax-id-format';
+import { ClientPhoto } from './client-photo';
+import { WhatsAppCollection } from './whatsapp-collection';
 
 const documentTypes = [
   { category: 'CONTRATO_HONORARIOS', label: 'Contrato de honorários' },
   { category: 'PROCURACAO', label: 'Procuração' },
   { category: 'HIPOSSUFICIENCIA', label: 'Declaração de hipossuficiência' },
 ] as const;
+const attachableDocumentTypes = documentTypes.filter(
+  (document) => document.category !== 'CONTRATO_HONORARIOS',
+);
 
 const onboardingSteps = ['Cadastro', 'Financeiro', 'Honorários', 'Documentos'] as const;
 
@@ -43,6 +49,7 @@ export function ClientDetail({
   clientId,
   onBack,
   permissions,
+  initialFeedback,
   startGuidedOnboarding = false,
   onGuidedOnboardingComplete,
 }: {
@@ -51,20 +58,29 @@ export function ClientDetail({
   permissions: readonly string[];
   startGuidedOnboarding?: boolean;
   onGuidedOnboardingComplete?: () => void;
+  initialFeedback?: string;
 }) {
   const { data, error, reload } = useApiData<ClientOverview>(`/clients/${clientId}/overview`);
   const [onboardingStep, setOnboardingStep] = useState<number | null>(
     startGuidedOnboarding ? 2 : null,
   );
-  const [guidedUploadedCategories, setGuidedUploadedCategories] = useState<string[]>([]);
+  const [guidedCompletedCategories, setGuidedCompletedCategories] = useState<string[]>([]);
   const onboardingHeadingRef = useRef<HTMLHeadingElement>(null);
-  const [feedback, setFeedback] = useState<string>();
+  const [feedback, setFeedback] = useState<string | undefined>(initialFeedback);
   const [saving, setSaving] = useState(false);
   const [showReceivableForm, setShowReceivableForm] = useState(false);
   const [showContractForm, setShowContractForm] = useState(false);
   const [contractFeeModel, setContractFeeModel] = useState('FIXED');
+  const [contractHearings, setContractHearings] = useState<ContractHearingDraft[]>([]);
   const [documentCategory, setDocumentCategory] = useState<string>(documentTypes[0].category);
   const [documentTitle, setDocumentTitle] = useState<string>(documentTypes[0].label);
+  const [documentContractId, setDocumentContractId] = useState('');
+  const [attachedDocumentCategory, setAttachedDocumentCategory] = useState<string>(
+    attachableDocumentTypes[0]!.category,
+  );
+  const [attachedDocumentTitle, setAttachedDocumentTitle] = useState<string>(
+    attachableDocumentTypes[0]!.label,
+  );
   const canUpdateClient = permissions.includes('clients:update');
   const canAddContact = permissions.includes('clients:create');
   const canUpload = permissions.includes('documents:create');
@@ -86,9 +102,10 @@ export function ClientDetail({
 
   useEffect(() => {
     if (onboardingStep !== 4 || !data) return;
+    if (!documentContractId && data.contracts[0]) setDocumentContractId(data.contracts[0].id);
     const completedCategories = new Set([
       ...data.documents.map((document) => document.category),
-      ...guidedUploadedCategories,
+      ...guidedCompletedCategories,
     ]);
     const nextDocument = documentTypes.find(
       (document) => !completedCategories.has(document.category),
@@ -99,7 +116,7 @@ export function ClientDetail({
     } else {
       setOnboardingStep(5);
     }
-  }, [onboardingStep, data, guidedUploadedCategories]);
+  }, [onboardingStep, data, guidedCompletedCategories, documentContractId]);
 
   const moveToOnboardingStep = (step: number | null) => setOnboardingStep(step);
   const finishGuidedOnboarding = () => {
@@ -145,6 +162,19 @@ export function ClientDetail({
       </div>
     );
 
+  const customFields = data.client.customFields ?? {};
+  const legalIdentity = (customFields.legalIdentity ?? {}) as {
+    nationality?: string;
+    civilStatus?: string;
+    occupation?: string;
+    identityDocument?: string;
+    birthDate?: string;
+  };
+  const legalRepresentative = (customFields.legalRepresentative ?? {}) as {
+    name?: string;
+    taxId?: string;
+  };
+
   const edit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -167,6 +197,27 @@ export function ClientDetail({
               city: String(form.get('address.city') || '').trim() || undefined,
               state: String(form.get('address.state') || '').trim() || undefined,
               postalCode: String(form.get('address.postalCode') || '').trim() || undefined,
+            },
+            customFields: {
+              ...customFields,
+              ...(data.client.type === 'PERSON'
+                ? {
+                    legalIdentity: {
+                      nationality: String(form.get('legalIdentity.nationality') || '').trim(),
+                      civilStatus: String(form.get('legalIdentity.civilStatus') || '').trim(),
+                      occupation: String(form.get('legalIdentity.occupation') || '').trim(),
+                      identityDocument: String(
+                        form.get('legalIdentity.identityDocument') || '',
+                      ).trim(),
+                      birthDate: String(form.get('legalIdentity.birthDate') || '').trim(),
+                    },
+                  }
+                : {
+                    legalRepresentative: {
+                      name: String(form.get('legalRepresentative.name') || '').trim(),
+                      taxId: String(form.get('legalRepresentative.taxId') || '').replace(/\D/g, ''),
+                    },
+                  }),
             },
           }),
         }),
@@ -212,6 +263,7 @@ export function ClientDetail({
             number: String(form.get('number') || '').trim(),
             title: String(form.get('title') || '').trim(),
             feeModel,
+            receivableId: String(form.get('receivableId') || '') || undefined,
             fixedAmount: normalizeMoneyInput(String(form.get('fixedAmount') || '')),
             successRate:
               feeModel === 'SUCCESS' || feeModel === 'MIXED'
@@ -221,6 +273,15 @@ export function ClientDetail({
             serviceNames: form
               .getAll('serviceNames')
               .filter((value): value is string => typeof value === 'string'),
+            hearings: contractHearings.map((hearing) => {
+              const startsAt = new Date(hearing.startsAt);
+              return {
+                startsAt: startsAt.toISOString(),
+                endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
+                location: hearing.location.trim() || undefined,
+                reminderMinutes: hearing.reminderMinutes,
+              };
+            }),
             startsAt: form.get('startsAt') || undefined,
             endsAt: form.get('endsAt') || undefined,
           }),
@@ -230,6 +291,7 @@ export function ClientDetail({
       if (succeeded) {
         target.reset();
         setContractFeeModel('FIXED');
+        setContractHearings([]);
         setShowContractForm(false);
         if (onboardingStep === 3) moveToOnboardingStep(4);
       }
@@ -321,11 +383,71 @@ export function ClientDetail({
       if (succeeded) {
         target.reset();
         if (onboardingStep === 4) {
-          setGuidedUploadedCategories((current) => [...new Set([...current, category])]);
+          setGuidedCompletedCategories((current) => [...new Set([...current, category])]);
         } else {
-          setDocumentCategory(documentTypes[0].category);
-          setDocumentTitle(documentTypes[0].label);
+          setAttachedDocumentCategory(attachableDocumentTypes[0]!.category);
+          setAttachedDocumentTitle(attachableDocumentTypes[0]!.label);
         }
+      }
+    });
+  };
+
+  const uploadExistingContract = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const target = event.currentTarget;
+    const source = new FormData(target);
+    const file = source.get('file');
+    if (!(file instanceof File) || !file.size) return;
+    const contractId = String(source.get('contractId') || '');
+    const contract = data.contracts.find((item) => item.id === contractId);
+    const contractLabel = contract
+      ? `${contract.number} · ${contract.title}`
+      : data.client.displayName;
+    const title = `Contrato assinado · ${contractLabel} · ${file.name}`.slice(0, 240);
+    const payload = new FormData();
+    payload.set('file', file);
+    payload.set('title', title);
+    payload.set('category', 'CONTRATO_HONORARIOS');
+    payload.set('visibility', 'INTERNAL');
+    payload.set('clientId', clientId);
+    if (contract) payload.set('contractId', contract.id);
+    void run(
+      () => api('/documents', { method: 'POST', body: payload }),
+      'Contrato digitalizado salvo com acesso interno.',
+    ).then((succeeded) => {
+      if (succeeded) {
+        const fileInput = target.elements.namedItem('file');
+        if (fileInput instanceof HTMLInputElement) fileInput.value = '';
+        if (onboardingStep === 4) {
+          setGuidedCompletedCategories((current) => [
+            ...new Set([...current, 'CONTRATO_HONORARIOS']),
+          ]);
+        }
+      }
+    });
+  };
+
+  const generateClientDocument = () => {
+    if (documentCategory === 'CONTRATO_HONORARIOS' && !documentContractId) {
+      setFeedback('Cadastre um contrato de honorários antes de gerar este documento.');
+      return;
+    }
+    void run(
+      () =>
+        api('/documents/generate', {
+          method: 'POST',
+          body: JSON.stringify({
+            clientId,
+            category: documentCategory,
+            ...(documentCategory === 'CONTRATO_HONORARIOS'
+              ? { contractId: documentContractId }
+              : {}),
+          }),
+        }),
+      `${documentTitle} gerado e salvo no histórico do cliente.`,
+    ).then((succeeded) => {
+      if (succeeded && onboardingStep === 4) {
+        setGuidedCompletedCategories((current) => [...new Set([...current, documentCategory])]);
       }
     });
   };
@@ -344,6 +466,12 @@ export function ClientDetail({
   return (
     <section className="client-workspace">
       <header className="page-title client-heading">
+        <ClientPhoto
+          clientId={clientId}
+          name={data.client.displayName}
+          hasPhoto={Boolean(data.client.photoStorageKey)}
+          canEdit={canUpdateClient}
+        />
         <div>
           <p>Cliente</p>
           <h1>{data.client.displayName}</h1>
@@ -472,6 +600,91 @@ export function ClientDetail({
                   defaultValue={data.client.source}
                 />
               </label>
+              {data.client.type === 'PERSON' ? (
+                <details className="optional-fields">
+                  <summary>Qualificação para documentos</summary>
+                  <p className="section-note">
+                    Atualizar estes dados altera as próximas versões geradas.
+                  </p>
+                  <div className="stack-form">
+                    <label>
+                      Nacionalidade
+                      <input
+                        name="legalIdentity.nationality"
+                        disabled={!canUpdateClient}
+                        defaultValue={legalIdentity.nationality}
+                      />
+                    </label>
+                    <label>
+                      Estado civil
+                      <input
+                        name="legalIdentity.civilStatus"
+                        disabled={!canUpdateClient}
+                        defaultValue={legalIdentity.civilStatus}
+                      />
+                    </label>
+                    <label>
+                      Profissão
+                      <input
+                        name="legalIdentity.occupation"
+                        disabled={!canUpdateClient}
+                        defaultValue={legalIdentity.occupation}
+                      />
+                    </label>
+                    <label>
+                      RG e órgão expedidor
+                      <input
+                        name="legalIdentity.identityDocument"
+                        disabled={!canUpdateClient}
+                        defaultValue={legalIdentity.identityDocument}
+                      />
+                    </label>
+                    <label>
+                      Data de nascimento
+                      <input
+                        name="legalIdentity.birthDate"
+                        type="date"
+                        disabled={!canUpdateClient}
+                        defaultValue={legalIdentity.birthDate}
+                      />
+                    </label>
+                  </div>
+                </details>
+              ) : (
+                <details className="optional-fields">
+                  <summary>Representante legal para documentos</summary>
+                  <p className="section-note">
+                    As próximas versões usarão o nome e o CPF informados aqui.
+                  </p>
+                  <div className="stack-form">
+                    <label>
+                      Nome do representante
+                      <input
+                        name="legalRepresentative.name"
+                        disabled={!canUpdateClient}
+                        defaultValue={legalRepresentative.name}
+                      />
+                    </label>
+                    <label>
+                      CPF do representante
+                      <input
+                        name="legalRepresentative.taxId"
+                        inputMode="numeric"
+                        placeholder="000.000.000-00"
+                        maxLength={14}
+                        disabled={!canUpdateClient}
+                        defaultValue={formatTaxIdField(legalRepresentative.taxId ?? '', 'PERSON')}
+                        onChange={(event) => {
+                          event.currentTarget.value = formatTaxIdField(
+                            event.currentTarget.value,
+                            'PERSON',
+                          );
+                        }}
+                      />
+                    </label>
+                  </div>
+                </details>
+              )}
               <fieldset className="optional-address">
                 <legend>
                   Endereço <span>(opcional)</span>
@@ -636,6 +849,14 @@ export function ClientDetail({
               <b>{canViewDocuments ? data.documents.length : '—'}</b> documentos
             </span>
           </div>
+          {canViewReceivables &&
+            (canCreateReceivable || permissions.includes('payments:create')) && (
+              <WhatsAppCollection
+                client={data.client}
+                contacts={data.contacts}
+                outstanding={data.financial.outstanding}
+              />
+            )}
           {canCreateReceivable && (
             <>
               <button
@@ -766,35 +987,50 @@ export function ClientDetail({
         <ClientPanel id="honorarios-cliente" title="Contrato de honorários">
           {canViewContracts && data.contracts.length ? (
             <div className="record-list">
-              {data.contracts.map((contract) => (
-                <article key={contract.id}>
-                  <strong>
-                    {contract.number} · {contract.title}
-                  </strong>
-                  <span>
-                    {feeModelLabel(contract.feeModel)} ·{' '}
-                    {contract.feeModel === 'SUCCESS'
-                      ? `${formatSuccessRate(contract.successRate)}% do êxito`
-                      : formatMoney(contract.fixedAmount, contract.currency)}
-                    {contract.feeModel === 'MIXED' && contract.successRate
-                      ? ` + ${formatSuccessRate(contract.successRate)}% do êxito`
-                      : ''}{' '}
-                    · {contract.status}
-                  </span>
-                  {(contract.terms?.services?.length || contract.serviceName) && (
-                    <small>
-                      Serviços: {contract.terms?.services?.join(', ') ?? contract.serviceName}
-                    </small>
-                  )}
-                </article>
-              ))}
+              {data.contracts.map((contract) => {
+                const savedScans = data.documents.filter(
+                  (document) =>
+                    document.category === 'CONTRATO_HONORARIOS' &&
+                    document.contractId === contract.id &&
+                    !document.title.startsWith('Gerado automaticamente ·'),
+                );
+                return (
+                  <article key={contract.id}>
+                    <strong>
+                      {contract.number} · {contract.title}
+                    </strong>
+                    <span>
+                      {feeModelLabel(contract.feeModel)} ·{' '}
+                      {contract.feeModel === 'SUCCESS'
+                        ? `${formatSuccessRate(contract.successRate)}% do êxito`
+                        : formatMoney(contract.fixedAmount, contract.currency)}
+                      {contract.feeModel === 'MIXED' && contract.successRate
+                        ? ` + ${formatSuccessRate(contract.successRate)}% do êxito`
+                        : ''}{' '}
+                      · {contract.status}
+                    </span>
+                    {(contract.terms?.services?.length || contract.serviceName) && (
+                      <small>
+                        Serviços: {contract.terms?.services?.join(', ') ?? contract.serviceName}
+                      </small>
+                    )}
+                    {savedScans.length > 0 && (
+                      <small>
+                        {savedScans.length === 1
+                          ? '1 contrato assinado ou digitalizado salvo'
+                          : `${savedScans.length} arquivos assinados ou digitalizados salvos`}
+                      </small>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           ) : canViewContracts ? (
             <p className="section-note">Nenhum contrato cadastrado para este cliente.</p>
           ) : null}
           <p className="section-note">
-            Os dados e valores ficam vinculados à ficha do cliente. A geração automática do modelo
-            do contrato será feita na próxima etapa.
+            Os modelos gerados usam os dados atuais do cliente, os honorários e a cobrança
+            vinculada.
           </p>
           {canCreateContract && (
             <>
@@ -805,6 +1041,7 @@ export function ClientDetail({
                 onClick={() => {
                   setShowContractForm((value) => !value);
                   setContractFeeModel('FIXED');
+                  setContractHearings([]);
                 }}
               >
                 {showContractForm ? 'Fechar formulário' : 'Novo contrato de honorários'}
@@ -860,6 +1097,27 @@ export function ClientDetail({
                     </label>
                   )}
                   <ServiceSelection disabled={saving} />
+                  <ContractHearings disabled={saving} onChange={setContractHearings} />
+                  {canViewReceivables && (
+                    <label className="form-wide">
+                      Cobrança deste contrato
+                      <select name="receivableId" defaultValue="">
+                        <option value="">Sem cobrança vinculada</option>
+                        {data.financial.receivables
+                          .filter((receivable) => !receivable.contractId)
+                          .map((receivable) => (
+                            <option key={receivable.id} value={receivable.id}>
+                              {receivable.reference} ·{' '}
+                              {formatMoney(receivable.originalAmount, receivable.currency)} ·{' '}
+                              {receivable.installments.length} parcela(s)
+                            </option>
+                          ))}
+                      </select>
+                      <span className="section-note">
+                        A cobrança selecionada preencherá valores e vencimentos do contrato.
+                      </span>
+                    </label>
+                  )}
                   <label>
                     Início da vigência (opcional)
                     <input name="startsAt" type="date" />
@@ -892,14 +1150,55 @@ export function ClientDetail({
         {(!guidedOnboarding || onboardingStep === 4) && (
           <ClientPanel id="documentos-cliente" title="Documentos do cliente">
             <p className="section-note">
-              Anexe os arquivos existentes. Eles ficam restritos à equipe; os modelos preenchidos
-              automaticamente entram na próxima etapa.
+              Gere procuração, contrato e declaração já preenchidos com os dados atuais. Cada
+              emissão fica salva no histórico como uma versão interna.
             </p>
+            {canUpload && (
+              <section className="contract-scan-upload" aria-labelledby="saved-contract-heading">
+                <h3 id="saved-contract-heading">Salvar contrato assinado ou digitalizado</h3>
+                <p className="section-note">
+                  Guarde aqui os contratos que o escritório já possui em PDF ou imagem. O arquivo
+                  fica privado e pode ser relacionado a um contrato cadastrado. Repita o envio para
+                  cada contrato que quiser arquivar.
+                </p>
+                <form className="stack-form compact-form" onSubmit={uploadExistingContract}>
+                  {canViewContracts && data.contracts.length > 0 && (
+                    <label>
+                      Contrato cadastrado (opcional)
+                      <select name="contractId" defaultValue="">
+                        <option value="">Salvar somente na ficha do cliente</option>
+                        {data.contracts.map((contract) => (
+                          <option value={contract.id} key={contract.id}>
+                            {contract.number} · {contract.title}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                  <label>
+                    Arquivo do contrato
+                    <input
+                      name="file"
+                      required
+                      type="file"
+                      accept="application/pdf,image/png,image/jpeg"
+                    />
+                  </label>
+                  <button className="secondary" disabled={saving}>
+                    {saving ? 'Salvando…' : 'Guardar contrato'}
+                  </button>
+                </form>
+              </section>
+            )}
             <div className="document-checklist">
               {documentTypes.map((required) => {
                 const matchingDocuments = data.documents.filter(
                   (document) => document.category === required.category,
                 );
+                const generatedCount = matchingDocuments.filter((document) =>
+                  document.title.startsWith('Gerado automaticamente ·'),
+                ).length;
+                const attachedCount = matchingDocuments.length - generatedCount;
                 return (
                   <div className="document-check-item" key={required.category}>
                     <span>
@@ -907,7 +1206,16 @@ export function ClientDetail({
                       <small>
                         {canViewDocuments
                           ? matchingDocuments.length
-                            ? `${matchingDocuments.length} arquivo(s) anexado(s)`
+                            ? [
+                                generatedCount
+                                  ? generatedCount === 1
+                                    ? '1 modelo gerado'
+                                    : `${generatedCount} modelos gerados`
+                                  : '',
+                                attachedCount ? `${attachedCount} arquivo(s) anexado(s)` : '',
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')
                             : 'Pendente'
                           : 'Consulta de documentos indisponível'}
                       </small>
@@ -915,7 +1223,7 @@ export function ClientDetail({
                     <b className={matchingDocuments.length ? 'badge badge-done' : 'badge'}>
                       {canViewDocuments
                         ? matchingDocuments.length
-                          ? 'Recebido'
+                          ? 'Concluído'
                           : 'Pendente'
                         : '—'}
                     </b>
@@ -934,16 +1242,19 @@ export function ClientDetail({
                   <span>
                     {item.category || 'Documento'} ·{' '}
                     {item.visibility === 'CLIENT' ? 'visível ao cliente' : 'interno'}
+                    {item.contractId
+                      ? ` · ${data.contracts.find((contract) => contract.id === item.contractId)?.number ?? 'contrato relacionado'}`
+                      : ''}
                   </span>
                 </button>
               ))}
             </div>
             {canUpload && (
-              <form className="stack-form compact-form" onSubmit={uploadClientDocument}>
+              <div className="stack-form compact-form document-generation">
                 <label>
-                  Tipo de documento
+                  Documento para gerar
                   <select
-                    name="category"
+                    aria-label="Documento para gerar"
                     value={documentCategory}
                     onChange={(event) => {
                       const nextCategory = event.target.value;
@@ -961,47 +1272,95 @@ export function ClientDetail({
                     ))}
                   </select>
                 </label>
-                <label>
-                  Nome do documento
-                  <input
-                    name="title"
-                    required
-                    minLength={2}
-                    maxLength={240}
-                    value={documentTitle}
-                    onChange={(event) => setDocumentTitle(event.target.value)}
-                  />
-                </label>
                 {documentCategory === 'CONTRATO_HONORARIOS' && canViewContracts && (
                   <label>
-                    Contrato relacionado
+                    Honorários cadastrados
                     <select
                       key={data.contracts.length}
-                      name="contractId"
-                      defaultValue={data.contracts.length === 1 ? data.contracts[0]!.id : ''}
+                      value={documentContractId}
+                      onChange={(event) => setDocumentContractId(event.target.value)}
                     >
-                      <option value="">Sem vínculo específico</option>
+                      <option value="">Selecione o contrato</option>
                       {data.contracts.map((contract) => (
                         <option value={contract.id} key={contract.id}>
-                          {contract.number} · {contract.title}
+                          {contract.number} · {contract.title} ·{' '}
+                          {formatMoney(contract.fixedAmount, contract.currency)}
                         </option>
                       ))}
                     </select>
                   </label>
                 )}
-                <label>
-                  Arquivo
-                  <input
-                    name="file"
-                    required
-                    type="file"
-                    accept="application/pdf,image/png,image/jpeg,.docx"
-                  />
-                </label>
-                <button className="secondary" disabled={saving}>
-                  Anexar documento
+                <p className="section-note">
+                  {data.client.type === 'COMPANY'
+                    ? 'Confira CNPJ, endereço e nome e CPF do representante legal.'
+                    : 'Confira CPF e endereço. Nacionalidade, estado civil, profissão e RG são incluídos quando cadastrados.'}{' '}
+                  Um administrador precisa configurar a identidade do escritório antes da primeira
+                  procuração ou contrato.
+                </p>
+                <button
+                  className="primary"
+                  type="button"
+                  disabled={
+                    saving ||
+                    (documentCategory === 'CONTRATO_HONORARIOS' &&
+                      (!documentContractId || !canViewReceivables))
+                  }
+                  onClick={generateClientDocument}
+                >
+                  {saving ? 'Gerando…' : `Gerar ${documentTitle.toLowerCase()}`}
                 </button>
-              </form>
+              </div>
+            )}
+            {canUpload && (
+              <details className="optional-fields">
+                <summary>Anexar um arquivo já pronto</summary>
+                <form className="stack-form compact-form" onSubmit={uploadClientDocument}>
+                  <label>
+                    Tipo de documento
+                    <select
+                      name="category"
+                      value={attachedDocumentCategory}
+                      onChange={(event) => {
+                        const nextCategory = event.target.value;
+                        setAttachedDocumentCategory(nextCategory);
+                        setAttachedDocumentTitle(
+                          attachableDocumentTypes.find((item) => item.category === nextCategory)
+                            ?.label ?? 'Documento do cliente',
+                        );
+                      }}
+                    >
+                      {attachableDocumentTypes.map((item) => (
+                        <option key={item.category} value={item.category}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Nome do documento
+                    <input
+                      name="title"
+                      required
+                      minLength={2}
+                      maxLength={240}
+                      value={attachedDocumentTitle}
+                      onChange={(event) => setAttachedDocumentTitle(event.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Arquivo
+                    <input
+                      name="file"
+                      required
+                      type="file"
+                      accept="application/pdf,image/png,image/jpeg,.docx"
+                    />
+                  </label>
+                  <button className="secondary" disabled={saving}>
+                    Anexar documento
+                  </button>
+                </form>
+              </details>
             )}
           </ClientPanel>
         )}

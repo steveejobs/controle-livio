@@ -1,6 +1,7 @@
 import type { EmailOtpType } from '@supabase/supabase-js';
 import { NextResponse, type NextRequest } from 'next/server';
 import { createSupabaseServerClient } from '../../../lib/supabase/server';
+import { authenticationDestination } from '../../../lib/auth-redirect';
 
 async function recordConfirmedAccess(accessToken: string) {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -23,8 +24,11 @@ export async function GET(request: NextRequest) {
   const tokenHash = request.nextUrl.searchParams.get('token_hash');
   const type = request.nextUrl.searchParams.get('type') as EmailOtpType | null;
   const code = request.nextUrl.searchParams.get('code');
-  const next = request.nextUrl.searchParams.get('next') ?? '/';
-  if (next.startsWith('/')) {
+  const next = authenticationDestination(
+    request.nextUrl.searchParams.get('next'),
+    request.nextUrl.origin,
+  );
+  if (next) {
     const supabase = await createSupabaseServerClient();
     const { data, error } = code
       ? await supabase.auth.exchangeCodeForSession(code)

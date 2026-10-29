@@ -74,4 +74,20 @@ describe('PermissionGuard', () => {
     ).toThrow(ForbiddenException);
     expect(new PermissionGuard(createGuard() as never).canActivate(context([], true))).toBe(true);
   });
+
+  it('exige papel oficial e permissao especifica em rotas administrativas', () => {
+    const makeReflector = () => ({
+      getAllAndOverride: vi
+        .fn()
+        .mockReturnValueOnce(false)
+        .mockReturnValueOnce('audit:view')
+        .mockReturnValueOnce(true),
+    });
+    expect(() =>
+      new PermissionGuard(makeReflector() as never).canActivate(context(['audit:view'])),
+    ).toThrow(ForbiddenException);
+    expect(
+      new PermissionGuard(makeReflector() as never).canActivate(context(['audit:view'], true)),
+    ).toBe(true);
+  });
 });

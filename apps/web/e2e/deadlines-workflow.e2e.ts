@@ -22,7 +22,9 @@ for (const viewport of [
       const method = request.method();
       const submitted = request.postDataJSON() as Record<string, unknown> | null;
       let body: unknown;
-      if (path === '/v1/auth/me') {
+      if (path === '/v1/audit-logs/module-views' && method === 'POST') {
+        body = { recorded: true };
+      } else if (path === '/v1/auth/me') {
         body = {
           user: {
             id: 'qa-work',

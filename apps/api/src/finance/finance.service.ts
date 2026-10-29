@@ -14,14 +14,20 @@ import { sha256 } from '../common/security';
 import { PrismaService } from '../prisma/prisma.service';
 import { pageResult, pageWindow } from '../common/schemas';
 import { PushNotificationsService } from '../notifications/push-notifications.service';
+import { scheduleHearingReminders } from '../notifications/hearing-reminders';
 import type {
   AdjustmentInput,
   CreateContractInput,
   CreateExpenseInput,
+  ExpenseHistoryQuery,
+  ExpenseListQuery,
+  ExpensePaymentInput,
+  ExpenseSummaryQuery,
   CreatePaymentInput,
   CreateReceivableInput,
   RenegotiationInput,
   ReversalInput,
+  UpdateExpenseInput,
   PaymentChangeInput,
   PaymentChangeDecisionInput,
 } from './finance.schemas';
@@ -49,12 +55,54 @@ export class FinanceService {
     @Optional() private readonly pushNotifications?: PushNotificationsService,
   ) {}
 
+  private expenseTransaction<T>(operation: (transaction: Transaction) => Promise<T>): Promise<T> {
+    return this.prisma.$transaction(operation, { maxWait: 10_000, timeout: 15_000 });
+  }
+
   async createContract(actor: AuthenticatedActor, input: CreateContractInput) {
     await this.assertFinancialReferences(actor.organizationId, input.clientId, input.matterId);
     const serviceNames = [
       ...new Set(input.serviceNames.map((name) => name.trim()).filter(Boolean)),
     ];
     return this.prisma.$transaction(async (transaction) => {
+      if (input.receivableId) {
+        await transaction.$queryRaw`SELECT id FROM receivables WHERE id = ${input.receivableId}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
+      }
+      const receivable = input.receivableId
+        ? await transaction.receivable.findFirst({
+            where: {
+              id: input.receivableId,
+              organizationId: actor.organizationId,
+              clientId: input.clientId,
+            },
+            select: {
+              id: true,
+              contractId: true,
+              matterId: true,
+              originalAmount: true,
+              currency: true,
+              status: true,
+            },
+          })
+        : null;
+      if (input.receivableId && !receivable)
+        throw new NotFoundException('Cobrança não encontrada para este cliente');
+      if (receivable?.status === 'CANCELLED')
+        throw new BadRequestException('Não é possível vincular uma cobrança cancelada');
+      if (receivable?.contractId)
+        throw new BadRequestException('Esta cobrança já está vinculada a outro contrato');
+      if (input.matterId && receivable?.matterId && input.matterId !== receivable.matterId)
+        throw new BadRequestException('A cobrança pertence a outro processo');
+      if (
+        receivable &&
+        input.fixedAmount &&
+        input.feeModel !== 'HOURLY' &&
+        !this.money(input.fixedAmount).equals(receivable.originalAmount)
+      ) {
+        throw new BadRequestException(
+          'O valor da cobrança vinculada deve ser igual ao valor fixo do contrato',
+        );
+      }
       const contract = await transaction.contract.create({
         data: {
           organizationId: actor.organizationId,
@@ -75,6 +123,65 @@ export class FinanceService {
           ...(input.endsAt ? { endsAt: input.endsAt } : {}),
         },
       });
+      for (const hearing of input.hearings ?? []) {
+        if (hearing.startsAt <= new Date())
+          throw new BadRequestException('A data e o horário da audiência devem estar no futuro');
+        const endsAt = hearing.endsAt ?? new Date(hearing.startsAt.getTime() + 60 * 60_000);
+        const event = await transaction.calendarEvent.create({
+          data: {
+            organizationId: actor.organizationId,
+            clientId: input.clientId,
+            ...(input.matterId ? { matterId: input.matterId } : {}),
+            title: `Audiência · ${input.title}`,
+            description: `Contrato ${input.number}${serviceNames.length ? ` · ${serviceNames.join(', ')}` : ''}`,
+            location: hearing.location || null,
+            type: 'HEARING',
+            status: 'SCHEDULED',
+            startsAt: hearing.startsAt,
+            endsAt,
+            timezone: 'America/Sao_Paulo',
+            allDay: false,
+            attendees: [],
+            ...(hearing.reminderMinutes ? { reminderMinutes: hearing.reminderMinutes } : {}),
+            createdById: actor.userId,
+          },
+        });
+        await scheduleHearingReminders(transaction, {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          eventId: event.id,
+          eventTitle: event.title,
+          startsAt: event.startsAt,
+          reminderMinutes: hearing.reminderMinutes,
+          clientId: input.clientId,
+          contractId: contract.id,
+        });
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'CREATE',
+          resource: 'calendar_event',
+          resourceId: event.id,
+          after: event,
+        });
+      }
+      if (receivable) {
+        const linked = await transaction.receivable.update({
+          where: { id: receivable.id },
+          data: { contractId: contract.id },
+        });
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'UPDATE',
+          resource: 'receivable',
+          resourceId: receivable.id,
+          before: { contractId: null },
+          after: { contractId: contract.id, reference: linked.reference },
+        });
+      }
       await this.audit.record(transaction, {
         organizationId: actor.organizationId,
         actorUserId: actor.userId,
@@ -782,16 +889,14 @@ export class FinanceService {
   }
 
   async createExpense(actor: AuthenticatedActor, input: CreateExpenseInput) {
-    if (input.clientId) await this.assertClient(actor.organizationId, input.clientId);
-    if (
-      input.matterId &&
-      !(await this.prisma.matter.findFirst({
-        where: { id: input.matterId, organizationId: actor.organizationId, deletedAt: null },
-      }))
-    ) {
-      throw new NotFoundException('Processo não encontrado');
-    }
-    return this.prisma.$transaction(async (transaction) => {
+    return this.expenseTransaction(async (transaction) => {
+      const linkedClientId = await this.assertExpenseLinks(
+        transaction,
+        actor.organizationId,
+        input.clientId,
+        input.matterId,
+        input.responsibleUserId,
+      );
       const expense = await transaction.expense.create({
         data: {
           organizationId: actor.organizationId,
@@ -802,7 +907,8 @@ export class FinanceService {
           incurredAt: input.incurredAt,
           reimbursable: input.reimbursable,
           ...(input.matterId ? { matterId: input.matterId } : {}),
-          ...(input.clientId ? { clientId: input.clientId } : {}),
+          ...(linkedClientId ? { clientId: linkedClientId } : {}),
+          ...(input.responsibleUserId ? { responsibleUserId: input.responsibleUserId } : {}),
           ...(input.dueDate ? { dueDate: input.dueDate } : {}),
         },
       });
@@ -816,6 +922,302 @@ export class FinanceService {
         after: expense,
       });
       return expense;
+    });
+  }
+
+  async expenseApprovalPolicy(actor: AuthenticatedActor) {
+    const organization = await this.prisma.organization.findFirst({
+      where: { id: actor.organizationId },
+      select: { settings: true },
+    });
+    if (!organization) throw new NotFoundException('Organização não encontrada');
+    const required = this.expenseApprovalRequired(organization.settings);
+    return {
+      required,
+      canSubmitForApproval:
+        !required ||
+        (await this.hasIndependentExpenseApprover(this.prisma, actor.organizationId, actor.userId)),
+    };
+  }
+
+  async expenseResponsibles(actor: AuthenticatedActor) {
+    const members = await this.prisma.organizationMember.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        status: 'ACTIVE',
+        user: { status: 'ACTIVE', deletedAt: null },
+      },
+      select: { user: { select: { id: true, fullName: true } } },
+      orderBy: { user: { fullName: 'asc' } },
+    });
+    return members.map(({ user }) => user);
+  }
+
+  async updateExpenseApprovalPolicy(actor: AuthenticatedActor, required: boolean) {
+    if (!actor.isAdministrator)
+      throw new ForbiddenException('Somente Administradores podem alterar esta configuração');
+    return this.expenseTransaction(async (transaction) => {
+      const organization = await transaction.organization.findFirst({
+        where: { id: actor.organizationId },
+        select: { settings: true },
+      });
+      if (!organization) throw new NotFoundException('Organização não encontrada');
+      const before = this.expenseApprovalRequired(organization.settings);
+      const [updated] = await transaction.$queryRaw<Array<{ settings: Prisma.JsonValue }>>`
+        UPDATE organizations
+           SET settings = COALESCE(settings, '{}'::jsonb) || jsonb_build_object('expenseApprovalRequired', ${required}),
+               updated_at = CURRENT_TIMESTAMP
+         WHERE id = ${actor.organizationId}::uuid
+         RETURNING settings`;
+      if (!updated) throw new NotFoundException('Organização não encontrada');
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'organization_expense_policy',
+        resourceId: actor.organizationId,
+        before: { expenseApprovalRequired: before },
+        after: { expenseApprovalRequired: required },
+      });
+      return { required: this.expenseApprovalRequired(updated.settings) };
+    });
+  }
+
+  async updateExpense(actor: AuthenticatedActor, id: string, input: UpdateExpenseInput) {
+    return this.expenseTransaction(async (transaction) => {
+      const before = await this.lockExpense(transaction, actor, id);
+      if (!['DRAFT', 'REJECTED'].includes(before.status))
+        throw new ConflictException(
+          'Somente despesas em rascunho ou rejeitadas podem ser alteradas',
+        );
+      const clientId = input.clientId === undefined ? before.clientId : input.clientId;
+      const matterId = input.matterId === undefined ? before.matterId : input.matterId;
+      const responsibleUserId =
+        input.responsibleUserId === undefined ? before.responsibleUserId : input.responsibleUserId;
+      const linkedClientId = await this.assertExpenseLinks(
+        transaction,
+        actor.organizationId,
+        clientId ?? undefined,
+        matterId ?? undefined,
+        responsibleUserId ?? undefined,
+      );
+      const changed = await transaction.expense.updateMany({
+        where: { id, organizationId: actor.organizationId, status: { in: ['DRAFT', 'REJECTED'] } },
+        data: {
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.category !== undefined ? { category: input.category } : {}),
+          ...(input.amount !== undefined ? { amount: this.money(input.amount) } : {}),
+          ...(input.currency !== undefined ? { currency: input.currency.toUpperCase() } : {}),
+          ...(input.incurredAt !== undefined ? { incurredAt: input.incurredAt } : {}),
+          ...(input.dueDate !== undefined ? { dueDate: input.dueDate } : {}),
+          ...(input.reimbursable !== undefined ? { reimbursable: input.reimbursable } : {}),
+          clientId: linkedClientId,
+          matterId,
+          responsibleUserId,
+          ...(before.status === 'REJECTED'
+            ? { status: 'DRAFT', rejectedById: null, rejectedAt: null, rejectionReason: null }
+            : {}),
+        },
+      });
+      if (changed.count !== 1) throw new ConflictException('A despesa mudou durante a edição');
+      const after = await this.findExpense(actor, id, transaction);
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'expense',
+        resourceId: id,
+        before,
+        after,
+      });
+      return after;
+    });
+  }
+
+  async submitExpense(actor: AuthenticatedActor, id: string) {
+    return this.expenseTransaction(async (transaction) => {
+      const before = await this.lockExpense(transaction, actor, id);
+      if (!['DRAFT', 'REJECTED'].includes(before.status))
+        throw new ConflictException(
+          'Somente despesas em rascunho ou rejeitadas podem ser enviadas',
+        );
+      const organization = await transaction.organization.findFirst({
+        where: { id: actor.organizationId },
+        select: { settings: true },
+      });
+      if (!organization) throw new NotFoundException('Organização não encontrada');
+      const now = new Date();
+      const approvalRequired = this.expenseApprovalRequired(organization.settings);
+      if (!before.dueDate)
+        throw new BadRequestException('Informe o vencimento antes de confirmar a despesa');
+      if (
+        approvalRequired &&
+        !(await this.hasIndependentExpenseApprover(transaction, actor.organizationId, actor.userId))
+      ) {
+        throw new ConflictException(
+          'Não há outro membro ativo com permissão para aprovar. Desative a aprovação ou habilite outro aprovador antes do envio.',
+        );
+      }
+      const changed = await transaction.expense.updateMany({
+        where: { id, organizationId: actor.organizationId, status: { in: ['DRAFT', 'REJECTED'] } },
+        data: {
+          status: approvalRequired ? 'PENDING_APPROVAL' : 'APPROVED',
+          submittedAt: now,
+          approvedAt: null,
+          approvedById: null,
+          rejectedById: null,
+          rejectedAt: null,
+          rejectionReason: null,
+        },
+      });
+      if (changed.count !== 1) throw new ConflictException('A despesa mudou durante o envio');
+      const after = await this.findExpense(actor, id, transaction);
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'expense',
+        resourceId: id,
+        before,
+        after,
+        metadata: { transition: approvalRequired ? 'SUBMIT' : 'CONFIRM', approvalRequired },
+      });
+      return after;
+    });
+  }
+
+  async decideExpense(
+    actor: AuthenticatedActor,
+    id: string,
+    decision: 'APPROVE' | 'REJECT',
+    reason?: string,
+  ) {
+    if (decision === 'REJECT' && !reason?.trim())
+      throw new BadRequestException('A rejeição exige justificativa');
+    return this.expenseTransaction(async (transaction) => {
+      const before = await this.lockExpense(transaction, actor, id);
+      if (before.status !== 'PENDING_APPROVAL')
+        throw new ConflictException('A despesa não aguarda aprovação');
+      if (decision === 'APPROVE') {
+        const creator = await transaction.auditLog.findFirst({
+          where: {
+            organizationId: actor.organizationId,
+            resource: 'expense',
+            resourceId: id,
+            action: 'CREATE',
+          },
+          orderBy: { createdAt: 'asc' },
+          select: { actorUserId: true },
+        });
+        if (creator?.actorUserId === actor.userId)
+          throw new ForbiddenException(
+            'Quem cadastrou a despesa não pode aprovar a própria solicitação',
+          );
+      }
+      const now = new Date();
+      const changed = await transaction.expense.updateMany({
+        where: { id, organizationId: actor.organizationId, status: 'PENDING_APPROVAL' },
+        data:
+          decision === 'APPROVE'
+            ? {
+                status: 'APPROVED',
+                approvedById: actor.userId,
+                approvedAt: now,
+                rejectedById: null,
+                rejectedAt: null,
+                rejectionReason: null,
+              }
+            : {
+                status: 'REJECTED',
+                approvedById: null,
+                approvedAt: null,
+                rejectedById: actor.userId,
+                rejectedAt: now,
+                rejectionReason: reason,
+              },
+      });
+      if (changed.count !== 1)
+        throw new ConflictException('A despesa foi decidida por outro usuário');
+      const after = await this.findExpense(actor, id, transaction);
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: decision === 'APPROVE' ? 'APPROVE' : 'UPDATE',
+        resource: 'expense',
+        resourceId: id,
+        before,
+        after,
+        metadata: { transition: decision, ...(reason ? { reason } : {}) },
+      });
+      return after;
+    });
+  }
+
+  async payExpense(actor: AuthenticatedActor, id: string, input: ExpensePaymentInput) {
+    return this.expenseTransaction(async (transaction) => {
+      const before = await this.lockExpense(transaction, actor, id);
+      if (before.status !== 'APPROVED')
+        throw new ConflictException('Somente despesas aprovadas podem ser pagas');
+      const paymentAmount = this.money(input.amount);
+      if (!paymentAmount.equals(before.amount))
+        throw new BadRequestException(
+          'O pagamento deve quitar o valor integral; pagamento parcial não é suportado',
+        );
+      const changed = await transaction.expense.updateMany({
+        where: { id, organizationId: actor.organizationId, status: 'APPROVED' },
+        data: { status: 'PAID', paidAt: input.paidAt },
+      });
+      if (changed.count !== 1) throw new ConflictException('A despesa foi paga por outro usuário');
+      const after = await this.findExpense(actor, id, transaction);
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'expense',
+        resourceId: id,
+        before,
+        after,
+        metadata: {
+          transition: 'PAY',
+          amount: paymentAmount.toFixed(4),
+          method: input.method,
+          reference: input.reference ?? null,
+        },
+      });
+      return after;
+    });
+  }
+
+  async cancelExpense(actor: AuthenticatedActor, id: string) {
+    return this.expenseTransaction(async (transaction) => {
+      const before = await this.lockExpense(transaction, actor, id);
+      if (before.status === 'PAID')
+        throw new ConflictException('Despesas pagas não podem ser canceladas');
+      if (before.status === 'CANCELLED') throw new ConflictException('A despesa já está cancelada');
+      const changed = await transaction.expense.updateMany({
+        where: { id, organizationId: actor.organizationId, status: before.status },
+        data: { status: 'CANCELLED' },
+      });
+      if (changed.count !== 1)
+        throw new ConflictException('A despesa mudou durante o cancelamento');
+      const after = await this.findExpense(actor, id, transaction);
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'CANCEL',
+        resource: 'expense',
+        resourceId: id,
+        before,
+        after,
+        metadata: { transition: 'CANCEL' },
+      });
+      return after;
     });
   }
 
@@ -848,8 +1250,11 @@ export class FinanceService {
   ) {
     const where = {
       organizationId: actor.organizationId,
-      ...(actor.clientId ? { clientId: actor.clientId } : {}),
-      ...(input.clientId ? { clientId: input.clientId } : {}),
+      ...(actor.clientId
+        ? { clientId: actor.clientId }
+        : input.clientId
+          ? { clientId: input.clientId }
+          : {}),
       ...(input.status ? { status: input.status as Prisma.ContractWhereInput['status'] } : {}),
     };
     const [items, total] = await this.prisma.$transaction([
@@ -874,8 +1279,11 @@ export class FinanceService {
   ) {
     const where = {
       organizationId: actor.organizationId,
-      ...(actor.clientId ? { clientId: actor.clientId } : {}),
-      ...(input.clientId ? { clientId: input.clientId } : {}),
+      ...(actor.clientId
+        ? { clientId: actor.clientId }
+        : input.clientId
+          ? { clientId: input.clientId }
+          : {}),
       ...(input.contractId ? { contractId: input.contractId } : {}),
       ...(input.status ? { status: input.status as Prisma.ReceivableWhereInput['status'] } : {}),
     };
@@ -913,8 +1321,11 @@ export class FinanceService {
   ) {
     const where = {
       organizationId: actor.organizationId,
-      ...(actor.clientId ? { clientId: actor.clientId } : {}),
-      ...(input.clientId ? { clientId: input.clientId } : {}),
+      ...(actor.clientId
+        ? { clientId: actor.clientId }
+        : input.clientId
+          ? { clientId: input.clientId }
+          : {}),
       ...(input.status ? { status: input.status as Prisma.PaymentWhereInput['status'] } : {}),
     };
     const [items, total] = await this.prisma.$transaction([
@@ -940,14 +1351,27 @@ export class FinanceService {
     return pageResult(items, total, input);
   }
 
-  async listExpenses(
-    actor: AuthenticatedActor,
-    input: import('./finance.schemas').FinanceListQuery,
-  ) {
+  async listExpenses(actor: AuthenticatedActor, input: ExpenseListQuery) {
+    const canViewDocuments = actor.permissions.includes('documents:view');
     const where = {
       organizationId: actor.organizationId,
-      ...(input.clientId ? { clientId: input.clientId } : {}),
-      ...(input.status ? { status: input.status as Prisma.ExpenseWhereInput['status'] } : {}),
+      ...(actor.clientId
+        ? { clientId: actor.clientId }
+        : input.clientId
+          ? { clientId: input.clientId }
+          : {}),
+      ...(input.status ? { status: input.status } : {}),
+      ...(input.category
+        ? { category: { contains: input.category, mode: 'insensitive' as const } }
+        : {}),
+      ...(input.from || input.to
+        ? {
+            [input.period]: {
+              ...(input.from ? { gte: input.from } : {}),
+              ...(input.to ? { lte: input.to } : {}),
+            },
+          }
+        : {}),
     };
     const [items, total] = await this.prisma.$transaction([
       this.prisma.expense.findMany({
@@ -956,13 +1380,164 @@ export class FinanceService {
         include: {
           client: { select: { id: true, displayName: true } },
           matter: { select: { id: true, reference: true } },
-          documents: { select: { id: true, title: true } },
+          responsibleUser: { select: { id: true, fullName: true } },
+          ...(canViewDocuments
+            ? {
+                documents: {
+                  where: {
+                    deletedAt: null,
+                    ...(actor.clientId
+                      ? { visibility: 'CLIENT' as const, clientId: actor.clientId }
+                      : {}),
+                  },
+                  select: { id: true, title: true, visibility: true },
+                },
+              }
+            : {}),
         },
-        orderBy: { incurredAt: 'desc' },
+        orderBy: { [input.period]: 'desc' },
       }),
       this.prisma.expense.count({ where }),
     ]);
     return pageResult(items, total, input);
+  }
+
+  async expenseHistory(actor: AuthenticatedActor, id: string, input: ExpenseHistoryQuery) {
+    const expense = await this.prisma.expense.findFirst({
+      where: {
+        id,
+        organizationId: actor.organizationId,
+        ...(actor.clientId ? { clientId: actor.clientId } : {}),
+      },
+      select: { id: true },
+    });
+    if (!expense) throw new NotFoundException('Despesa n\u00e3o encontrada');
+
+    const where = { organizationId: actor.organizationId, resource: 'expense', resourceId: id };
+    const [events, total] = await this.prisma.$transaction([
+      this.prisma.auditLog.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip: (input.page - 1) * input.pageSize,
+        take: input.pageSize,
+        select: {
+          id: true,
+          actorUserId: true,
+          action: true,
+          before: true,
+          after: true,
+          metadata: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.auditLog.count({ where }),
+    ]);
+
+    const actorIds = [
+      ...new Set(events.flatMap(({ actorUserId }) => (actorUserId ? [actorUserId] : []))),
+    ];
+    const members = actorIds.length
+      ? await this.prisma.organizationMember.findMany({
+          where: { organizationId: actor.organizationId, userId: { in: actorIds } },
+          select: { userId: true, user: { select: { fullName: true } } },
+        })
+      : [];
+    const names = new Map(members.map(({ userId, user }) => [userId, user.fullName]));
+    const objectValue = (value: Prisma.JsonValue | null): Record<string, unknown> =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+
+    return {
+      items: events.map((event) => {
+        const before = objectValue(event.before);
+        const after = objectValue(event.after);
+        const changedFields = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+          .filter((key) => JSON.stringify(before[key]) !== JSON.stringify(after[key]))
+          .sort();
+        const metadata = objectValue(event.metadata);
+        return {
+          id: event.id,
+          action: event.action,
+          transition: typeof metadata.transition === 'string' ? metadata.transition : undefined,
+          occurredAt: event.createdAt,
+          actorName: event.actorUserId
+            ? (names.get(event.actorUserId) ?? 'Usu\u00e1rio indispon\u00edvel')
+            : 'Sistema',
+          changedFields,
+        };
+      }),
+      total,
+    };
+  }
+
+  async expenseSummary(actor: AuthenticatedActor, input: ExpenseSummaryQuery) {
+    const range = () => ({
+      ...(input.from ? { gte: input.from } : {}),
+      ...(input.to ? { lte: input.to } : {}),
+    });
+    const base = {
+      organizationId: actor.organizationId,
+      ...(actor.clientId ? { clientId: actor.clientId } : {}),
+    };
+    const where: Prisma.ExpenseWhereInput = {
+      ...base,
+      OR: [
+        { status: 'APPROVED', dueDate: range() },
+        { status: 'PENDING_APPROVAL', dueDate: range() },
+        { status: 'PAID', paidAt: range() },
+      ],
+    };
+    const [groups, overdueGroups] = await Promise.all([
+      this.prisma.expense.groupBy({
+        by: ['status', 'currency'],
+        where,
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+      this.prisma.expense.groupBy({
+        by: ['currency'],
+        where: {
+          ...base,
+          status: 'APPROVED',
+          dueDate: {
+            lt: new Date(new Date().toISOString().slice(0, 10)),
+            ...(input.from ? { gte: input.from } : {}),
+            ...(input.to ? { lte: input.to } : {}),
+          },
+        },
+        _count: { _all: true },
+        _sum: { amount: true },
+      }),
+    ]);
+    const currencies = [
+      ...new Set([
+        ...groups.map(({ currency }) => currency),
+        ...overdueGroups.map(({ currency }) => currency),
+      ]),
+    ].sort();
+    return {
+      currencies: currencies.map((currency) => {
+        const summary = (status: string) => {
+          const group = groups.find((item) => item.currency === currency && item.status === status);
+          return {
+            count: group?._count._all ?? 0,
+            amount: group?._sum.amount?.toFixed(4) ?? '0.0000',
+          };
+        };
+        const overdue = overdueGroups.find((item) => item.currency === currency);
+        return {
+          currency,
+          pendingApproval: summary('PENDING_APPROVAL'),
+          pendingPayment: summary('APPROVED'),
+          overdue: {
+            count: overdue?._count._all ?? 0,
+            amount: overdue?._sum.amount?.toFixed(4) ?? '0.0000',
+          },
+          paid: summary('PAID'),
+        };
+      }),
+    };
   }
 
   private paymentChangeDiffers(
@@ -1153,6 +1728,121 @@ export class FinanceService {
 
   private money(value: string | Prisma.Decimal): Prisma.Decimal {
     return positiveMoney(value);
+  }
+
+  private expenseApprovalRequired(settings: Prisma.JsonValue): boolean {
+    if (settings && typeof settings === 'object' && !Array.isArray(settings)) {
+      const configured = (settings as Prisma.JsonObject).expenseApprovalRequired;
+      if (typeof configured === 'boolean') return configured;
+    }
+    return true;
+  }
+
+  private async hasIndependentExpenseApprover(
+    transaction: Prisma.TransactionClient | PrismaService,
+    organizationId: string,
+    creatorUserId: string,
+  ): Promise<boolean> {
+    const count = await transaction.organizationMember.count({
+      where: {
+        organizationId,
+        userId: { not: creatorUserId },
+        status: 'ACTIVE',
+        user: { status: 'ACTIVE', deletedAt: null },
+        roles: {
+          some: {
+            role: {
+              permissions: {
+                some: {
+                  permission: { organizationId, resource: 'expenses', action: 'approve' },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    return count > 0;
+  }
+
+  private async assertExpenseLinks(
+    transaction: Transaction,
+    organizationId: string,
+    clientId?: string,
+    matterId?: string,
+    responsibleUserId?: string,
+  ): Promise<string | undefined> {
+    const [client, matter, responsible] = await Promise.all([
+      clientId
+        ? transaction.client.findFirst({
+            where: { id: clientId, organizationId, deletedAt: null },
+            select: { id: true },
+          })
+        : { id: null },
+      matterId
+        ? transaction.matter.findFirst({
+            where: { id: matterId, organizationId, deletedAt: null },
+            select: { id: true, clientId: true },
+          })
+        : { id: null, clientId: null },
+      responsibleUserId
+        ? transaction.organizationMember.findFirst({
+            where: {
+              userId: responsibleUserId,
+              organizationId,
+              status: 'ACTIVE',
+              user: { status: 'ACTIVE', deletedAt: null },
+            },
+            select: { userId: true },
+          })
+        : { id: null },
+    ]);
+    if (clientId && !client) throw new NotFoundException('Cliente não encontrado');
+    if (matterId && !matter) throw new NotFoundException('Processo não encontrado');
+    if (responsibleUserId && !responsible)
+      throw new NotFoundException('Responsável ativo não encontrado neste escritório');
+    if (clientId && matter?.clientId && clientId !== matter.clientId)
+      throw new BadRequestException('O processo pertence a outro cliente');
+    return clientId ?? matter?.clientId ?? undefined;
+  }
+
+  private async lockExpense(transaction: Transaction, actor: AuthenticatedActor, id: string) {
+    await transaction.$queryRaw`
+      SELECT id FROM expenses
+       WHERE id = ${id}::uuid AND organization_id = ${actor.organizationId}::uuid
+       FOR UPDATE`;
+    const expense = await this.findExpense(actor, id, transaction);
+    if (!expense) throw new NotFoundException('Despesa não encontrada');
+    return expense;
+  }
+
+  private findExpense(actor: AuthenticatedActor, id: string, transaction: Transaction) {
+    const canViewDocuments = actor.permissions.includes('documents:view');
+    return transaction.expense.findFirst({
+      where: {
+        id,
+        organizationId: actor.organizationId,
+        ...(actor.clientId ? { clientId: actor.clientId } : {}),
+      },
+      include: {
+        client: { select: { id: true, displayName: true } },
+        matter: { select: { id: true, reference: true } },
+        responsibleUser: { select: { id: true, fullName: true } },
+        ...(canViewDocuments
+          ? {
+              documents: {
+                where: {
+                  deletedAt: null,
+                  ...(actor.clientId
+                    ? { visibility: 'CLIENT' as const, clientId: actor.clientId }
+                    : {}),
+                },
+                select: { id: true, title: true, visibility: true },
+              },
+            }
+          : {}),
+      },
+    });
   }
 
   private async assertClient(organizationId: string, clientId: string): Promise<void> {

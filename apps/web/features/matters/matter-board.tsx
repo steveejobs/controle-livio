@@ -30,6 +30,21 @@ type Matter = {
   courtNumberNormalized?: string;
   updatedAt?: string;
 };
+type MatterTimeline = {
+  matter: {
+    reference: string;
+    title: string;
+    courtNumberNormalized?: string | null;
+    client: { displayName: string };
+  };
+  entries: Array<{
+    id: string;
+    type: string;
+    title: string;
+    description?: string;
+    occurredAt: string;
+  }>;
+};
 type Stage = { id: string; name: string; color?: string; position: number; isTerminal?: boolean };
 type Pipeline = {
   id: string;
@@ -103,6 +118,7 @@ export function MatterBoard({
   } = usePaginatedData<Matter>('/matters');
   const [moving, setMoving] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
+  const [timelineMatterId, setTimelineMatterId] = useState<string>();
   const filtered = useMemo(
     () => matters?.items.filter((item) => matchesPipelineKind(kind, item.pipeline?.kind)) ?? [],
     [matters, kind],
@@ -305,6 +321,9 @@ export function MatterBoard({
         >
           {feedback}
         </div>
+      )}
+      {timelineMatterId && (
+        <MatterTimelinePanel id={timelineMatterId} onClose={() => setTimelineMatterId(undefined)} />
       )}
       {showForm && canCreate && (
         <form className="surface form-grid" onSubmit={create}>
@@ -517,6 +536,12 @@ export function MatterBoard({
                           <article className="kanban-card" key={matter.id}>
                             <b>{matter.reference}</b>
                             <strong>{matter.title}</strong>
+                            <button
+                              className="matter-timeline-button"
+                              onClick={() => setTimelineMatterId(matter.id)}
+                            >
+                              Ver acompanhamento
+                            </button>
                             {matter.customFields?.collectionObjective?.description && (
                               <small>
                                 <span className="badge">Objetivo sem valor financeiro</span>{' '}
@@ -605,6 +630,7 @@ export function MatterBoard({
               update={update}
               pipelines={selectedPipelines}
               assignToPipeline={assignToPipeline}
+              onOpenTimeline={setTimelineMatterId}
             />
           )}
         </>
@@ -617,6 +643,7 @@ export function MatterBoard({
           update={update}
           pipelines={selectedPipelines}
           assignToPipeline={assignToPipeline}
+          onOpenTimeline={setTimelineMatterId}
         />
       ) : (
         <Empty>Crie e configure um pipeline antes de movimentar processos.</Empty>
@@ -643,6 +670,7 @@ function MatterFallbackTable({
   update,
   pipelines,
   assignToPipeline,
+  onOpenTimeline,
 }: {
   title: string;
   matters: Matter[];
@@ -651,6 +679,7 @@ function MatterFallbackTable({
   update: (matter: Matter, changes: Record<string, unknown>) => Promise<void>;
   pipelines: Pipeline[];
   assignToPipeline: (matter: Matter, pipelineId: string) => Promise<void>;
+  onOpenTimeline: (matterId: string) => void;
 }) {
   return (
     <section className="surface table-wrap">
@@ -664,6 +693,7 @@ function MatterFallbackTable({
             <th>Status</th>
             <th>Prioridade</th>
             <th>Etapa</th>
+            <th>Acompanhamento</th>
           </tr>
         </thead>
         <tbody>
@@ -728,10 +758,74 @@ function MatterFallbackTable({
                   'Sem etapa configurada'
                 )}
               </td>
+              <td>
+                <button className="table-action" onClick={() => onOpenTimeline(matter.id)}>
+                  Linha do tempo
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </section>
+  );
+}
+
+function MatterTimelinePanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data, error, reload } = useLoad<MatterTimeline>(`/matters/${id}/timeline`);
+  return (
+    <section className="surface matter-timeline" aria-labelledby="matter-timeline-title">
+      <header>
+        <div>
+          <p>Acompanhamento do processo</p>
+          <h2 id="matter-timeline-title">{data?.matter.title ?? 'Carregando linha do tempo…'}</h2>
+          {data?.matter && (
+            <small>
+              {data.matter.reference} · {data.matter.client.displayName}
+              {data.matter.courtNumberNormalized ? ` · ${data.matter.courtNumberNormalized}` : ''}
+            </small>
+          )}
+        </div>
+        <button className="secondary" onClick={onClose}>
+          Fechar acompanhamento
+        </button>
+      </header>
+      {error && (
+        <div role="alert" className="notice notice-error">
+          {error.message} <button onClick={reload}>Tentar novamente</button>
+        </div>
+      )}
+      {!data && !error ? (
+        <Loading />
+      ) : data?.entries.length ? (
+        <ol className="timeline-list">
+          {data.entries.map((entry) => (
+            <li
+              key={`${entry.type}-${entry.id}`}
+              className={`timeline-entry timeline-${entry.type.toLowerCase()}`}
+            >
+              <span aria-hidden="true" className="timeline-dot" />
+              <div>
+                <div className="timeline-entry-heading">
+                  <strong>{entry.title}</strong>
+                  <time dateTime={entry.occurredAt}>
+                    {new Date(entry.occurredAt).toLocaleString('pt-BR', {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                    })}
+                  </time>
+                </div>
+                {entry.description && <p>{entry.description}</p>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="section-note">
+          Ainda não há movimentações registradas. As próximas etapas, prazos, audiências e
+          documentos aparecerão aqui.
+        </p>
+      )}
     </section>
   );
 }

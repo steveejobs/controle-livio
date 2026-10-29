@@ -48,6 +48,12 @@ export class MattersController {
     return this.matters.get(actor, id);
   }
 
+  @Get(':id/timeline')
+  @RequirePermission('matters:view')
+  timeline(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
+    return this.matters.timeline(actor, id);
+  }
+
   @Post()
   @RequirePermission('matters:create')
   create(

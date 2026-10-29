@@ -3,7 +3,8 @@ name: Quality
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'validation/**']
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -11,21 +12,21 @@ permissions:
 jobs:
   application:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     env:
-      DATABASE_URL: postgresql://postgres.projectref123:placeholder@aws-0-region.pooler.supabase.com:6543/postgres
-      NEXT_PUBLIC_API_URL: https://api.example.invalid/v1
-      NEXT_PUBLIC_SUPABASE_URL: https://projectref123.supabase.co
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-public-anon-key-placeholder
-      SUPABASE_URL: https://projectref123.supabase.co
-      SUPABASE_ANON_KEY: ci-public-anon-key-placeholder
-      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-placeholder
-      SUPABASE_ENVIRONMENT: staging
-      SUPABASE_PROJECT_REF: projectref123
-      CONFIRM_SUPABASE_PROJECT_REF: projectref123
-      SUPABASE_LOCAL: 'false'
-      SUPABASE_AUTH_REDIRECT_URL: https://app.example.invalid/auth/confirm
-      CORS_ORIGINS: https://app.example.invalid
+      # Loopback placeholders keep unit/build jobs unable to reach shared services.
+      NEXT_TELEMETRY_DISABLED: '1'
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/livio_ci?schema=public
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3001/v1
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-only-public-anon-key-placeholder
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_ANON_KEY: ci-only-public-anon-key-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: ci-only-service-role-placeholder-not-a-credential
+      SUPABASE_ENVIRONMENT: test
+      SUPABASE_LOCAL: 'true'
+      SUPABASE_AUTH_REDIRECT_URL: http://localhost:3000/auth/confirm
+      CORS_ORIGINS: http://localhost:3000
       STORAGE_BUCKET: legal-documents
 
     steps:
@@ -43,9 +44,22 @@ jobs:
       - run: npm run build
       - run: npm run perf:bundle
       - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - name: Playwright mocked E2E
+        run: npm run test:e2e
+        timeout-minutes: 15
+      - name: Upload Playwright report and traces
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
 
   supabase-isolation:
+    # Validation branch runs application tests only; it does not start a local database stack.
+    if: ${{ !startsWith(github.ref, 'refs/heads/validation/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 

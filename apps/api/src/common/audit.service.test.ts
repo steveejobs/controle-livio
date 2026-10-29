@@ -19,10 +19,11 @@ describe('AuditService', () => {
       data: expect.objectContaining({
         organizationId: 'org-a',
         actorUserId: 'user-a',
-        actorSessionId: 'session-a',
+        metadata: { authSessionId: 'session-a' },
         before: { status: 'LEAD' },
         after: { status: 'ACTIVE' },
       }),
     });
+    expect(create.mock.calls[0]![0].data).not.toHaveProperty('actorSessionId');
   });
 });

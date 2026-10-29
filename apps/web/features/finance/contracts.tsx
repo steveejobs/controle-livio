@@ -12,6 +12,7 @@ import { formatDate, formatMoney } from '../shared/format';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 import { ServiceSelection } from './service-selection';
+import { ContractHearings, type ContractHearingDraft } from './contract-hearings';
 
 type Client = { id: string; displayName: string };
 type Contract = {
@@ -40,6 +41,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [feeModel, setFeeModel] = useState('FIXED');
+  const [contractHearings, setContractHearings] = useState<ContractHearingDraft[]>([]);
   const canCreate = permissions.includes('contracts:create');
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
@@ -62,6 +64,15 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
           serviceNames: form
             .getAll('serviceNames')
             .filter((value): value is string => typeof value === 'string'),
+          hearings: contractHearings.map((hearing) => {
+            const startsAt = new Date(hearing.startsAt);
+            return {
+              startsAt: startsAt.toISOString(),
+              endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
+              location: hearing.location.trim() || undefined,
+              reminderMinutes: hearing.reminderMinutes,
+            };
+          }),
           startsAt: form.get('startsAt') || undefined,
           endsAt: form.get('endsAt') || undefined,
         }),
@@ -69,6 +80,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
       setFeedback('Contrato cadastrado.');
       setShowForm(false);
       setFeeModel('FIXED');
+      setContractHearings([]);
       target.reset();
       contracts.reload();
     } catch (error) {
@@ -100,6 +112,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
             onClick={() => {
               setShowForm((value) => !value);
               setFeeModel('FIXED');
+              setContractHearings([]);
             }}
           >
             {showForm ? 'Fechar' : 'Novo contrato'}
@@ -176,6 +189,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
             </label>
           )}
           <ServiceSelection disabled={busy} />
+          <ContractHearings disabled={busy} onChange={setContractHearings} />
           <label>
             Início da vigência (opcional)
             <input name="startsAt" type="date" />

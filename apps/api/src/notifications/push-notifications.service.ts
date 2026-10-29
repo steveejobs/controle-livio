@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, Logger, ConflictException } from '@nestjs/common';
+import { Injectable, Logger, ConflictException, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { ApiEnvironment, AuthenticatedActor } from '@livio/shared';
 import webPush from 'web-push';
@@ -61,6 +61,18 @@ export class PushNotificationsService {
       where: { organizationId: actor.organizationId, userId: actor.userId, endpoint },
     });
     return { enabled: false };
+  }
+
+  async test(actor: AuthenticatedActor) {
+    if (!this.vapidConfiguration())
+      throw new ConflictException('As notificações ainda não foram configuradas');
+    const result = await this.notifyUsers(actor.organizationId, [actor.userId], {
+      title: 'Notificação de teste do Lívio',
+      body: 'Se você recebeu este aviso, as notificações estão ativas neste dispositivo.',
+    });
+    if (!result.sent)
+      throw new ServiceUnavailableException('Não foi possível entregar a notificação de teste');
+    return result;
   }
 
   async notifyUsers(

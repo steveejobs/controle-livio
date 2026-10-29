@@ -69,6 +69,18 @@ export class ReportsController {
   ) {
     return this.reports.cashForecast(actor);
   }
+  @Get('cash-flow') @RequirePermission('reports:view') cashFlow(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Query(new ZodValidationPipe(reportRangeSchema)) range: ReportRange,
+  ) {
+    return this.reports.cashFlow(actor, range);
+  }
+  @Get('cash-flow-by-client') @RequirePermission('reports:view') cashFlowByClient(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Query(new ZodValidationPipe(reportRangeSchema)) range: ReportRange,
+  ) {
+    return this.reports.cashFlowByClient(actor, range);
+  }
   @Get('partial-payments') @RequirePermission('reports:view') partial(
     @CurrentActor() actor: AuthenticatedActor,
   ) {
@@ -115,7 +127,12 @@ export class ReportsController {
       query.from && query.to
         ? { from: query.from, to: query.to, groupBy: query.groupBy }
         : undefined;
-    if (['receivables-due', 'received', 'accrual'].includes(report) && !range)
+    if (
+      ['receivables-due', 'received', 'accrual', 'cash-flow', 'cash-flow-by-client'].includes(
+        report,
+      ) &&
+      !range
+    )
       throw new BadRequestException('Relatório exige from e to');
     const result = await this.reports.run(actor, report, range);
     response.setHeader('Content-Type', 'text/csv; charset=utf-8');

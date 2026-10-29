@@ -1,5 +1,6 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  previewFeatures = ["relationJoins", "metrics"]
 }
 
 datasource db {
@@ -99,6 +100,7 @@ enum ExpenseStatus {
   DRAFT
   PENDING_APPROVAL
   APPROVED
+  REJECTED
   PAID
   CANCELLED
 }
@@ -187,56 +189,58 @@ enum AuditAction {
 }
 
 model Organization {
-  id                    String                   @id @default(uuid()) @db.Uuid
-  legalName             String                   @map("legal_name")
-  slug                  String                   @unique @db.VarChar(80)
-  tradeName             String?                  @map("trade_name")
-  taxId                 String?                  @map("tax_id")
-  status                OrganizationStatus       @default(ACTIVE)
-  timezone              String                   @default("America/Sao_Paulo")
-  settings              Json                     @default("{}")
-  createdAt             DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt             DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
-  users                 User[]
-  memberships           OrganizationMember[]
-  memberRoles           OrganizationMemberRole[]
-  roles                 Role[]
-  permissions           Permission[]
-  userRoles             UserRole[]
-  rolePermissions       RolePermission[]
-  sessions              Session[]
-  passwordResetTokens   PasswordResetToken[]
-  clients               Client[]
-  clientContacts        ClientContact[]
-  matters               Matter[]
-  matterParties         MatterParty[]
-  pipelines             Pipeline[]
-  pipelineStages        PipelineStage[]
-  matterStageHistory    MatterStageHistory[]
-  contracts             Contract[]
-  serviceCatalogItems   ServiceCatalogItem[]
-  receivables           Receivable[]
-  installments          ReceivableInstallment[]
-  payments              Payment[]
-  paymentChangeRequests PaymentChangeRequest[]
-  paymentAllocations    PaymentAllocation[]
-  paymentReversals      PaymentReversal[]
-  financialAdjustments  FinancialAdjustment[]
-  renegotiations        Renegotiation[]
-  expenses              Expense[]
-  documents             Document[]
-  documentVersions      DocumentVersion[]
-  internalNotes         InternalNote[]
-  clientMessages        ClientMessage[]
-  tasks                 Task[]
-  taskComments          TaskComment[]
-  taskReminders         TaskReminder[]
-  taskHistory           TaskHistory[]
-  calendarEvents        CalendarEvent[]
-  notifications         Notification[]
-  auditLogs             AuditLog[]
-  activityEvents        ActivityEvent[]
-  webPushSubscriptions  WebPushSubscription[]
+  id                      String                   @id @default(uuid()) @db.Uuid
+  legalName               String                   @map("legal_name")
+  slug                    String                   @unique @db.VarChar(80)
+  tradeName               String?                  @map("trade_name")
+  taxId                   String?                  @map("tax_id")
+  status                  OrganizationStatus       @default(ACTIVE)
+  timezone                String                   @default("America/Sao_Paulo")
+  settings                Json                     @default("{}")
+  createdAt               DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt               DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  users                   User[]
+  memberships             OrganizationMember[]
+  memberRoles             OrganizationMemberRole[]
+  roles                   Role[]
+  permissions             Permission[]
+  userRoles               UserRole[]
+  rolePermissions         RolePermission[]
+  sessions                Session[]
+  passwordResetTokens     PasswordResetToken[]
+  clients                 Client[]
+  clientContacts          ClientContact[]
+  matters                 Matter[]
+  matterParties           MatterParty[]
+  pipelines               Pipeline[]
+  pipelineStages          PipelineStage[]
+  matterStageHistory      MatterStageHistory[]
+  contracts               Contract[]
+  serviceCatalogItems     ServiceCatalogItem[]
+  receivables             Receivable[]
+  installments            ReceivableInstallment[]
+  payments                Payment[]
+  paymentChangeRequests   PaymentChangeRequest[]
+  paymentAllocations      PaymentAllocation[]
+  paymentReversals        PaymentReversal[]
+  financialAdjustments    FinancialAdjustment[]
+  renegotiations          Renegotiation[]
+  expenses                Expense[]
+  documents               Document[]
+  documentVersions        DocumentVersion[]
+  documentSigningRequests DocumentSigningRequest[]
+  internalNotes           InternalNote[]
+  clientMessages          ClientMessage[]
+  tasks                   Task[]
+  taskComments            TaskComment[]
+  taskReminders           TaskReminder[]
+  taskHistory             TaskHistory[]
+  calendarEvents          CalendarEvent[]
+  notifications           Notification[]
+  auditLogs               AuditLog[]
+  activityEvents          ActivityEvent[]
+  webPushSubscriptions    WebPushSubscription[]
+  apiRateLimits           ApiRateLimit[]
 
   @@map("organizations")
 }
@@ -264,6 +268,8 @@ model User {
   passwordResetTokens  PasswordResetToken[]
   membership           OrganizationMember?
   webPushSubscriptions WebPushSubscription[]
+  responsibleExpenses  Expense[]             @relation("ExpenseResponsible")
+  rejectedExpenses     Expense[]             @relation("ExpenseRejector")
 
   @@unique([organizationId, email])
   @@index([authUserId])
@@ -429,6 +435,7 @@ model Client {
   taxIdNormalized String?              @map("tax_id_normalized") @db.VarChar(14)
   email           String?              @db.VarChar(320)
   phone           String?              @db.VarChar(40)
+  photoStorageKey String?              @map("photo_storage_key")
   address         Json?
   source          String?              @db.VarChar(120)
   customFields    Json                 @default("{}") @map("custom_fields")
@@ -840,62 +847,74 @@ model Renegotiation {
 }
 
 model Expense {
-  id             String        @id @default(uuid()) @db.Uuid
-  organizationId String        @map("organization_id") @db.Uuid
-  matterId       String?       @map("matter_id") @db.Uuid
-  clientId       String?       @map("client_id") @db.Uuid
-  description    String
-  category       String        @db.VarChar(100)
-  status         ExpenseStatus @default(DRAFT)
-  amount         Decimal       @db.Decimal(19, 4)
-  currency       String        @default("BRL") @db.Char(3)
-  incurredAt     DateTime      @map("incurred_at") @db.Date
-  dueDate        DateTime?     @map("due_date") @db.Date
-  paidAt         DateTime?     @map("paid_at") @db.Date
-  reimbursable   Boolean       @default(false)
-  approvedById   String?       @map("approved_by_id") @db.Uuid
-  approvedAt     DateTime?     @map("approved_at") @db.Timestamptz(3)
-  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization   Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  matter         Matter?       @relation(fields: [matterId], references: [id], onDelete: Restrict)
-  client         Client?       @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  documents      Document[]
+  id                String        @id @default(uuid()) @db.Uuid
+  organizationId    String        @map("organization_id") @db.Uuid
+  matterId          String?       @map("matter_id") @db.Uuid
+  clientId          String?       @map("client_id") @db.Uuid
+  responsibleUserId String?       @map("responsible_user_id") @db.Uuid
+  description       String
+  category          String        @db.VarChar(100)
+  status            ExpenseStatus @default(DRAFT)
+  amount            Decimal       @db.Decimal(19, 4)
+  currency          String        @default("BRL") @db.Char(3)
+  incurredAt        DateTime      @map("incurred_at") @db.Date
+  dueDate           DateTime?     @map("due_date") @db.Date
+  paidAt            DateTime?     @map("paid_at") @db.Date
+  reimbursable      Boolean       @default(false)
+  approvedById      String?       @map("approved_by_id") @db.Uuid
+  approvedAt        DateTime?     @map("approved_at") @db.Timestamptz(3)
+  submittedAt       DateTime?     @map("submitted_at") @db.Timestamptz(3)
+  rejectedById      String?       @map("rejected_by_id") @db.Uuid
+  rejectedAt        DateTime?     @map("rejected_at") @db.Timestamptz(3)
+  rejectionReason   String?       @map("rejection_reason") @db.VarChar(500)
+  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization      Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  matter            Matter?       @relation(fields: [matterId], references: [id], onDelete: Restrict)
+  client            Client?       @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  responsibleUser   User?         @relation("ExpenseResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  rejectedBy        User?         @relation("ExpenseRejector", fields: [rejectedById], references: [id], onDelete: Restrict)
+  documents         Document[]
 
   @@index([organizationId, status, dueDate])
+  @@index([organizationId, status, paidAt])
   @@index([organizationId, matterId])
   @@index([organizationId, clientId])
+  @@index([organizationId, responsibleUserId, status])
   @@map("expenses")
 }
 
 model Document {
-  id             String                 @id @default(uuid()) @db.Uuid
-  organizationId String                 @map("organization_id") @db.Uuid
-  clientId       String?                @map("client_id") @db.Uuid
-  matterId       String?                @map("matter_id") @db.Uuid
-  contractId     String?                @map("contract_id") @db.Uuid
-  installmentId  String?                @map("installment_id") @db.Uuid
-  paymentId      String?                @map("payment_id") @db.Uuid
-  expenseId      String?                @map("expense_id") @db.Uuid
-  title          String
-  category       String?                @db.VarChar(120)
-  status         DocumentStatus         @default(DRAFT)
-  visibility     DocumentVisibility     @default(INTERNAL)
-  confidential   Boolean                @default(true)
-  currentVersion Int                    @default(1) @map("current_version")
-  createdById    String                 @map("created_by_id") @db.Uuid
-  createdAt      DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt      DateTime?              @map("deleted_at") @db.Timestamptz(3)
-  organization   Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client         Client?                @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  matter         Matter?                @relation(fields: [matterId], references: [id], onDelete: Restrict)
-  contract       Contract?              @relation(fields: [contractId], references: [id], onDelete: Restrict)
-  installment    ReceivableInstallment? @relation(fields: [installmentId], references: [id], onDelete: Restrict)
-  payment        Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  expense        Expense?               @relation(fields: [expenseId], references: [id], onDelete: Restrict)
-  versions       DocumentVersion[]
+  id                 String                   @id @default(uuid()) @db.Uuid
+  organizationId     String                   @map("organization_id") @db.Uuid
+  clientId           String?                  @map("client_id") @db.Uuid
+  matterId           String?                  @map("matter_id") @db.Uuid
+  contractId         String?                  @map("contract_id") @db.Uuid
+  installmentId      String?                  @map("installment_id") @db.Uuid
+  paymentId          String?                  @map("payment_id") @db.Uuid
+  expenseId          String?                  @map("expense_id") @db.Uuid
+  title              String
+  category           String?                  @db.VarChar(120)
+  status             DocumentStatus           @default(DRAFT)
+  visibility         DocumentVisibility       @default(INTERNAL)
+  confidential       Boolean                  @default(true)
+  currentVersion     Int                      @default(1) @map("current_version")
+  createdById        String                   @map("created_by_id") @db.Uuid
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt          DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt          DateTime?                @map("deleted_at") @db.Timestamptz(3)
+  organization       Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client             Client?                  @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  matter             Matter?                  @relation(fields: [matterId], references: [id], onDelete: Restrict)
+  contract           Contract?                @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  installment        ReceivableInstallment?   @relation(fields: [installmentId], references: [id], onDelete: Restrict)
+  payment            Payment?                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  expense            Expense?                 @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  versions           DocumentVersion[]
+  signingRequests    DocumentSigningRequest[] @relation("SourceDocument")
+  signedFromRequests DocumentSigningRequest[] @relation("SignedDocument")
 
+  @@unique([organizationId, id])
   @@index([organizationId, matterId, status])
   @@index([organizationId, contractId])
   @@index([organizationId, clientId])
@@ -907,24 +926,53 @@ model Document {
 }
 
 model DocumentVersion {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
-  documentId     String       @map("document_id") @db.Uuid
-  version        Int
-  storageKey     String       @map("storage_key")
-  fileName       String       @map("file_name")
-  mimeType       String       @map("mime_type") @db.VarChar(160)
-  sizeBytes      BigInt       @map("size_bytes")
-  sha256         String       @db.Char(64)
-  uploadedById   String       @map("uploaded_by_id") @db.Uuid
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  document       Document     @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  id              String                   @id @default(uuid()) @db.Uuid
+  organizationId  String                   @map("organization_id") @db.Uuid
+  documentId      String                   @map("document_id") @db.Uuid
+  version         Int
+  storageKey      String                   @map("storage_key")
+  fileName        String                   @map("file_name")
+  mimeType        String                   @map("mime_type") @db.VarChar(160)
+  sizeBytes       BigInt                   @map("size_bytes")
+  sha256          String                   @db.Char(64)
+  uploadedById    String                   @map("uploaded_by_id") @db.Uuid
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization    Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  document        Document                 @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  signingRequests DocumentSigningRequest[]
 
   @@unique([organizationId, documentId, version])
   @@unique([organizationId, storageKey])
   @@index([organizationId, documentId])
   @@map("document_versions")
+}
+
+model DocumentSigningRequest {
+  id                    String          @id @default(uuid()) @db.Uuid
+  organizationId        String          @map("organization_id") @db.Uuid
+  documentId            String          @map("document_id") @db.Uuid
+  sourceVersion         Int             @map("source_version")
+  tokenHash             String          @unique @map("token_hash") @db.Char(64)
+  status                String          @default("PENDING") @db.VarChar(20)
+  signerName            String          @map("signer_name")
+  createdById           String          @map("created_by_id") @db.Uuid
+  expiresAt             DateTime        @map("expires_at") @db.Timestamptz(3)
+  viewedAt              DateTime?       @map("viewed_at") @db.Timestamptz(3)
+  signedAt              DateTime?       @map("signed_at") @db.Timestamptz(3)
+  signatureStorageKey   String?         @map("signature_storage_key")
+  signatureSha256       String?         @map("signature_sha256") @db.Char(64)
+  signedDocumentId      String?         @map("signed_document_id") @db.Uuid
+  revokedAt             DateTime?       @map("revoked_at") @db.Timestamptz(3)
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt             DateTime        @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization          Organization    @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  document              Document        @relation("SourceDocument", fields: [organizationId, documentId], references: [organizationId, id], onDelete: Restrict)
+  sourceDocumentVersion DocumentVersion @relation(fields: [organizationId, documentId, sourceVersion], references: [organizationId, documentId, version], onDelete: Restrict)
+  signedDocument        Document?       @relation("SignedDocument", fields: [organizationId, signedDocumentId], references: [organizationId, id], onDelete: Restrict)
+
+  @@index([organizationId, documentId, createdAt])
+  @@index([organizationId, status, expiresAt])
+  @@map("document_signing_requests")
 }
 
 model InternalNote {
@@ -1040,28 +1088,49 @@ model TaskHistory {
   @@map("task_history")
 }
 
+model ScheduledJobState {
+  jobName         String    @id @map("job_name")
+  lastScheduledAt DateTime  @map("last_scheduled_at") @db.Timestamptz(3)
+  lastCompletedAt DateTime? @map("last_completed_at") @db.Timestamptz(3)
+  lastFailedAt    DateTime? @map("last_failed_at") @db.Timestamptz(3)
+
+  @@map("scheduled_job_state")
+}
+
+model ApiRateLimit {
+  organizationId  String       @map("organization_id") @db.Uuid
+  keyHash         String       @map("key_hash") @db.Char(64)
+  windowStartedAt DateTime     @map("window_started_at") @db.Timestamptz(3)
+  requestCount    Int          @map("request_count")
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+
+  @@id([organizationId, keyHash])
+  @@map("api_rate_limits")
+}
+
 model CalendarEvent {
-  id             String       @id @default(uuid()) @db.Uuid
-  organizationId String       @map("organization_id") @db.Uuid
-  clientId       String?      @map("client_id") @db.Uuid
-  matterId       String?      @map("matter_id") @db.Uuid
-  title          String
-  description    String?
-  location       String?
-  status         EventStatus  @default(SCHEDULED)
-  type           EventType    @default(OTHER)
-  startsAt       DateTime     @map("starts_at") @db.Timestamptz(3)
-  endsAt         DateTime     @map("ends_at") @db.Timestamptz(3)
-  timezone       String       @default("America/Sao_Paulo")
-  allDay         Boolean      @default(false) @map("all_day")
-  attendees      Json         @default("[]")
-  recurrenceRule String?      @map("recurrence_rule") @db.VarChar(500)
-  createdById    String       @map("created_by_id") @db.Uuid
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client         Client?      @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  matter         Matter?      @relation(fields: [matterId], references: [id], onDelete: Restrict)
+  id              String       @id @default(uuid()) @db.Uuid
+  organizationId  String       @map("organization_id") @db.Uuid
+  clientId        String?      @map("client_id") @db.Uuid
+  matterId        String?      @map("matter_id") @db.Uuid
+  title           String
+  description     String?
+  location        String?
+  status          EventStatus  @default(SCHEDULED)
+  type            EventType    @default(OTHER)
+  startsAt        DateTime     @map("starts_at") @db.Timestamptz(3)
+  endsAt          DateTime     @map("ends_at") @db.Timestamptz(3)
+  timezone        String       @default("America/Sao_Paulo")
+  allDay          Boolean      @default(false) @map("all_day")
+  attendees       Json         @default("[]")
+  recurrenceRule  String?      @map("recurrence_rule") @db.VarChar(500)
+  reminderMinutes Int[]        @default([60, 30, 10]) @map("reminder_minutes")
+  createdById     String       @map("created_by_id") @db.Uuid
+  createdAt       DateTime     @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt       DateTime     @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client          Client?      @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  matter          Matter?      @relation(fields: [matterId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, startsAt, status])
   @@index([organizationId, matterId])

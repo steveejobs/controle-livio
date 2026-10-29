@@ -7,7 +7,7 @@ const actor: AuthenticatedActor = {
   userId: '11111111-1111-4111-8111-111111111111',
   sessionId: 'session',
   organizationId: '22222222-2222-4222-8222-222222222222',
-  permissions: ['notifications:view', 'notifications:update'],
+  permissions: ['notifications:view', 'notifications:update', 'receivables:view', 'tasks:view'],
 };
 
 const alert = {
@@ -21,6 +21,14 @@ const alert = {
 };
 
 describe('alertas financeiros', () => {
+  it('não cria alertas financeiros para quem não pode consultar recebíveis', async () => {
+    const query = vi.fn();
+    const service = new NotificationsService({ $queryRaw: query } as never);
+    await expect(
+      service.reconcileFinancialAlerts({ ...actor, permissions: ['notifications:update'] }),
+    ).resolves.toEqual({ active: 0, overdue: 0 });
+    expect(query).not.toHaveBeenCalled();
+  });
   it('cria uma notificação determinística para parcela vencida', async () => {
     const upsert = vi.fn().mockResolvedValue({});
     const prisma = {
@@ -143,6 +151,16 @@ describe('alertas financeiros', () => {
             organizationId: actor.organizationId,
             userId: actor.userId,
             clientId: null,
+            roles: [
+              {
+                role: {
+                  permissions: [
+                    { permission: { resource: 'receivables' } },
+                    { permission: { resource: 'tasks' } },
+                  ],
+                },
+              },
+            ],
           },
         ]),
       },
@@ -175,6 +193,7 @@ describe('alertas financeiros', () => {
       organizationId: actor.organizationId,
       userId: `user-${index}`,
       clientId: null,
+      roles: [],
     }));
     const prisma = { organizationMember: { findMany: vi.fn().mockResolvedValue(recipients) } };
     const service = new NotificationsService(prisma as never);
@@ -185,7 +204,7 @@ describe('alertas financeiros', () => {
       maximum = Math.max(maximum, active);
       await Promise.resolve();
       active -= 1;
-      return { active: 1, overdue: 0, taskReminders: 0 };
+      return { active: 1, overdue: 0, taskReminders: 0, hearings: 0 };
     });
 
     await expect(service.reconcileAllFinancialAlerts()).resolves.toEqual({
@@ -231,5 +250,58 @@ describe('alertas financeiros', () => {
       }),
     );
     expect(updateMany).toHaveBeenCalled();
+  });
+
+  it('entrega alertas de audiência no horário e envia push apenas uma vez', async () => {
+    const dueReminder = {
+      id: 'hearing-alert-a',
+      organizationId: actor.organizationId,
+      userId: actor.userId,
+    };
+    const findMany = vi.fn().mockResolvedValue([dueReminder]);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const notifyUsers = vi.fn().mockResolvedValue({ sent: 1 });
+    const prisma = { notification: { findMany, updateMany } };
+    const service = new NotificationsService(prisma as never, { notifyUsers } as never);
+
+    await expect(service.reconcileHearingReminders()).resolves.toEqual({ sent: 1, recipients: 1 });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'PENDING',
+          metadata: { path: ['source'], equals: 'HEARING_REMINDER' },
+        }),
+      }),
+    );
+    expect(updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ id: dueReminder.id, status: 'PENDING' }),
+        data: expect.objectContaining({ status: 'SENT' }),
+      }),
+    );
+    expect(notifyUsers).toHaveBeenCalledWith(actor.organizationId, [actor.userId], {
+      title: 'Lembrete de audiência',
+      body: 'Uma audiência se aproxima. Entre no Lívio para conferir o horário.',
+    });
+  });
+
+  it('não duplica push quando outra execução já marcou o aviso como enviado', async () => {
+    const notifyUsers = vi.fn();
+    const prisma = {
+      notification: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'hearing-alert-race',
+            organizationId: actor.organizationId,
+            userId: actor.userId,
+          },
+        ]),
+        updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+      },
+    };
+    const service = new NotificationsService(prisma as never, { notifyUsers } as never);
+
+    await expect(service.reconcileHearingReminders()).resolves.toEqual({ sent: 0, recipients: 0 });
+    expect(notifyUsers).not.toHaveBeenCalled();
   });
 });

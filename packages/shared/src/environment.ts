@@ -51,6 +51,8 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     VAPID_SUBJECT: z.string().min(8).optional(),
     TRUST_PROXY: booleanEnvironmentValue.default(false),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+    API_RATE_LIMIT_READ: z.coerce.number().int().min(1).max(10_000).default(300),
+    API_RATE_LIMIT_WRITE: z.coerce.number().int().min(1).max(10_000).default(60),
   })
   .superRefine((environment, context) => {
     const vapidConfigured = Boolean(

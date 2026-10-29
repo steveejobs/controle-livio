@@ -61,6 +61,31 @@ describe('authenticated API client', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
+  it('preserva leituras ao registrar eventos de navegação e visualização', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { api } = await import('./api');
+
+    await api('/clients');
+    await api('/audit-logs/module-views', {
+      method: 'POST',
+      body: JSON.stringify({ module: 'clients' }),
+    });
+    await api('/clients');
+    await api('/audit-logs/client-views', {
+      method: 'POST',
+      body: JSON.stringify({ clientId: 'synthetic-client' }),
+    });
+    await api('/clients');
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it('compartilha leituras simultâneas sem cancelar os outros consumidores', async () => {
     let complete!: (response: Response) => void;
     const fetchMock = vi.fn().mockImplementation(

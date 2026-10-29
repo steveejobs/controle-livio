@@ -83,8 +83,9 @@ const contentSecurityPolicy = [
   "frame-ancestors 'none'",
   "img-src 'self' data: blob:",
   "object-src 'none'",
-  `script-src 'self' 'unsafe-inline'${developmentScriptDirective}`,
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${developmentScriptDirective}`,
   "style-src 'self' 'unsafe-inline'",
+  "worker-src 'self' blob:",
 ].join('; ');
 
 const securityHeaders = [

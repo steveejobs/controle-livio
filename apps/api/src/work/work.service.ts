@@ -1,6 +1,16 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma } from '@livio/db';
 import type { AuthenticatedActor } from '@livio/shared';
 import { AuditService } from '../common/audit.service';
+import {
+  DEFAULT_HEARING_REMINDERS,
+  scheduleHearingReminders,
+} from '../notifications/hearing-reminders';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
   CalendarEventInput,
@@ -238,6 +248,7 @@ export class WorkService {
           timezone: input.timezone,
           allDay: input.allDay,
           attendees: input.attendees,
+          reminderMinutes: input.reminderMinutes ?? [...DEFAULT_HEARING_REMINDERS],
           createdById: actor.userId,
           ...(input.description ? { description: input.description } : {}),
           ...(input.location ? { location: input.location } : {}),
@@ -246,6 +257,16 @@ export class WorkService {
           ...(input.recurrenceRule ? { recurrenceRule: input.recurrenceRule } : {}),
         },
       });
+      if (event.type === 'HEARING')
+        await scheduleHearingReminders(transaction, {
+          organizationId: actor.organizationId,
+          userId: actor.userId,
+          eventId: event.id,
+          eventTitle: event.title,
+          startsAt: event.startsAt,
+          reminderMinutes: input.reminderMinutes,
+          ...(input.clientId ? { clientId: input.clientId } : {}),
+        });
       await this.audit.record(transaction, {
         organizationId: actor.organizationId,
         actorUserId: actor.userId,
@@ -271,13 +292,17 @@ export class WorkService {
   }
 
   async updateEvent(actor: AuthenticatedActor, id: string, input: UpdateCalendarEventInput) {
-    const before = await this.prisma.calendarEvent.findFirst({
-      where: { id, organizationId: actor.organizationId },
-    });
-    if (!before) throw new NotFoundException('Evento não encontrado');
     await this.assertLinks(actor.organizationId, input.clientId, input.matterId);
     return this.prisma.$transaction(async (transaction) => {
+      await transaction.$queryRaw`SELECT id FROM calendar_events WHERE id = ${id}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
+      const before = await transaction.calendarEvent.findFirst({
+        where: { id, organizationId: actor.organizationId },
+      });
+      if (!before) throw new NotFoundException('Evento não encontrado');
+      if ((input.endsAt ?? before.endsAt) <= (input.startsAt ?? before.startsAt))
+        throw new BadRequestException('O fim deve ser posterior ao início do compromisso');
       const event = await transaction.calendarEvent.update({ where: { id }, data: input });
+      await this.syncPendingHearingReminders(transaction, event);
       await this.audit.record(transaction, {
         organizationId: actor.organizationId,
         actorUserId: actor.userId,
@@ -290,6 +315,41 @@ export class WorkService {
       });
       return event;
     });
+  }
+
+  private async syncPendingHearingReminders(
+    transaction: Prisma.TransactionClient,
+    event: {
+      id: string;
+      organizationId: string;
+      type: string;
+      status: string;
+      startsAt: Date;
+      title: string;
+      createdById: string;
+      clientId: string | null;
+      reminderMinutes: number[];
+    },
+  ) {
+    await transaction.notification.deleteMany({
+      where: {
+        organizationId: event.organizationId,
+        status: 'PENDING',
+        AND: { metadata: { path: ['source'], equals: 'HEARING_REMINDER' } },
+        metadata: { path: ['eventId'], equals: event.id },
+      },
+    });
+    if (event.type === 'HEARING' && event.status === 'SCHEDULED') {
+      await scheduleHearingReminders(transaction, {
+        organizationId: event.organizationId,
+        userId: event.createdById,
+        eventId: event.id,
+        eventTitle: event.title,
+        startsAt: event.startsAt,
+        reminderMinutes: event.reminderMinutes,
+        ...(event.clientId ? { clientId: event.clientId } : {}),
+      });
+    }
   }
 
   private async assertTask(organizationId: string, taskId: string): Promise<void> {

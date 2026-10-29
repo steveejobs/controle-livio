@@ -4,23 +4,30 @@ import { useCallback, useEffect, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
 
 export function useApiData<T>(path?: string, debounce = 0) {
-  const [data, setData] = useState<T>();
-  const [error, setError] = useState<ApiError>();
+  const [result, setResult] = useState<{ path: string; value: T }>();
+  const [requestError, setRequestError] = useState<{ path: string; value: ApiError }>();
   const [version, setVersion] = useState(0);
   const reload = useCallback(() => setVersion((value) => value + 1), []);
+  const setData = useCallback(
+    (value: T | undefined) => setResult(value === undefined || !path ? undefined : { path, value }),
+    [path],
+  );
 
   useEffect(() => {
     if (!path) {
-      setData(undefined);
+      setResult(undefined);
       return undefined;
     }
     const controller = new AbortController();
-    setError(undefined);
+    setRequestError(undefined);
     const timer = window.setTimeout(() => {
       api<T>(path, {}, controller.signal)
-        .then(setData)
+        .then((value) => {
+          if (!controller.signal.aborted) setResult({ path, value });
+        })
         .catch((caught: unknown) => {
-          if (!(caught instanceof DOMException) && caught instanceof ApiError) setError(caught);
+          if (!controller.signal.aborted && caught instanceof ApiError)
+            setRequestError({ path, value: caught });
         });
     }, debounce);
     return () => {
@@ -29,5 +36,10 @@ export function useApiData<T>(path?: string, debounce = 0) {
     };
   }, [path, debounce, version]);
 
-  return { data, error, reload, setData };
+  return {
+    data: result && result.path === path ? result.value : undefined,
+    error: requestError && requestError.path === path ? requestError.value : undefined,
+    reload,
+    setData,
+  };
 }

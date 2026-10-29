@@ -65,4 +65,83 @@ describe('MattersService collection objectives', () => {
     );
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
+
+  it('builds a permission-scoped chronological matter timeline', async () => {
+    const older = new Date('2026-08-01T12:00:00.000Z');
+    const newer = new Date('2026-10-01T12:00:00.000Z');
+    const prisma = {
+      matter: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'matter-a',
+          reference: 'PROC-1',
+          title: 'Acompanhamento',
+          courtNumberNormalized: '0001234',
+          area: 'Criminal',
+          status: 'ACTIVE',
+          client: { id: 'client-a', displayName: 'Marina Souza' },
+          parties: [],
+          pipeline: null,
+          currentStage: null,
+          stageHistory: [
+            {
+              id: 'movement-a',
+              fromStage: null,
+              toStage: { name: 'Cadastro' },
+              reason: null,
+              movedAt: older,
+            },
+          ],
+        }),
+      },
+      task: { findMany: vi.fn().mockResolvedValue([]) },
+      calendarEvent: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'hearing-a',
+            title: 'Audiência de instrução',
+            type: 'HEARING',
+            status: 'SCHEDULED',
+            startsAt: newer,
+            createdAt: older,
+          },
+        ]),
+      },
+      internalNote: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ id: 'note-a', body: 'Preparar documentos', createdAt: newer }]),
+      },
+      document: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([
+            { id: 'document-a', title: 'Procuração', category: 'PROCURACAO', createdAt: older },
+          ]),
+      },
+      clientMessage: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    const service = new MattersService(prisma as never, {} as never);
+    const timelineActor: AuthenticatedActor = {
+      ...actor,
+      permissions: ['matters:view', 'tasks:view', 'calendar:view', 'notes:view', 'documents:view'],
+    };
+
+    const result = await service.timeline(timelineActor, 'matter-a');
+
+    expect(result.matter).toMatchObject({
+      reference: 'PROC-1',
+      client: { displayName: 'Marina Souza' },
+    });
+    expect(result.entries.map(({ type }) => type)).toEqual([
+      'HEARING',
+      'NOTE',
+      'STAGE',
+      'DOCUMENT',
+    ]);
+    expect(prisma.internalNote.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-a', matterId: 'matter-a' }),
+      }),
+    );
+  });
 });

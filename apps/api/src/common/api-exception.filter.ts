@@ -9,6 +9,11 @@ import {
 import { Prisma } from '@livio/db';
 import type { ApiErrorBody } from '@livio/shared';
 
+export function sanitizeRequestPath(path: string): string {
+  const pathname = path.split('?', 1)[0] || '/';
+  return pathname.replace(/(\/public\/signatures\/)[^/?#]+(?=\/|$)/g, '$1[REDACTED]');
+}
+
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost): void {
@@ -31,7 +36,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       message: safeMessage,
       requestId,
       timestamp: new Date().toISOString(),
-      path: request.originalUrl,
+      path: sanitizeRequestPath(request.originalUrl),
     };
 
     if (status >= 500) {

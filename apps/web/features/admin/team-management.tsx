@@ -33,6 +33,9 @@ export function TeamManagement({
   const [busy, setBusy] = useState(false);
   const [alertsEnabled, setAlertsEnabled] = useState(false);
   const [alertTimes, setAlertTimes] = useState(['09:00']);
+  const [delivery, setDelivery] = useState<'LINK' | 'EMAIL'>('LINK');
+  const [invitationUrl, setInvitationUrl] = useState<string>();
+  const [recoveryUrl, setRecoveryUrl] = useState<string>();
 
   useEffect(() => {
     if (!accessAlerts.data) return;
@@ -52,6 +55,24 @@ export function TeamManagement({
       users.reload();
     } catch (caught) {
       setFeedback(`Erro: ${caught instanceof ApiError ? caught.message : 'status não alterado'}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createRecoveryLink = async (user: User) => {
+    setBusy(true);
+    setFeedback(undefined);
+    setRecoveryUrl(undefined);
+    try {
+      const result = await api<{ recoveryUrl: string }>(`/admin/users/${user.id}/recovery-link`, {
+        method: 'POST',
+      });
+      setInvitationUrl(undefined);
+      setRecoveryUrl(result.recoveryUrl);
+      setFeedback(`Link de redefinição gerado para ${user.fullName ?? user.email}.`);
+    } catch (caught) {
+      setFeedback(`Erro: ${caught instanceof ApiError ? caught.message : 'link não gerado'}`);
     } finally {
       setBusy(false);
     }
@@ -80,16 +101,21 @@ export function TeamManagement({
     const target = event.currentTarget;
     const form = new FormData(target);
     try {
-      await api('/admin/users', {
+      const result = await api<{ invitationUrl?: string }>('/admin/users', {
         method: 'POST',
         body: JSON.stringify({
           email: form.get('email'),
           fullName: form.get('fullName'),
           roleIds: [form.get('roleId')],
+          delivery,
         }),
       });
+      setInvitationUrl(result.invitationUrl);
+      setRecoveryUrl(undefined);
       setFeedback(
-        'Convite enviado. O profissional poderá definir a senha e entrar pelo login normal.',
+        result.invitationUrl
+          ? 'Acesso criado. Compartilhe o link de convite com o profissional para ele definir a senha.'
+          : 'Convite enviado. O profissional poderá definir a senha e entrar pelo login normal.',
       );
       target.reset();
       users.reload();
@@ -168,10 +194,103 @@ export function TeamManagement({
               ))}
             </select>
           </label>
+          <label>
+            Como entregar o convite
+            <select
+              value={delivery}
+              onChange={(event) => setDelivery(event.target.value as 'LINK' | 'EMAIL')}
+            >
+              <option value="LINK">Gerar link para compartilhar</option>
+              <option value="EMAIL">Enviar por e-mail</option>
+            </select>
+            <small>
+              {delivery === 'LINK'
+                ? 'O profissional abre o link e escolhe a própria senha.'
+                : 'O envio exige um provedor de e-mail configurado.'}
+            </small>
+          </label>
           <button className="primary form-wide" disabled={busy || !operationalRoles.length}>
-            {busy ? 'Enviando…' : 'Cadastrar e enviar convite'}
+            {busy
+              ? 'Criando acesso…'
+              : delivery === 'LINK'
+                ? 'Cadastrar e gerar convite'
+                : 'Cadastrar e enviar convite'}
           </button>
         </form>
+      )}
+      {invitationUrl && canManageUsers && (
+        <section className="surface form-grid" aria-label="Convite do profissional">
+          <div className="form-wide">
+            <label htmlFor="team-invitation-url">Link de convite</label>
+            <input
+              id="team-invitation-url"
+              readOnly
+              value={invitationUrl}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <small>
+              Compartilhe somente com o profissional convidado. O link permite definir a senha.
+            </small>
+          </div>
+          <div className="form-actions form-wide">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                if (!navigator.clipboard?.writeText) {
+                  setFeedback('Selecione o link acima para copiá-lo.');
+                  return;
+                }
+                void navigator.clipboard.writeText(invitationUrl).then(
+                  () => setFeedback('Link de convite copiado.'),
+                  () => setFeedback('Selecione o link acima para copiá-lo.'),
+                );
+              }}
+            >
+              Copiar link
+            </button>
+            <button type="button" className="secondary" onClick={() => setInvitationUrl(undefined)}>
+              Ocultar link
+            </button>
+          </div>
+        </section>
+      )}
+      {recoveryUrl && canManageUsers && (
+        <section className="surface form-grid" aria-label="Redefinição de senha do profissional">
+          <div className="form-wide">
+            <label htmlFor="team-recovery-url">Link de redefinição de senha</label>
+            <input
+              id="team-recovery-url"
+              readOnly
+              value={recoveryUrl}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+            <small>
+              Compartilhe somente com o profissional. O link permite definir uma nova senha.
+            </small>
+          </div>
+          <div className="form-actions form-wide">
+            <button
+              type="button"
+              className="primary"
+              onClick={() => {
+                if (!navigator.clipboard?.writeText) {
+                  setFeedback('Selecione o link acima para copiá-lo.');
+                  return;
+                }
+                void navigator.clipboard.writeText(recoveryUrl).then(
+                  () => setFeedback('Link de redefinição copiado.'),
+                  () => setFeedback('Selecione o link acima para copiá-lo.'),
+                );
+              }}
+            >
+              Copiar link
+            </button>
+            <button type="button" className="secondary" onClick={() => setRecoveryUrl(undefined)}>
+              Ocultar link
+            </button>
+          </div>
+        </section>
       )}
       {isAdministrator && (
         <form className="surface form-grid" data-reveal onSubmit={saveAccessAlerts}>
@@ -287,13 +406,24 @@ export function TeamManagement({
                   </td>
                   {canManageUsers && (
                     <td>
-                      <button
-                        className="table-action"
-                        disabled={busy}
-                        onClick={() => void setStatus(user)}
-                      >
-                        {user.status === 'ACTIVE' ? 'Suspender' : 'Reativar'}
-                      </button>
+                      <div className="inline-control">
+                        <button
+                          className="table-action"
+                          disabled={busy}
+                          onClick={() => void setStatus(user)}
+                        >
+                          {user.status === 'ACTIVE' ? 'Suspender' : 'Reativar'}
+                        </button>
+                        {user.status === 'ACTIVE' && (
+                          <button
+                            className="table-action"
+                            disabled={busy}
+                            onClick={() => void createRecoveryLink(user)}
+                          >
+                            Redefinir senha
+                          </button>
+                        )}
+                      </div>
                     </td>
                   )}
                 </tr>

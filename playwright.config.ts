@@ -7,8 +7,13 @@ export default defineConfig({
   testMatch: '*.e2e.ts',
   fullyParallel: false,
   workers: 1,
+  timeout: 30_000,
+  expect: { timeout: 10_000 },
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
+  reporter: process.env.CI
+    ? [['github'], ['html', { outputFolder: 'playwright-report', open: 'never' }]]
+    : 'list',
+  outputDir: process.env.PLAYWRIGHT_OUTPUT_DIR ?? 'test-results',
   use: {
     baseURL,
     trace: 'retain-on-failure',

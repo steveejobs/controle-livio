@@ -4,12 +4,18 @@ test('payment form finds a client installment and submits the exact decimal amou
   page,
 }) => {
   let payment: { amount?: string; installmentId?: string; idempotencyKey?: string } = {};
+  const financeReads: string[] = [];
   await page.route('**/v1/**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname.startsWith('/v1/finance/')) {
+      financeReads.push(`${url.pathname}${url.search}`);
+    }
     const headers = { 'access-control-allow-origin': '*' };
     let body: unknown;
-    if (url.pathname === '/v1/auth/me') {
+    if (url.pathname === '/v1/audit-logs/module-views' && request.method() === 'POST') {
+      body = { recorded: true };
+    } else if (url.pathname === '/v1/auth/me') {
       body = {
         user: {
           id: 'finance-admin',
@@ -94,6 +100,10 @@ test('payment form finds a client installment and submits the exact decimal amou
   await page.getByRole('button', { name: 'Receber pagamento' }).click();
   await page.getByRole('combobox', { name: 'Cliente', exact: true }).selectOption('client-1');
   await expect(page.getByRole('option', { name: /COB-1.*parcela 1/ })).toBeAttached();
+  expect(financeReads.some((path) => path.startsWith('/v1/finance/receivables?clientId='))).toBe(
+    true,
+  );
+  expect(financeReads.some((path) => path.startsWith('/v1/finance/expenses'))).toBe(false);
   await page.getByLabel('Parcela').selectOption('installment-1');
   await page.getByLabel('Referência do pagamento').fill('PIX-QA-1');
   await page.getByLabel('Valor recebido').fill('10,00');

@@ -116,12 +116,20 @@ const navGroups: readonly NavGroup[] = [
     items: [
       ['admin', 'Usuários e permissões', 'US'],
       ['pipelines', 'Pipelines', 'PI'],
-      ['audit', 'Auditoria', 'AU'],
+      ['audit', 'Atividades', 'AT'],
     ],
   },
 ] as const;
 
 const nav: readonly NavItem[] = navGroups.flatMap((group) => [...group.items]);
+
+function canAccessModule(session: Session, id: string) {
+  return (
+    session.user.permissions?.includes(navPermissions[id] ?? '') === true &&
+    (id !== 'audit' || session.user.isAdministrator === true) &&
+    (id !== 'portal' || Boolean(session.user.clientId))
+  );
+}
 
 export function LegalCrm() {
   const [session, setSession] = useState<Session | null | undefined>(undefined);
@@ -129,6 +137,8 @@ export function LegalCrm() {
   const [selectedClientId, setSelectedClientId] = useState<string>();
   const [error, setError] = useState<ApiError>();
   const [menuOpen, setMenuOpen] = useState(false);
+  const lastLoggedModule = useRef<string | undefined>(undefined);
+  const lastViewedClient = useRef<string | undefined>(undefined);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const loadSession = useCallback(async () => {
     try {
@@ -141,6 +151,37 @@ export function LegalCrm() {
   useEffect(() => {
     void loadSession();
   }, [loadSession]);
+  useEffect(() => {
+    if (!session) {
+      lastLoggedModule.current = undefined;
+      lastViewedClient.current = undefined;
+      return;
+    }
+    const moduleId = canAccessModule(session, active)
+      ? active
+      : nav.find(([id]) => canAccessModule(session, id))?.[0];
+    if (!moduleId) return;
+    const viewKey = `${session.user.id}:${moduleId}`;
+    if (lastLoggedModule.current === viewKey) return;
+    lastLoggedModule.current = viewKey;
+    void api('/audit-logs/module-views', {
+      method: 'POST',
+      body: JSON.stringify({ module: moduleId }),
+    }).catch(() => undefined);
+  }, [active, session]);
+  useEffect(() => {
+    if (!session || !selectedClientId || !session.user.permissions?.includes('clients:view')) {
+      lastViewedClient.current = undefined;
+      return;
+    }
+    const viewKey = `${session.user.id}:${selectedClientId}`;
+    if (lastViewedClient.current === viewKey) return;
+    lastViewedClient.current = viewKey;
+    void api('/audit-logs/client-views', {
+      method: 'POST',
+      body: JSON.stringify({ clientId: selectedClientId }),
+    }).catch(() => undefined);
+  }, [selectedClientId, session]);
   useEffect(() => {
     if (!menuOpen) return;
     const previousBodyOverflow = document.body.style.overflow;
@@ -177,10 +218,7 @@ export function LegalCrm() {
       </main>
     );
   if (!session) return <Login onAuthenticated={loadSession} />;
-  const permissions = new Set(session.user.permissions ?? []);
-  const canOpen = (id: string) =>
-    permissions.has(navPermissions[id] ?? '') &&
-    (id !== 'portal' || Boolean(session.user.clientId));
+  const canOpen = (id: string) => canAccessModule(session, id);
   const availableNav = nav.filter(([id]) => canOpen(id));
   const visibleGroups = navGroups
     .map((group) => ({ ...group, items: group.items.filter(([id]) => canOpen(id)) }))
@@ -353,10 +391,12 @@ function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
           <p>
             {mode === 'login'
               ? 'Entre para acessar o controle financeiro da sua organização.'
-              : 'Enviaremos instruções caso exista uma conta compatível.'}
+              : 'Informe seu e-mail. Se a mensagem não chegar, peça um link de recuperação ao administrador.'}
           </p>
           {sent ? (
-            <div className="notice notice-success">Solicitação recebida. Verifique seu e-mail.</div>
+            <div className="notice notice-success">
+              Solicitação recebida. Verifique seu e-mail ou peça um link ao administrador.
+            </div>
           ) : (
             <form onSubmit={submit}>
               <label>
@@ -432,7 +472,8 @@ function Content({
         initialClientId={selectedClientId}
         permissions={permissions}
         onSelectedClientChange={(id) => {
-          if (!id) clearSelectedClient();
+          if (id) openClient(id);
+          else clearSelectedClient();
         }}
       />
     );
@@ -477,7 +518,8 @@ function Content({
   if (active === 'contracts') return <ContractsModule permissions={permissions} />;
   if (active === 'finance')
     return <FinanceOperations permissions={permissions} isAdministrator={isAdministrator} />;
-  if (active === 'documents') return <DocumentsModule permissions={permissions} />;
+  if (active === 'documents')
+    return <DocumentsModule permissions={permissions} isAdministrator={isAdministrator} />;
   return <Unavailable title={nav.find(([id]) => id === active)?.[1] ?? 'Modulo'} />;
 }
 

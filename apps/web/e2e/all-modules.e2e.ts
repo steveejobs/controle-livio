@@ -16,7 +16,7 @@ const modules = [
   ['Relatórios', 'Relatórios'],
   ['Usuários e permissões', 'Equipe'],
   ['Pipelines', 'Pipelines'],
-  ['Auditoria', 'Logs de auditoria'],
+  ['Atividades', 'Atividades do sistema'],
 ] as const;
 
 const permissions = [
@@ -52,11 +52,60 @@ const permissions = [
   'pipelines:view',
   'pipelines:create',
   'audit:view',
+  'organization:view',
+  'organization:update',
 ];
 
 async function mockApplication(page: Page) {
   const unexpected: string[] = [];
   const createdMatters: Array<Record<string, unknown>> = [];
+  const createdContracts: Array<Record<string, unknown>> = [];
+  const moduleViews: string[] = [];
+  const documentTemplates = [
+    {
+      category: 'CONTRATO_HONORARIOS',
+      label: 'Contrato de honorários',
+      content:
+        'CONTRATO DE HONORÁRIOS\n\n{{cliente.qualificacao}}\n\n{{contrato.numero}}\n{{contrato.objeto}}\n{{contrato.honorarios}}',
+      customized: false,
+    },
+    {
+      category: 'PROCURACAO',
+      label: 'Procuração',
+      content: 'PROCURAÇÃO\n\n{{cliente.qualificacao}}\n{{escritorio.identificacao}}',
+      customized: false,
+    },
+    {
+      category: 'HIPOSSUFICIENCIA',
+      label: 'Declaração de hipossuficiência',
+      content: 'DECLARAÇÃO\n\n{{cliente.qualificacao}}\n{{data.emissao}}',
+      customized: false,
+    },
+  ];
+  const defaultDocumentTemplates = documentTemplates.map((template) => ({ ...template }));
+  const templateVariables = [
+    {
+      token: '{{cliente.nome}}',
+      label: 'Nome do cliente',
+      description: 'Nome do cliente.',
+      example: 'Marina Souza',
+      categories: ['CONTRATO_HONORARIOS', 'PROCURACAO', 'HIPOSSUFICIENCIA'],
+    },
+    {
+      token: '{{cliente.qualificacao}}',
+      label: 'Qualificação completa',
+      description: 'Qualificação do cliente.',
+      example: 'Marina Souza, brasileira, CPF nº 123.456.789-00',
+      categories: ['CONTRATO_HONORARIOS', 'PROCURACAO', 'HIPOSSUFICIENCIA'],
+    },
+    {
+      token: '{{contrato.numero}}',
+      label: 'Número do contrato',
+      description: 'Número do contrato.',
+      example: 'H-2026-001',
+      categories: ['CONTRATO_HONORARIOS'],
+    },
+  ];
   const pipelines = [
     {
       id: 'commercial-qa',
@@ -91,6 +140,7 @@ async function mockApplication(page: Page) {
     const request = route.request();
     const pathname = new URL(request.url()).pathname;
     const requestedPeriod = new URL(request.url()).searchParams.get('period') ?? '6m';
+    let unexpectedRequest = false;
     let body: unknown;
     if (pathname === '/v1/auth/me') {
       body = {
@@ -133,6 +183,73 @@ async function mockApplication(page: Page) {
       body = { items: [], unread: 0 };
     } else if (pathname === '/v1/notifications/reconcile') {
       body = { reconciled: 0 };
+    } else if (pathname === '/v1/audit-logs/module-views' && request.method() === 'POST') {
+      const submission = request.postDataJSON() as { module?: string };
+      if (submission.module) moduleViews.push(submission.module);
+      body = { recorded: true };
+    } else if (pathname === '/v1/audit-logs/client-views' && request.method() === 'POST') {
+      body = { recorded: true };
+    } else if (pathname === '/v1/audit-logs/actors') {
+      body = { items: [{ id: 'qa-admin', fullName: 'QA', email: 'qa@example.test' }], total: 1 };
+    } else if (pathname === '/v1/audit-logs') {
+      body = {
+        items: [
+          {
+            id: 'activity:module-view',
+            kind: 'NAVIGATION',
+            action: 'MODULE_VIEW',
+            resource: 'user',
+            resourceId: 'qa-admin',
+            summary: 'Abriu Clientes',
+            changedFields: [],
+            occurredAt: '2026-10-21T15:00:00.000Z',
+            actorUserId: 'qa-admin',
+            actorName: 'QA',
+            actorEmail: 'qa@example.test',
+          },
+          {
+            id: 'audit:client-update',
+            kind: 'CHANGE',
+            action: 'UPDATE',
+            resource: 'client',
+            resourceId: 'client-qa',
+            targetLabel: 'Cliente QA',
+            changedFields: ['Nome', 'Telefone'],
+            occurredAt: '2026-10-21T14:00:00.000Z',
+            actorUserId: 'qa-admin',
+            actorName: 'QA',
+            actorEmail: 'qa@example.test',
+          },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 25,
+        pages: 1,
+      };
+    } else if (pathname === '/v1/documents/office-settings') {
+      body = { configured: false, settings: null };
+    } else if (pathname === '/v1/documents/templates' && request.method() === 'GET') {
+      body = { templates: documentTemplates, variables: templateVariables };
+    } else if (pathname === '/v1/documents/templates' && request.method() === 'PATCH') {
+      const submission = request.postDataJSON() as { category: string; content: string };
+      const template = documentTemplates.find((item) => item.category === submission.category);
+      if (template) {
+        template.content = submission.content;
+        template.customized = true;
+      }
+      body = { templates: documentTemplates, variables: templateVariables };
+    } else if (pathname.startsWith('/v1/documents/templates/') && request.method() === 'DELETE') {
+      const category = pathname.split('/').at(-1);
+      const template = documentTemplates.find((item) => item.category === category);
+      const defaultTemplate = defaultDocumentTemplates.find((item) => item.category === category);
+      if (template && defaultTemplate) Object.assign(template, defaultTemplate);
+      body = { templates: documentTemplates, variables: templateVariables };
+    } else if (pathname === '/v1/finance/expenses/approval-policy') {
+      body = { required: false, canSubmitForApproval: true };
+    } else if (pathname === '/v1/finance/expenses/summary') {
+      body = { currencies: [] };
+    } else if (pathname === '/v1/finance/expenses/responsibles') {
+      body = [];
     } else if (pathname === '/v1/admin/access-alerts') {
       body = { enabled: false, times: ['09:00'], timezone: 'America/Sao_Paulo' };
     } else if (pathname.startsWith('/v1/reports/')) {
@@ -146,6 +263,37 @@ async function mockApplication(page: Page) {
         page: 1,
         pageSize: 100,
         pages: 1,
+      };
+    } else if (pathname === '/v1/finance/service-catalog') {
+      body = [];
+    } else if (pathname === '/v1/finance/contracts' && request.method() === 'POST') {
+      const submission = request.postDataJSON() as Record<string, unknown>;
+      createdContracts.push(submission);
+      body = { id: 'contract-qa', ...submission };
+    } else if (pathname.match(/^\/v1\/matters\/[^/]+\/timeline$/)) {
+      body = {
+        matter: {
+          id: 'matter-1',
+          reference: 'COB-OBJ-001',
+          title: 'Regularizar documentos da cobrança',
+          status: 'LEAD',
+          client: { id: 'client-qa', displayName: 'Cliente QA' },
+        },
+        entries: [
+          {
+            id: 'timeline-stage-qa',
+            type: 'STAGE',
+            title: 'Atendimento iniciado',
+            occurredAt: '2026-10-20T12:00:00.000Z',
+          },
+          {
+            id: 'timeline-hearing-qa',
+            type: 'HEARING',
+            title: 'Audiência de instrução',
+            description: 'Fórum de Balsas',
+            occurredAt: '2026-10-21T12:00:00.000Z',
+          },
+        ],
       };
     } else if (pathname === '/v1/matters' && request.method() === 'POST') {
       const submission = request.postDataJSON() as Record<string, unknown>;
@@ -198,16 +346,17 @@ async function mockApplication(page: Page) {
       body = { items: [], total: 0 };
     } else {
       unexpected.push(`${request.method()} ${pathname}`);
+      unexpectedRequest = true;
       body = { message: 'Unexpected request' };
     }
     await route.fulfill({
-      status: unexpected.length ? 500 : 200,
+      status: unexpectedRequest ? 500 : 200,
       contentType: 'application/json',
       headers: { 'access-control-allow-origin': '*' },
       body: JSON.stringify(body),
     });
   });
-  return { unexpected, createdMatters };
+  return { unexpected, createdMatters, createdContracts, moduleViews };
 }
 
 for (const viewport of [
@@ -220,7 +369,8 @@ for (const viewport of [
     test.setTimeout(240_000);
     await page.setViewportSize(viewport);
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    const { unexpected, createdMatters } = await mockApplication(page);
+    const { unexpected, createdMatters, createdContracts, moduleViews } =
+      await mockApplication(page);
     const browserErrors: string[] = [];
     page.on('pageerror', (error) => browserErrors.push(error.message));
     await page.goto('/');
@@ -296,6 +446,12 @@ for (const viewport of [
         await collectionForm.getByRole('button', { name: 'Cadastrar cobrança' }).click();
         await expect(page.getByText('Cobrança cadastrada.')).toBeVisible();
         await expect(page.getByText('Objetivo sem valor financeiro')).toBeVisible();
+        await page.getByRole('button', { name: 'Ver acompanhamento' }).click();
+        await expect(
+          page.getByRole('heading', { name: 'Regularizar documentos da cobrança' }),
+        ).toBeVisible();
+        await expect(page.getByText('Audiência de instrução')).toBeVisible();
+        await expect(page.getByText('Atendimento iniciado')).toBeVisible();
         expect(createdMatters.at(-1)).toMatchObject({
           clientId: 'client-qa',
           pipelineId: 'collection-qa',
@@ -303,6 +459,60 @@ for (const viewport of [
             description: 'Receber comprovantes para concluir a análise, sem negociar valores.',
           },
         });
+      }
+      if (navigationLabel === 'Contratos') {
+        await page.getByRole('button', { name: 'Novo contrato' }).click();
+        const contractForm = page.locator('form').filter({
+          has: page.getByRole('button', { name: 'Cadastrar contrato' }),
+        });
+        await contractForm.getByLabel('Cliente').selectOption('client-qa');
+        await contractForm.getByLabel('Número do contrato').fill('H-2026-003');
+        await contractForm.getByLabel('Nome do contrato').fill('Defesa criminal');
+        await contractForm.getByLabel('Valor fixo (R$)').fill('800,00');
+        await contractForm.getByLabel('Este contrato inclui audiência').check();
+        await contractForm.getByLabel('Data e horário').fill('2030-05-21T10:00');
+        await contractForm.getByLabel('Outro intervalo (minutos)').fill('45');
+        await contractForm.getByRole('button', { name: 'Adicionar alerta' }).click();
+        await contractForm.getByRole('button', { name: 'Cadastrar contrato' }).click();
+        await expect(page.getByText('Contrato cadastrado.')).toBeVisible();
+        expect(createdContracts.at(-1)).toMatchObject({
+          number: 'H-2026-003',
+          hearings: [
+            {
+              reminderMinutes: [60, 45, 30, 10],
+            },
+          ],
+        });
+      }
+      if (navigationLabel === 'Documentos') {
+        await page.getByText('Modelos de documentos editáveis', { exact: true }).click();
+        const editor = page.getByLabel('Texto do modelo');
+        await expect(editor).toHaveValue(/\{\{cliente\.qualificacao\}\}/);
+        await editor.focus();
+        await editor.press('Control+End');
+        await page.getByRole('button', { name: 'Nome do cliente' }).click();
+        await expect(editor).toHaveValue(/\{\{cliente\.nome\}\}$/);
+        await expect(page.getByText('Alterações não salvas')).toBeVisible();
+        page.once('dialog', (dialog) => dialog.dismiss());
+        await page.getByLabel('Documento para editar').selectOption('PROCURACAO');
+        await expect(page.getByLabel('Documento para editar')).toHaveValue('CONTRATO_HONORARIOS');
+        await expect(editor).toHaveValue(/\{\{cliente\.nome\}\}$/);
+        await page.getByRole('button', { name: 'Ver prévia' }).click();
+        await expect(page.getByText('Marina Souza', { exact: false }).last()).toBeVisible();
+        await page.getByRole('button', { name: 'Salvar modelo' }).click();
+        await expect(page.getByRole('status').filter({ hasText: 'Modelo salvo.' })).toBeVisible();
+        await page.getByRole('button', { name: 'Restaurar modelo padrão' }).click();
+        await expect(
+          page.getByRole('status').filter({ hasText: 'Modelo padrão restaurado' }),
+        ).toBeVisible();
+      }
+      if (navigationLabel === 'Atividades') {
+        await expect(page.getByRole('heading', { name: 'Abriu Clientes' })).toBeVisible();
+        await expect(
+          page.getByRole('heading', { name: 'Atualizou cadastro de cliente · Cliente QA' }),
+        ).toBeVisible();
+        await page.getByText('Campos alterados (2)').click();
+        await expect(page.getByText('Nome · Telefone')).toBeVisible();
       }
       for (const selector of await page.locator('select').all()) {
         await expect(selector).toHaveCSS('appearance', 'none');
@@ -321,6 +531,15 @@ for (const viewport of [
         navigationLabel,
       ).toEqual([]);
     }
+    if (viewport.width === 360) {
+      await page.getByRole('button', { name: 'Abrir navegação' }).click();
+    }
+    await page.locator('#primary-navigation').getByRole('button', { name: 'Clientes' }).click();
+    await expect
+      .poll(() => moduleViews.filter((module) => module === 'clients').length)
+      .toBeGreaterThanOrEqual(2);
+    await expect.poll(() => moduleViews.length).toBeGreaterThanOrEqual(modules.length);
+    expect(moduleViews).toContain('audit');
     expect(unexpected).toEqual([]);
     expect(browserErrors).toEqual([]);
   });

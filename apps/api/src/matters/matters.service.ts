@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@livio/db';
-import type { AuthenticatedActor } from '@livio/shared';
+import type { AuthenticatedActor, PermissionCode } from '@livio/shared';
 import { AuditService } from '../common/audit.service';
 import { normalizeCourtNumber } from '../common/security';
 import { normalizeAndValidateTaxId } from '../common/tax-id';
@@ -98,6 +98,168 @@ export class MattersService {
     });
     if (!matter) throw new NotFoundException('Processo não encontrado');
     return matter;
+  }
+
+  async timeline(actor: AuthenticatedActor, id: string) {
+    const matter = await this.prisma.matter.findFirst({
+      where: {
+        id,
+        organizationId: actor.organizationId,
+        deletedAt: null,
+        ...(actor.clientId ? { clientId: actor.clientId } : {}),
+      },
+      select: {
+        id: true,
+        reference: true,
+        title: true,
+        courtNumberNormalized: true,
+        area: true,
+        status: true,
+        client: { select: { id: true, displayName: true } },
+        stageHistory: {
+          orderBy: { movedAt: 'desc' },
+          take: 100,
+          include: { fromStage: true, toStage: true },
+        },
+      },
+    });
+    if (!matter) throw new NotFoundException('Processo não encontrado');
+    const canView = (permission: PermissionCode) => actor.permissions.includes(permission);
+    const [tasks, events, notes, documents, messages] = await Promise.all([
+      canView('tasks:view')
+        ? this.prisma.task.findMany({
+            where: { organizationId: actor.organizationId, matterId: id, deletedAt: null },
+            take: 50,
+            orderBy: { updatedAt: 'desc' },
+            select: {
+              id: true,
+              title: true,
+              status: true,
+              dueAt: true,
+              createdAt: true,
+              history: {
+                select: { id: true, action: true, createdAt: true, before: true, after: true },
+                take: 10,
+                orderBy: { createdAt: 'desc' },
+              },
+            },
+          })
+        : [],
+      canView('calendar:view')
+        ? this.prisma.calendarEvent.findMany({
+            where: { organizationId: actor.organizationId, matterId: id },
+            take: 50,
+            orderBy: { startsAt: 'desc' },
+            select: {
+              id: true,
+              title: true,
+              type: true,
+              status: true,
+              startsAt: true,
+              createdAt: true,
+            },
+          })
+        : [],
+      !actor.clientId && canView('notes:view')
+        ? this.prisma.internalNote.findMany({
+            where: { organizationId: actor.organizationId, matterId: id, deletedAt: null },
+            take: 50,
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, body: true, createdAt: true },
+          })
+        : [],
+      canView('documents:view')
+        ? this.prisma.document.findMany({
+            where: {
+              organizationId: actor.organizationId,
+              matterId: id,
+              deletedAt: null,
+              ...(actor.clientId ? { visibility: 'CLIENT' as const } : {}),
+            },
+            take: 50,
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, title: true, category: true, createdAt: true },
+          })
+        : [],
+      canView('messages:view')
+        ? this.prisma.clientMessage.findMany({
+            where: { organizationId: actor.organizationId, matterId: id, deletedAt: null },
+            take: 50,
+            orderBy: { publishedAt: 'desc' },
+            select: { id: true, body: true, publishedAt: true },
+          })
+        : [],
+    ]);
+    const entries = [
+      ...matter.stageHistory.map((movement) => ({
+        id: movement.id,
+        type: 'STAGE',
+        title: movement.fromStage
+          ? `${movement.fromStage.name} → ${movement.toStage.name}`
+          : `Processo criado em ${movement.toStage.name}`,
+        description: movement.reason ?? undefined,
+        occurredAt: movement.movedAt,
+      })),
+      ...tasks.flatMap((task) =>
+        task.history.length
+          ? task.history.map((history) => ({
+              id: history.id,
+              type: 'TASK',
+              title: `${task.title} · ${history.action}`,
+              description: task.dueAt ? `Prazo: ${task.dueAt.toISOString()}` : undefined,
+              occurredAt: history.createdAt,
+            }))
+          : [
+              {
+                id: task.id,
+                type: 'TASK',
+                title: task.title,
+                description: `Status: ${task.status}`,
+                occurredAt: task.createdAt,
+              },
+            ],
+      ),
+      ...events.map((event) => ({
+        id: event.id,
+        type: event.type === 'HEARING' ? 'HEARING' : 'EVENT',
+        title: event.title,
+        description: `${event.type} · ${event.status}`,
+        occurredAt: event.startsAt,
+      })),
+      ...notes.map((note) => ({
+        id: note.id,
+        type: 'NOTE',
+        title: 'Nota interna',
+        description: note.body,
+        occurredAt: note.createdAt,
+      })),
+      ...documents.map((document) => ({
+        id: document.id,
+        type: 'DOCUMENT',
+        title: document.title,
+        description: document.category ?? undefined,
+        occurredAt: document.createdAt,
+      })),
+      ...messages.map((message) => ({
+        id: message.id,
+        type: 'MESSAGE',
+        title: 'Mensagem ao cliente',
+        description: message.body,
+        occurredAt: message.publishedAt,
+      })),
+    ].sort((left, right) => right.occurredAt.getTime() - left.occurredAt.getTime());
+    return {
+      matter: {
+        id: matter.id,
+        reference: matter.reference,
+        title: matter.title,
+        courtNumberNormalized: matter.courtNumberNormalized,
+        area: matter.area,
+        status: matter.status,
+        client: { id: matter.client.id, displayName: matter.client.displayName },
+      },
+      entries: entries.slice(0, 150),
+    };
   }
 
   async create(actor: AuthenticatedActor, input: CreateMatterInput) {

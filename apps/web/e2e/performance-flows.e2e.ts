@@ -12,7 +12,9 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
     const responseHeaders = { 'access-control-allow-origin': '*' };
     let body: unknown;
 
-    if (pathname === '/v1/auth/me') {
+    if (pathname === '/v1/audit-logs/module-views' && method === 'POST') {
+      body = { recorded: true };
+    } else if (pathname === '/v1/auth/me') {
       body = {
         user: {
           id: 'e2e-admin',

@@ -36,7 +36,9 @@ for (const viewport of [
       const method = request.method();
       const submitted = request.postDataJSON() as Record<string, unknown> | null;
       let body: unknown;
-      if (path === '/v1/auth/me') {
+      if (path === '/v1/audit-logs/module-views' && method === 'POST') {
+        body = { recorded: true };
+      } else if (path === '/v1/auth/me') {
         body = {
           user: {
             id: 'qa-admin',
@@ -76,16 +78,24 @@ for (const viewport of [
       } else if (path === '/v1/admin/users' && method === 'POST') {
         const user = {
           id: 'user-1',
-          status: 'INVITED',
+          status: 'ACTIVE',
           email: submitted?.email,
           fullName: submitted?.fullName,
           roles: [{ role: { name: 'Advogado' } }],
         };
         users.push(user);
-        body = user;
+        body = {
+          ...user,
+          invitationUrl:
+            'https://example.test/auth/confirm?token_hash=qa-test&type=invite&next=/reset-password',
+        };
       } else if (path === '/v1/admin/users/user-1/status' && method === 'PATCH') {
         users[0] = { ...users[0], status: submitted?.status };
         body = users[0];
+      } else if (path === '/v1/admin/users/user-1/recovery-link' && method === 'POST') {
+        body = {
+          recoveryUrl: 'https://example.test/auth/confirm?token_hash=qa-recovery&type=recovery',
+        };
       } else if (path === '/v1/admin/roles' && method === 'GET') {
         body = [
           { id: 'role-lawyer', key: 'lawyer', name: 'Advogado' },
@@ -160,8 +170,20 @@ for (const viewport of [
     await page.getByLabel('Nome completo').fill('Profissional QA');
     await page.getByLabel('E-mail profissional').fill('professional@example.test');
     await page.getByLabel('Perfil de acesso').selectOption('role-lawyer');
-    await page.getByRole('button', { name: 'Cadastrar e enviar convite' }).click();
-    await expect(page.getByText('Convite enviado.')).toBeVisible();
+    await page.getByRole('button', { name: 'Cadastrar e gerar convite' }).click();
+    await expect(
+      page.getByText(
+        'Acesso criado. Compartilhe o link de convite com o profissional para ele definir a senha.',
+      ),
+    ).toBeVisible();
+    await expect(page.getByLabel('Link de convite', { exact: true })).toHaveValue(
+      /token_hash=qa-test/,
+    );
+    await expect(page.getByRole('button', { name: 'Redefinir senha' })).toBeVisible();
+    await page.getByRole('button', { name: 'Redefinir senha' }).click();
+    await expect(page.getByLabel('Link de redefinição de senha')).toHaveValue(
+      /token_hash=qa-recovery/,
+    );
     expect(
       requests.find((request) => request.path === '/v1/admin/users' && request.method === 'POST')
         ?.body,

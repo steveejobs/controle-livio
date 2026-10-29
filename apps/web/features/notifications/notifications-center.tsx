@@ -98,6 +98,8 @@ export function NotificationsCenter({
       openModule('finance');
     if (permissions.includes('users:view') && item.link === 'admin:access-alerts')
       openModule('admin');
+    if (permissions.includes('calendar:view') && item.link?.startsWith('calendar:event:'))
+      openModule('calendar');
   };
   return (
     <section>
@@ -105,9 +107,7 @@ export function NotificationsCenter({
         <div>
           <p>Acompanhamento</p>
           <h1>Notificações</h1>
-          <span>
-            Parcelas vencidas, próximos vencimentos e lembretes de tarefas em um só lugar.
-          </span>
+          <span>Vencimentos, tarefas e horários de audiências em um só lugar.</span>
         </div>
         {canUpdate && (
           <button
@@ -162,7 +162,7 @@ export function NotificationsCenter({
       {data && !data.items.length && (
         <div className="empty">
           <strong>Nenhum alerta pendente</strong>
-          <span>As parcelas estão em dia e não há lembretes de tarefas vencidos.</span>
+          <span>Novos avisos de vencimentos, tarefas e audiências aparecerão aqui.</span>
         </div>
       )}
     </section>

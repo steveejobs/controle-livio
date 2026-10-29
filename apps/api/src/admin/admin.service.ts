@@ -55,9 +55,10 @@ export class AdminService {
       }))
     )
       throw new NotFoundException('Cliente não encontrado');
-    const authUser = await this.supabaseAdmin.invite(input.email, input.fullName);
+    const invitation = await this.supabaseAdmin.invite(input.email, input.fullName, input.delivery);
+    const authUser = invitation.user;
     try {
-      return await this.prisma.$transaction(async (transaction) => {
+      const user = await this.prisma.$transaction(async (transaction) => {
         await transaction.profile.upsert({
           where: { id: authUser.id },
           create: { id: authUser.id, email: input.email, fullName: input.fullName },
@@ -116,10 +117,42 @@ export class AdminService {
         });
         return user;
       });
+      return {
+        ...user,
+        ...(invitation.invitationUrl ? { invitationUrl: invitation.invitationUrl } : {}),
+      };
     } catch (error) {
-      await this.supabaseAdmin.removeUser(authUser.id);
+      // Never remove an Auth identity that already belongs to another organization.
+      if ((await this.prisma.organizationMember.count({ where: { profileId: authUser.id } })) === 0)
+        await this.supabaseAdmin.removeUser(authUser.id);
       throw error;
     }
+  }
+
+  async createRecoveryLink(actor: AuthenticatedActor, userId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: userId,
+        organizationId: actor.organizationId,
+        status: 'ACTIVE',
+        deletedAt: null,
+      },
+      select: { id: true, email: true },
+    });
+    if (!user) throw new NotFoundException('Usuário ativo não encontrado');
+    const recoveryUrl = await this.supabaseAdmin.recoveryLink(user.email);
+    await this.prisma.$transaction(async (transaction) => {
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'user',
+        resourceId: user.id,
+        metadata: { recoveryLinkIssued: true },
+      });
+    });
+    return { recoveryUrl };
   }
 
   listUsers(actor: AuthenticatedActor) {

@@ -4,6 +4,7 @@ import { Prisma } from '@livio/db';
 import type { AuthenticatedActor } from '@livio/shared';
 import { PrismaService } from '../prisma/prisma.service';
 import { PushNotificationsService } from './push-notifications.service';
+import { dueAccessAlertTime } from './access-alert-schedule';
 
 type FinancialAlertRow = {
   installment_id: string;
@@ -36,16 +37,6 @@ function digestId(value: string): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-8${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-function localClock(date: Date, timeZone: string): string {
-  const safeTimeZone = validTimeZone(timeZone);
-  return new Intl.DateTimeFormat('en-GB', {
-    timeZone: safeTimeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hourCycle: 'h23',
-  }).format(date);
-}
-
 function validTimeZone(timeZone: string): string {
   try {
     new Intl.DateTimeFormat('en', { timeZone });
@@ -63,6 +54,7 @@ export class NotificationsService {
   ) {}
 
   async reconcileFinancialAlerts(actor: AuthenticatedActor) {
+    if (!actor.permissions.includes('receivables:view')) return { active: 0, overdue: 0 };
     const clientScope = actor.clientId
       ? Prisma.sql`AND r.client_id = ${actor.clientId}::uuid`
       : Prisma.empty;
@@ -203,6 +195,7 @@ export class NotificationsService {
   }
 
   async reconcileTaskReminders(actor: AuthenticatedActor) {
+    if (!actor.permissions.includes('tasks:view')) return 0;
     const now = new Date();
     const reminders = await this.prisma.taskReminder.findMany({
       where: {
@@ -211,6 +204,7 @@ export class NotificationsService {
         remindAt: { lte: now },
         task: {
           deletedAt: null,
+          status: { notIn: ['COMPLETED', 'CANCELLED'] },
           ...(actor.clientId ? { clientId: actor.clientId } : {}),
           OR: [{ assigneeId: actor.userId }, { assigneeId: null, createdById: actor.userId }],
         },
@@ -262,11 +256,12 @@ export class NotificationsService {
   }
 
   async reconcileUserAlerts(actor: AuthenticatedActor) {
-    const [financial, taskReminders] = await Promise.all([
+    const [financial, taskReminders, hearings] = await Promise.all([
       this.reconcileFinancialAlerts(actor),
       this.reconcileTaskReminders(actor),
+      this.reconcileHearingReminders(actor),
     ]);
-    return { ...financial, taskReminders };
+    return { ...financial, taskReminders, hearings: hearings.sent };
   }
 
   async reconcileAccessDigests() {
@@ -281,11 +276,15 @@ export class NotificationsService {
       const configValue = settings.accessAlerts;
       if (!configValue || typeof configValue !== 'object' || Array.isArray(configValue)) continue;
       const config = configValue as Record<string, Prisma.JsonValue>;
-      const time = localClock(now, organization.timezone);
+      const after = typeof config.lastDigestAt === 'string' ? new Date(config.lastDigestAt) : now;
       const times = Array.isArray(config.times)
         ? config.times.filter((value): value is string => typeof value === 'string')
         : [];
-      if (config.enabled !== true || !times.includes(time)) continue;
+      if (
+        config.enabled !== true ||
+        !dueAccessAlertTime(now, after, validTimeZone(organization.timezone), times)
+      )
+        continue;
 
       const digest = await this.prisma.$transaction(async (transaction) => {
         await transaction.$queryRaw`SELECT id FROM organizations WHERE id = ${organization.id}::uuid FOR UPDATE`;
@@ -301,12 +300,17 @@ export class NotificationsService {
         const currentTimes = Array.isArray(currentConfig.times)
           ? currentConfig.times.filter((value): value is string => typeof value === 'string')
           : [];
-        if (currentConfig.enabled !== true || !currentTimes.includes(time))
-          return { sent: false, userIds: [] as string[], count: 0 };
-
         const cursorValue = currentConfig.lastDigestAt;
         const parsedCursor = typeof cursorValue === 'string' ? new Date(cursorValue) : now;
         const cursor = Number.isNaN(parsedCursor.getTime()) ? now : parsedCursor;
+        const time = dueAccessAlertTime(
+          now,
+          cursor,
+          validTimeZone(organization.timezone),
+          currentTimes,
+        );
+        if (currentConfig.enabled !== true || !time)
+          return { sent: false, userIds: [] as string[], count: 0 };
         const eventFilter = {
           organizationId: organization.id,
           type: 'SYSTEM_ACCESS',
@@ -432,6 +436,20 @@ export class NotificationsService {
         organizationId: true,
         userId: true,
         clientId: true,
+        roles: {
+          select: {
+            role: {
+              select: {
+                permissions: {
+                  where: {
+                    permission: { resource: { in: ['receivables', 'tasks'] }, action: 'view' },
+                  },
+                  select: { permission: { select: { resource: true } } },
+                },
+              },
+            },
+          },
+        },
       },
     });
     const results: Array<{ active: number; overdue: number; taskReminders: number }> = [];
@@ -446,7 +464,16 @@ export class NotificationsService {
               organizationId: recipient.organizationId,
               userId: recipient.userId,
               ...(recipient.clientId ? { clientId: recipient.clientId } : {}),
-              permissions: ['notifications:view', 'notifications:update'],
+              permissions: [
+                'notifications:view',
+                'notifications:update',
+                ...recipient.roles.flatMap(({ role }) =>
+                  role.permissions.map(
+                    ({ permission }) =>
+                      `${permission.resource}:view` as 'receivables:view' | 'tasks:view',
+                  ),
+                ),
+              ],
             }),
           ),
         )),
@@ -460,10 +487,106 @@ export class NotificationsService {
     };
   }
 
+  async dispatchScheduledAlerts() {
+    const [hearings, access, members] = await Promise.all([
+      this.reconcileHearingReminders(),
+      this.reconcileAccessDigests(),
+      this.prisma.organizationMember.findMany({
+        where: {
+          status: 'ACTIVE',
+          organization: { status: 'ACTIVE' },
+          user: { status: 'ACTIVE', deletedAt: null },
+          AND: ['tasks', 'notifications'].map((resource) => ({
+            roles: {
+              some: {
+                role: {
+                  permissions: {
+                    some: {
+                      permission: { resource, action: resource === 'tasks' ? 'view' : 'update' },
+                    },
+                  },
+                },
+              },
+            },
+          })),
+        },
+        select: { organizationId: true, userId: true, clientId: true },
+      }),
+    ]);
+    let tasks = 0;
+    for (let start = 0; start < members.length; start += RECONCILIATION_BATCH_SIZE) {
+      const counts = await Promise.all(
+        members.slice(start, start + RECONCILIATION_BATCH_SIZE).map((member) =>
+          this.reconcileTaskReminders({
+            organizationId: member.organizationId,
+            userId: member.userId,
+            ...(member.clientId ? { clientId: member.clientId } : {}),
+            permissions: ['tasks:view', 'notifications:update'],
+          }),
+        ),
+      );
+      tasks += counts.reduce((sum, count) => sum + count, 0);
+    }
+    return { hearings, access, tasks };
+  }
+
+  async reconcileHearingReminders(actor?: AuthenticatedActor) {
+    const now = new Date();
+    const due = await this.prisma.notification.findMany({
+      where: {
+        channel: 'IN_APP',
+        status: 'PENDING',
+        scheduledAt: { lte: now },
+        metadata: { path: ['source'], equals: 'HEARING_REMINDER' },
+        ...(actor ? { organizationId: actor.organizationId, userId: actor.userId } : {}),
+        organization: { status: 'ACTIVE' },
+      },
+      select: { id: true, organizationId: true, userId: true },
+      orderBy: { scheduledAt: 'asc' },
+      take: 500,
+    });
+    const claimed: typeof due = [];
+    for (const reminder of due) {
+      const result = await this.prisma.notification.updateMany({
+        where: {
+          id: reminder.id,
+          organizationId: reminder.organizationId,
+          userId: reminder.userId,
+          status: 'PENDING',
+          scheduledAt: { lte: now },
+        },
+        data: { status: 'SENT', sentAt: now },
+      });
+      if (result.count) claimed.push(reminder);
+    }
+
+    const recipients = new Map<string, { organizationId: string; userId: string }>();
+    for (const reminder of claimed) {
+      const key = `${reminder.organizationId}:${reminder.userId}`;
+      recipients.set(key, {
+        organizationId: reminder.organizationId,
+        userId: reminder.userId,
+      });
+    }
+    await Promise.all(
+      [...recipients.values()].map(({ organizationId, userId }) =>
+        this.pushNotifications?.notifyUsers(organizationId, [userId], {
+          title: 'Lembrete de audiência',
+          body: 'Uma audiência se aproxima. Entre no Lívio para conferir o horário.',
+        }),
+      ),
+    );
+    return { sent: claimed.length, recipients: recipients.size };
+  }
+
   async list(actor: AuthenticatedActor) {
     const items = await this.prisma.notification.findMany({
-      where: { organizationId: actor.organizationId, userId: actor.userId },
-      orderBy: { createdAt: 'desc' },
+      where: {
+        organizationId: actor.organizationId,
+        userId: actor.userId,
+        status: { in: ['SENT', 'READ'] },
+      },
+      orderBy: [{ sentAt: 'desc' }, { createdAt: 'desc' }],
       take: 50,
     });
     return { items, unread: items.filter(({ status }) => status !== 'READ').length };
@@ -471,7 +594,12 @@ export class NotificationsService {
 
   async markRead(actor: AuthenticatedActor, id: string) {
     const result = await this.prisma.notification.updateMany({
-      where: { id, organizationId: actor.organizationId, userId: actor.userId },
+      where: {
+        id,
+        organizationId: actor.organizationId,
+        userId: actor.userId,
+        status: { in: ['SENT', 'READ'] },
+      },
       data: { status: 'READ', readAt: new Date() },
     });
     if (!result.count) throw new NotFoundException('Notificação não encontrada');
