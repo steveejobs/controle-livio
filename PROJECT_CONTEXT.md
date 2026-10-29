@@ -1,25 +1,29 @@
 # Contexto vivo do projeto Lívio
 
-## Evolução RC em andamento — 2026-10-29
+## Homologação RC concluída no Actions — 2026-10-29
 
-- Nesta etapa local: tarefa ganhou atribuição de responsável ativo do tenant, diretório mínimo protegido
-  e CTA no estado vazio; testes integrados de cliente e tarefa passaram a usar formulários para criação,
-  atribuição e conclusão. Execução browser destas mudanças ainda pendente.
-- Log central de erro 500 não serializa mais exceções arbitrárias. Teste cobre tokens e dados financeiros.
-  Multer foi atualizado isoladamente para 2.5.0 por override; audit de produção caiu de cinco para três
-  entradas altas na cadeia Prisma/config/deepmerge-ts. Audit completo ainda possui duas críticas em
-  ferramentas de teste; não há aceite de segurança.
-- Preparado ensaio CI de dump sintético/restauração em banco novo do PostgreSQL descartável, com
-  comparação de dados e estrutura pública. Não executado; não valida backup histórico, objetos Storage,
-  donos/grants, extensões de agendamento ou configuração Auth hospedada.
-- Validação local: lint, TypeScript, Prisma Validate e Vitest 193/193 passaram. Format check inicial
-  apontou este documento; repetição após formatação e lint final passaram. Build iniciado e interrompido por memória
-  física disponível próxima de 90 MiB; build completo e Playwright dependem do runner.
-- HEAD continua a7f70d9e7905ac291db4035283afd016d2c32ab0. Nenhum commit/push/deploy ou alteração de
-  Supabase compartilhado. Proteção Preview da branch presente nos dois vercel.json; push exige autorização.
-  Matriz de jornadas, serviços, limitações e classificação em docs/RELEASE_CANDIDATE.md.
+- Commit testado: `c943da129d1972f2f6da7321650f0a9c2841677d`, branch
+  `validation/gha-ci-20261029`. Quality #40934607266 passou: https://github.com/steveejobs/controle-livio/actions/runs/40934607266.
+- Format, lint, TypeScript, Vitest 193/193, Prisma Validate, builds API/web e bundle passaram; Playwright
+  mockado 21/21, integrado 9/9 e RLS/Auth/Storage passaram.
+- Cliente e tarefa (com responsável da equipe) foram criados por formulários reais. Fluxos de processo,
+  contrato/recebível e upload/solicitação de assinatura ainda têm criação/preparação via API no E2E;
+  veja a matriz de aceite em `docs/RELEASE_CANDIDATE.md`.
+- Restore sintético em banco temporário novo passou para 45 tabelas e estrutura pública em 7.139 ms;
+  não é restauração do backup histórico e não inclui Storage/Auth hospedado/segredos/owners/grants/jobs.
+- Performance sintética: 1.207 queries, P2024 zero, nenhuma chamada pendente; pool espera p50/p95 1/1 ms,
+  4 conexões ocupadas/abertas no máximo. Rajada de 6 chamadas deduplicou 4 consultas de membership.
+- Audit pós-Multer 2.5.0: 3 altas em produção (Prisma/config/deepmerge-ts), total de dependências 9
+  (2 críticas, 3 altas, 1 moderada, 3 baixas), incluindo ferramentas de teste. Segurança ainda não pronta.
+- SMTP não foi enviado por caixa de teste; push requer VAPID, schedulers hospedados precisam homologação;
+  scanner antimalware e restore do backup histórico/Storage permanecem pendentes.
+- `apps/api/vercel.json` e `apps/web/vercel.json` bloqueiam Preview nesta branch. Tentativas do projeto API
+  filtradas pela branch aparecem `CANCELED`; o projeto web não tem deployments correspondentes e não há
+  Preview ativo. `main` e Supabase compartilhado não foram alterados.
+- Funcionalidade, UX, performance e recuperação: parciais. Segurança, piloto comercial e release candidate:
+  não prontos até fechar as pendências da matriz e homologar o primeiro escritório.
 
-Última atualização: 2026-10-21
+?ltima atualiza??o: 2026-10-29
 
 ## Estado atual
 
