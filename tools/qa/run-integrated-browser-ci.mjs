@@ -279,7 +279,14 @@ function histogramPercentile(histogram, percent) {
   const buckets = histogram?.buckets;
   if (!Array.isArray(buckets) || !buckets.length || !histogram.count) return null;
   const target = Math.ceil((percent / 100) * histogram.count);
+  let cumulativeCount = 0;
   for (const bucket of buckets) {
+    if (Array.isArray(bucket)) {
+      cumulativeCount += Number(bucket[1] ?? 0);
+      const upper = Number(bucket[0] ?? Number.NaN);
+      if (cumulativeCount >= target && Number.isFinite(upper)) return upper;
+      continue;
+    }
     const count = Number(bucket.count ?? bucket.cumulativeCount ?? 0);
     const upper = Number(bucket.le ?? bucket.upperBound ?? bucket.upper ?? Number.NaN);
     if (count >= target && Number.isFinite(upper)) return upper;

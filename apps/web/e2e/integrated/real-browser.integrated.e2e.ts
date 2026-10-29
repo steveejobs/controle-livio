@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path';
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001/v1';
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321';
+const supabaseAuthCookieName = `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`;
 const localPassword = 'LocalOnly-ChangeMe-2026!';
 const organizationA = '10000000-0000-4000-8000-000000000001';
 const organizationB = '20000000-0000-4000-8000-000000000001';
@@ -230,6 +232,45 @@ async function login(page: Page, email: string) {
   await page.locator('#primary-navigation').waitFor({ state: 'visible' });
 }
 
+async function browserAccessToken(page: Page): Promise<string | undefined> {
+  const cookieValue = await page.evaluate((cookieName) => {
+    const cookies = document.cookie
+      .split(';')
+      .map((cookie) => cookie.trim())
+      .map((cookie) => {
+        const separator = cookie.indexOf('=');
+        return separator < 0
+          ? [cookie, '']
+          : [cookie.slice(0, separator), cookie.slice(separator + 1)];
+      });
+    const unchunked = cookies.find(([name]) => name === cookieName);
+    if (unchunked) return decodeURIComponent(unchunked[1]);
+
+    return cookies
+      .filter(
+        ([name]) =>
+          name.startsWith(`${cookieName}.`) && /^\d+$/.test(name.slice(cookieName.length + 1)),
+      )
+      .sort(
+        ([left], [right]) =>
+          Number(left.slice(cookieName.length + 1)) - Number(right.slice(cookieName.length + 1)),
+      )
+      .map(([, value]) => decodeURIComponent(value))
+      .join('');
+  }, supabaseAuthCookieName);
+
+  if (!cookieValue) return undefined;
+
+  try {
+    const serializedSession = cookieValue.startsWith('base64-')
+      ? Buffer.from(cookieValue.slice('base64-'.length), 'base64url').toString('utf8')
+      : cookieValue;
+    return (JSON.parse(serializedSession) as { access_token?: string }).access_token;
+  } catch {
+    return undefined;
+  }
+}
+
 async function browserApi(
   page: Page,
   path: string,
@@ -240,6 +281,9 @@ async function browserApi(
     headers: extraHeaders,
   }: BrowserOptions = {},
 ): Promise<BrowserResult> {
+  const accessToken = await browserAccessToken(page);
+  if (!accessToken) return { status: 0, body: { error: 'Supabase browser session unavailable' } };
+
   const response = await page.evaluate(
     async ({
       apiBase,
@@ -247,21 +291,9 @@ async function browserApi(
       httpMethod,
       payloadJson,
       selectedOrganization,
+      accessToken,
       headers: customHeaders,
     }) => {
-      let accessToken: string | undefined;
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
-        const raw = key ? localStorage.getItem(key) : null;
-        if (!raw || !raw.includes('"access_token"')) continue;
-        try {
-          accessToken = (JSON.parse(raw) as { access_token?: string }).access_token;
-        } catch {
-          // A different localStorage record is not the Supabase session.
-        }
-        if (accessToken) break;
-      }
-      if (!accessToken) return { status: 0, bodyText: '{"error":"browser session unavailable"}' };
       const headers: Record<string, string> = {
         Authorization: `Bearer ${accessToken}`,
         'X-Organization-Id': selectedOrganization,
@@ -281,6 +313,7 @@ async function browserApi(
       httpMethod: method,
       payloadJson: body === undefined ? undefined : JSON.stringify(body),
       selectedOrganization: organizationId,
+      accessToken,
       headers: extraHeaders ?? {},
     },
   );
@@ -300,21 +333,11 @@ async function browserUpload(
   mimeType: string,
   bytes: number[],
 ): Promise<BrowserResult> {
+  const accessToken = await browserAccessToken(page);
+  if (!accessToken) return { status: 0, body: { error: 'Supabase browser session unavailable' } };
+
   return page.evaluate(
-    async ({ apiBase, fields, name, type, content, organizationId }) => {
-      let accessToken: string | undefined;
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
-        const raw = key ? localStorage.getItem(key) : null;
-        if (!raw || !raw.includes('"access_token"')) continue;
-        try {
-          accessToken = (JSON.parse(raw) as { access_token?: string }).access_token;
-        } catch {
-          // Ignore non-session records.
-        }
-        if (accessToken) break;
-      }
-      if (!accessToken) return { status: 0, body: { error: 'browser session unavailable' } };
+    async ({ apiBase, fields, name, type, content, organizationId, accessToken }) => {
       const form = new FormData();
       for (const [key, value] of Object.entries(fields)) form.append(key, value);
       form.append('file', new File([Uint8Array.from(content)], name, { type }));
@@ -342,6 +365,7 @@ async function browserUpload(
       type: mimeType,
       content: bytes,
       organizationId: organizationA,
+      accessToken,
     },
   );
 }
@@ -571,6 +595,12 @@ test('navegação repetida em duas sessões e organizações distintas', async (
       const sessionName = sessions[index]!.name;
       const recorder = traffic[index]!;
       const phase = `${sessionName}:expenses`;
+      recorder.setPhase('setup');
+      await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await expect(
+        page.getByRole('heading', { name: 'Entradas, parcelas e pagamentos', exact: true }),
+      ).toBeVisible();
+      await recorder.waitForQuiet();
       recorder.setPhase(phase);
       expect(recorder.countPaths(phase, '/v1/finance/expenses')).toBe(0);
       const startedAt = performance.now();
