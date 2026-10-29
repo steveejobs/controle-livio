@@ -517,9 +517,32 @@ for (const viewport of [
       for (const selector of await page.locator('select').all()) {
         await expect(selector).toHaveCSS('appearance', 'none');
       }
-      expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-        viewport.width,
-      );
+      const { documentWidth, overflowingElements } = await page.evaluate(() => {
+        const overflowingElements = Array.from(document.body.querySelectorAll<HTMLElement>('*'))
+          .map((element) => {
+            const bounds = element.getBoundingClientRect();
+            return {
+              tag: element.tagName.toLowerCase(),
+              id: element.id,
+              className: typeof element.className === 'string' ? element.className : '',
+              right: Math.round(bounds.right * 100) / 100,
+              scrollWidth: element.scrollWidth,
+              clientWidth: element.clientWidth,
+            };
+          })
+          .filter((element) => element.right > window.innerWidth)
+          .sort((first, second) => second.right - first.right)
+          .slice(0, 8);
+
+        return {
+          documentWidth: document.documentElement.scrollWidth,
+          overflowingElements,
+        };
+      });
+      expect(
+        documentWidth,
+        `Horizontal overflow at ${viewport.width}px: ${JSON.stringify(overflowingElements)}`,
+      ).toBeLessThanOrEqual(viewport.width);
       const accessibility = await new AxeBuilder({ page })
         .withTags(['wcag2a', 'wcag2aa'])
         .analyze();
