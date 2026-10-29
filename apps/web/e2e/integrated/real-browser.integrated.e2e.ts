@@ -964,9 +964,12 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ page }) =>
   await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
   await page.getByRole('button', { name: 'Nova tarefa' }).click();
   await page.getByLabel('O que precisa ser feito').fill(title);
-  await page.getByLabel('Prioridade', { exact: true }).selectOption('HIGH');
-  await expect(page.getByLabel('Responsável', { exact: true })).toBeEnabled();
-  await page.getByLabel('Responsável', { exact: true }).selectOption(lawyerUserA);
+  const taskForm = page.locator('form').filter({
+    has: page.getByRole('button', { name: 'Criar tarefa', exact: true }),
+  });
+  await taskForm.locator('select[name="priority"]').selectOption('HIGH');
+  await expect(taskForm.locator('select[name="assigneeId"]')).toBeEnabled();
+  await taskForm.locator('select[name="assigneeId"]').selectOption(lawyerUserA);
   const taskResponse = page.waitForResponse(
     (response) =>
       new URL(response.url()).pathname === '/v1/tasks' && response.request().method() === 'POST',
