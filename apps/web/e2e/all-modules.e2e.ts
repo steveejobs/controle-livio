@@ -521,16 +521,32 @@ for (const viewport of [
         const overflowingElements = Array.from(document.body.querySelectorAll<HTMLElement>('*'))
           .map((element) => {
             const bounds = element.getBoundingClientRect();
+            let ancestor = element.parentElement;
+            let containedByHorizontalOverflow = false;
+            while (ancestor && ancestor !== document.documentElement) {
+              if (
+                ['auto', 'clip', 'hidden', 'scroll'].includes(getComputedStyle(ancestor).overflowX)
+              ) {
+                containedByHorizontalOverflow = true;
+                break;
+              }
+              ancestor = ancestor.parentElement;
+            }
             return {
               tag: element.tagName.toLowerCase(),
               id: element.id,
               className: typeof element.className === 'string' ? element.className : '',
+              parent: `${element.parentElement?.tagName.toLowerCase()}.${typeof element.parentElement?.className === 'string' ? element.parentElement.className : ''}`,
               right: Math.round(bounds.right * 100) / 100,
+              containedByHorizontalOverflow,
               scrollWidth: element.scrollWidth,
               clientWidth: element.clientWidth,
             };
           })
-          .filter((element) => element.right > window.innerWidth)
+          .filter(
+            (element) =>
+              element.right > window.innerWidth && !element.containedByHorizontalOverflow,
+          )
           .sort((first, second) => second.right - first.right)
           .slice(0, 8);
 
