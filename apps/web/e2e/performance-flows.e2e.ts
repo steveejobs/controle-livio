@@ -42,6 +42,8 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
       };
     } else if (pathname === '/v1/matters') {
       body = { items: [], total: 0 };
+    } else if (pathname === '/v1/matters/responsibles/lawyers') {
+      body = [{ id: 'e2e-lawyer', fullName: 'Advogado QA' }];
     } else if (pathname === '/v1/pipelines') {
       body = [];
     } else if (pathname === '/v1/clients') {

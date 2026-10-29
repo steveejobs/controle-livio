@@ -42,6 +42,12 @@ export class MattersController {
     return this.matters.list(actor, query);
   }
 
+  @Get('responsibles/lawyers')
+  @RequirePermission('matters:create')
+  responsibleLawyers(@CurrentActor() actor: AuthenticatedActor) {
+    return this.matters.listResponsibleLawyers(actor);
+  }
+
   @Get(':id')
   @RequirePermission('matters:view')
   get(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {

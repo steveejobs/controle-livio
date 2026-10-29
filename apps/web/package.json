@@ -9,7 +9,7 @@
     "dev": "next dev -p 3000",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --maxWorkers=1 --minWorkers=1 --no-file-parallelism"
+    "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },
   "dependencies": {
     "@livio/shared": "*",
@@ -27,6 +27,6 @@
     "@types/node": "^24.3.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.3",
-    "vitest": "^3.2.4"
+    "vitest": "^4.1.12"
   }
 }

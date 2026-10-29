@@ -11,6 +11,7 @@ type Client = {
   id: string;
   displayName: string;
 };
+type ResponsibleLawyer = { id: string; fullName: string };
 type Matter = {
   id: string;
   reference: string;
@@ -18,6 +19,7 @@ type Matter = {
   status: string;
   priority: string;
   client?: { id: string; displayName: string };
+  responsibleLawyer?: ResponsibleLawyer | null;
   currentStage?: Stage | null;
   pipeline?: Pipeline | null;
   nextAction?: string;
@@ -152,6 +154,9 @@ export function MatterBoard({
   const isCollectionCreate = createKind === 'COLLECTION';
   const showLegalFields =
     createKind === 'LEGAL' || (!isUnifiedCrm && createKind === undefined && kind === undefined);
+  const lawyers = useLoad<ResponsibleLawyer[]>(
+    canCreate && showForm && showLegalFields ? '/matters/responsibles/lawyers' : undefined,
+  );
   const recordNameLabel =
     isUnifiedCrm && !createPipeline
       ? 'Nome do processo ou da oportunidade'
@@ -220,6 +225,7 @@ export function MatterBoard({
             : undefined,
           labels: [],
           confidential: form.get('confidential') === 'on',
+          responsibleLawyerId: form.get('responsibleLawyerId') || undefined,
         }),
       });
       setFeedback(
@@ -412,6 +418,26 @@ export function MatterBoard({
               {showLegalFields && (
                 <>
                   <label>
+                    Advogado responsável (opcional)
+                    <select name="responsibleLawyerId" defaultValue="">
+                      <option value="">Definir depois</option>
+                      {lawyers.data?.map((lawyer) => (
+                        <option value={lawyer.id} key={lawyer.id}>
+                          {lawyer.fullName}
+                        </option>
+                      ))}
+                    </select>
+                    <small>Mostramos apenas advogados ativos desta organização.</small>
+                  </label>
+                  {lawyers.error && (
+                    <div className="notice notice-error" role="alert">
+                      Não foi possível carregar os advogados: {lawyers.error.message}{' '}
+                      <button type="button" onClick={lawyers.reload}>
+                        Tentar novamente
+                      </button>
+                    </div>
+                  )}
+                  <label>
                     Número judicial ou CNJ (opcional)
                     <input name="courtNumber" maxLength={80} />
                   </label>
@@ -549,6 +575,9 @@ export function MatterBoard({
                               </small>
                             )}
                             <small>{matter.client?.displayName ?? 'Cliente nao informado'}</small>
+                            <small>
+                              Advogado: {matter.responsibleLawyer?.fullName ?? 'Não atribuído'}
+                            </small>
                             <div>
                               <span className={`badge priority-${matter.priority.toLowerCase()}`}>
                                 {asText(matter.priority)}
@@ -690,6 +719,7 @@ function MatterFallbackTable({
             <th>Referência</th>
             <th>Processo</th>
             <th>Cliente</th>
+            <th>Advogado responsável</th>
             <th>Status</th>
             <th>Prioridade</th>
             <th>Etapa</th>
@@ -702,6 +732,7 @@ function MatterFallbackTable({
               <td>{matter.reference}</td>
               <td>{matter.title}</td>
               <td>{matter.client?.displayName ?? '—'}</td>
+              <td>{matter.responsibleLawyer?.fullName ?? 'Não atribuído'}</td>
               <td>
                 {canUpdate ? (
                   <select

@@ -1,5 +1,6 @@
 'use client';
 
+import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { addMonths, decimalToCents, formatDate, formatMoney, splitAmount } from '../shared/format';
@@ -1348,7 +1349,7 @@ export function ClientDetail({
                     />
                   </label>
                   <label>
-                    Arquivo
+                    Arquivo (PDF, DOCX, PNG ou JPG; até {MAX_DOCUMENT_UPLOAD_SIZE_MB} MB)
                     <input
                       name="file"
                       required

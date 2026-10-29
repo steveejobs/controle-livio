@@ -20,6 +20,85 @@ const objectiveMatter = createMatterSchema.parse({
 });
 
 describe('MattersService collection objectives', () => {
+  it('returns the assigned lawyer name scoped to the matter organization', async () => {
+    const matter = { id: 'matter-a', responsibleLawyerId: 'lawyer-a' };
+    const findMany = vi.fn().mockResolvedValue([{ id: 'lawyer-a', fullName: 'Advogada A' }]);
+    const prisma = {
+      $transaction: vi.fn().mockResolvedValue([[matter], 1]),
+      matter: {
+        findMany: vi.fn().mockResolvedValue([matter]),
+        count: vi.fn().mockResolvedValue(1),
+      },
+      user: { findMany },
+    };
+    const service = new MattersService(prisma as never, {} as never);
+
+    const result = await service.list(actor, { page: 1, pageSize: 25 });
+
+    expect(result.items[0]).toMatchObject({
+      id: 'matter-a',
+      responsibleLawyer: { id: 'lawyer-a', fullName: 'Advogada A' },
+    });
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        id: { in: ['lawyer-a'] },
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        deletedAt: null,
+      },
+      select: { id: true, fullName: true },
+    });
+  });
+
+  it('lists only active lawyers from the authenticated organization', async () => {
+    const findMany = vi.fn().mockResolvedValue([{ id: 'lawyer-a', fullName: 'Advogada A' }]);
+    const service = new MattersService({ user: { findMany } } as never, {} as never);
+
+    await expect(service.listResponsibleLawyers(actor)).resolves.toEqual([
+      { id: 'lawyer-a', fullName: 'Advogada A' },
+    ]);
+    expect(findMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        status: 'ACTIVE',
+        clientId: null,
+        deletedAt: null,
+        roles: { some: { role: { organizationId: 'org-a', key: 'lawyer' } } },
+      },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: 'asc' },
+    });
+  });
+
+  it('rejects assigning a non-lawyer as the responsible lawyer', async () => {
+    const userFindFirst = vi.fn().mockResolvedValue(null);
+    const prisma = {
+      user: { count: vi.fn().mockResolvedValue(1), findFirst: userFindFirst },
+      client: { findFirst: vi.fn().mockResolvedValue({ id: 'client-a' }) },
+      $transaction: vi.fn(),
+    };
+    const service = new MattersService(prisma as never, { record: vi.fn() } as never);
+    const input = createMatterSchema.parse({
+      clientId: '11111111-1111-4111-8111-111111111111',
+      responsibleLawyerId: '22222222-2222-4222-8222-222222222222',
+      reference: 'PROC-INVALID-LAWYER',
+      title: 'Processo com responsável inválido',
+    });
+
+    await expect(service.create(actor, input)).rejects.toMatchObject({
+      message: 'Advogado responsável inválido',
+    });
+    expect(userFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org-a',
+          roles: { some: { role: { organizationId: 'org-a', key: 'lawyer' } } },
+        }),
+      }),
+    );
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('stores the non-financial objective on a collection matter and audits it', async () => {
     const matter = { id: 'matter-a' };
     const create = vi.fn().mockResolvedValue(matter);

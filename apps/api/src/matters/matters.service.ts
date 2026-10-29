@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -77,7 +78,53 @@ export class MattersService {
       }),
       this.prisma.matter.count({ where }),
     ]);
-    return pageResult(items, total, input);
+    const responsibleLawyerIds = [
+      ...new Set(
+        items
+          .map(({ responsibleLawyerId }) => responsibleLawyerId)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    ];
+    const responsibleLawyers = responsibleLawyerIds.length
+      ? await this.prisma.user.findMany({
+          where: {
+            id: { in: responsibleLawyerIds },
+            organizationId: actor.organizationId,
+            status: 'ACTIVE',
+            deletedAt: null,
+          },
+          select: { id: true, fullName: true },
+        })
+      : [];
+    const namesById = new Map(responsibleLawyers.map(({ id, fullName }) => [id, fullName]));
+    return pageResult(
+      items.map((item) => ({
+        ...item,
+        responsibleLawyer: item.responsibleLawyerId
+          ? {
+              id: item.responsibleLawyerId,
+              fullName: namesById.get(item.responsibleLawyerId) ?? 'Responsável indisponível',
+            }
+          : null,
+      })),
+      total,
+      input,
+    );
+  }
+
+  async listResponsibleLawyers(actor: AuthenticatedActor) {
+    if (actor.clientId) throw new ForbiddenException('Operação restrita à equipe');
+    return this.prisma.user.findMany({
+      where: {
+        organizationId: actor.organizationId,
+        status: 'ACTIVE',
+        clientId: null,
+        deletedAt: null,
+        roles: { some: { role: { organizationId: actor.organizationId, key: 'lawyer' } } },
+      },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: 'asc' },
+    });
   }
 
   async get(actor: AuthenticatedActor, id: string) {
@@ -514,6 +561,20 @@ export class MattersService {
         where: { id: { in: assignees }, organizationId, status: 'ACTIVE', deletedAt: null },
       });
       if (count !== new Set(assignees).size) throw new NotFoundException('Responsável inválido');
+    }
+    if (input.responsibleLawyerId) {
+      const lawyer = await this.prisma.user.findFirst({
+        where: {
+          id: input.responsibleLawyerId,
+          organizationId,
+          status: 'ACTIVE',
+          clientId: null,
+          deletedAt: null,
+          roles: { some: { role: { organizationId, key: 'lawyer' } } },
+        },
+        select: { id: true },
+      });
+      if (!lawyer) throw new NotFoundException('Advogado responsável inválido');
     }
   }
 }

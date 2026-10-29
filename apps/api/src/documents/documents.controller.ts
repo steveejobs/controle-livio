@@ -9,6 +9,7 @@ import {
   Post,
   Query,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -34,12 +35,14 @@ import {
 } from './document.schemas';
 import { DocumentsService } from './documents.service';
 import { DocumentSettingsService } from './document-settings.service';
+import { DOCUMENT_UPLOAD_BUFFER_LIMITS } from './document-upload-limits';
+export { DOCUMENT_UPLOAD_BUFFER_LIMITS };
+import {
+  DocumentUploadAdmissionInterceptor,
+  DocumentUploadBodyLimitGuard,
+} from './document-upload-guards';
 
 const versionQuerySchema = z.object({ version: z.coerce.number().int().min(1).optional() });
-export const DOCUMENT_UPLOAD_BUFFER_LIMITS = {
-  fileSize: 20 * 1024 * 1024,
-  files: 1,
-} as const;
 
 @ApiTags('Documentos')
 @Controller('documents')
@@ -104,7 +107,11 @@ export class DocumentsController {
 
   @Post()
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file', { limits: DOCUMENT_UPLOAD_BUFFER_LIMITS }))
+  @UseGuards(DocumentUploadBodyLimitGuard)
+  @UseInterceptors(
+    DocumentUploadAdmissionInterceptor,
+    FileInterceptor('file', { limits: DOCUMENT_UPLOAD_BUFFER_LIMITS }),
+  )
   @RequirePermission('documents:create')
   create(
     @CurrentActor() actor: AuthenticatedActor,
@@ -116,7 +123,11 @@ export class DocumentsController {
 
   @Post(':id/versions')
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file', { limits: DOCUMENT_UPLOAD_BUFFER_LIMITS }))
+  @UseGuards(DocumentUploadBodyLimitGuard)
+  @UseInterceptors(
+    DocumentUploadAdmissionInterceptor,
+    FileInterceptor('file', { limits: DOCUMENT_UPLOAD_BUFFER_LIMITS }),
+  )
   @RequirePermission('documents:update')
   addVersion(
     @CurrentActor() actor: AuthenticatedActor,

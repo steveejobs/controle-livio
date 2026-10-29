@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 4;
+
 const postgresqlUrl = z
   .string()
   .url()
@@ -38,7 +40,15 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
     SUPABASE_AUTH_REDIRECT_URL: z.string().url().default('http://localhost:3000/auth/confirm'),
     STORAGE_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/),
-    MAX_DOCUMENT_SIZE_MB: z.coerce.number().int().min(1).max(100).default(20),
+    MAX_DOCUMENT_SIZE_MB: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_DOCUMENT_UPLOAD_SIZE_MB)
+      .default(MAX_DOCUMENT_UPLOAD_SIZE_MB),
+    CLAMAV_HOST: z.string().min(1).optional(),
+    CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3310),
+    CLAMAV_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(10_000),
     SMTP_HOST: z.string().min(1).optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
     SMTP_SECURE: booleanEnvironmentValue.default(true),
@@ -55,6 +65,16 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     API_RATE_LIMIT_WRITE: z.coerce.number().int().min(1).max(10_000).default(60),
   })
   .superRefine((environment, context) => {
+    if (
+      ['staging', 'production'].includes(environment.SUPABASE_ENVIRONMENT ?? '') &&
+      !environment.CLAMAV_HOST
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CLAMAV_HOST'],
+        message: 'CLAMAV_HOST é obrigatório para liberar uploads fora do ambiente local de teste',
+      });
+    }
     const vapidConfigured = Boolean(
       environment.VAPID_PUBLIC_KEY || environment.VAPID_PRIVATE_KEY || environment.VAPID_SUBJECT,
     );

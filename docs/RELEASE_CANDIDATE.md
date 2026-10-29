@@ -82,3 +82,65 @@ BACKUP_RESTORE_READY: PARTIAL
 COMMERCIAL_PILOT_READY: NO
 
 RELEASE_CANDIDATE_READY: NO
+
+## Sprint de fechamento do primeiro cliente — atualização local (2026-10-29)
+
+Esta atualização descreve alterações ainda locais sobre a branch `validation/gha-ci-20261029`, cujo HEAD base é `8de04ad72ac16778a6213a9ddf1016652c7caeda`. A Actions #40936072471 é evidência do commit base; ela não executou este lote. Nenhum push, deploy, migration ou acesso ao Supabase compartilhado foi feito.
+
+### Mudanças preparadas
+
+- Processo: o formulário E2E agora seleciona cliente, fluxo e advogado; a API lista somente advogados ativos da organização, exige permissão de criação e rejeita responsável que não tenha o papel `lawyer`. A leitura do processo passa a apresentar o nome do responsável.
+- Financeiro: recebíveis podem ser associados a contrato pelo formulário; a tela mostra saldo por recebível e parcela. O saldo usa unidades inteiras de 4 casas decimais. O E2E cobre divisão de R$ 100,00 em R$ 33,34 + R$ 33,33 + R$ 33,33, vencimentos mensais, pagamento parcial, quitação, saldo zero, excesso, referência duplicada e retry idempotente após perda simulada da resposta.
+- Documentos: formulários de documentos e anexos informam o limite de 4 MiB. API valida tamanho, conteúdo/magic bytes, quantidade de arquivos/campos/partes e o tamanho declarado da requisição; duas operações bufferizadas por processo podem ocorrer ao mesmo tempo. O E2E inclui upload/download/solicitação de assinatura e rejeição de tipo e tamanho inválidos.
+- Varredura: API envia arquivos em blocos ao ClamAV antes de gravar no Storage, rejeita arquivos infectados e falha fechada se o scanner não responder. O bypass existe somente para `SUPABASE_ENVIRONMENT=test` com `SUPABASE_LOCAL=true`. A unidade usa um servidor TCP sintético; ainda falta homologar uma instância ClamAV real e assinaturas atuais.
+- Portal: fixtures incluem segundo cliente no mesmo escritório e cliente de outra organização; o E2E verifica visibilidade do próprio documento e negação dos demais. Essas novas jornadas ainda aguardam execução integrada.
+- Dependências: Vitest foi atualizado pontualmente para 4.1.12 para retirar os dois avisos críticos de Vitest/tinypool; scripts e transformação JSX dos testes foram ajustados. A árvore segue com três alertas altos associados à cadeia `prisma` / `@prisma/config` / `deepmerge-ts`; não foi feita a migração major do Prisma 6 para 7.
+
+O teto de 4 MiB preserva margem frente ao limite de corpo de 4,5 MB das Vercel Functions. Uploads maiores precisam de uma arquitetura de envio direto ao Storage com quarentena/varredura; elevar o limite da API não é compatível com o runtime Vercel atual.
+
+### Evidência e limites desta atualização
+
+- Validações locais executadas: Vitest, TypeScript, ESLint, `Prisma Validate` e builds API/web. O total e as execuções serão atualizados após repetir os gates finais do lote.
+- Formulários E2E, isolamento de portal e rejeições de upload foram escritos, mas não executados neste estado local. Os 9/9 Playwright integrados da Actions #40936072471 pertencem ao commit base e não comprovam estas alterações.
+- Proteção Vercel consultada em leitura nos dois projetos: `controle-livio` e `controle-livio-web` usam `ssoProtection.deploymentType=all_except_custom_domains`. Os arquivos `vercel.json` da branch desabilitam deployment automático de `validation/gha-ci-20261029`. Nenhuma nova tentativa/deployment foi criado neste lote.
+- Este checkout não contém um dump histórico de produção. O restore de 45 tabelas citado acima foi sintético, em banco temporário; Auth, owners/grants, jobs e objetos Storage reais não foram restaurados. Não há evidência para declarar recuperação operacional de backup.
+- SMTP local está habilitado no Supabase de teste, mas envio/captura de convite ou recuperação ainda não foi homologado. Push/VAPID não é necessário para concluir as jornadas testadas. Os crons hospedados e o segredo de autorização não foram executados/confirmados neste lote; Realtime e Edge Functions não são dependências dos fluxos avaliados.
+
+| Critério                      | Estado após este lote local | Evidência/pendência principal                                                                                                                   |
+| ----------------------------- | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FORM_WORKFLOWS_READY`        | PARTIAL                     | Fluxos foram escritos para formulários reais; nova execução GitHub Actions pendente e operações desktop ainda precisam de validação específica. |
+| `FINANCIAL_INTEGRITY_READY`   | PARTIAL                     | Cálculos e asserts de centavos/4 casas adicionados; integração financeira desta revisão ainda não foi executada.                                |
+| `PORTAL_ISOLATION_READY`      | PARTIAL                     | Fixtures e asserts same-tenant/cross-tenant adicionados; aguardam Playwright/API reais no runner.                                               |
+| `UPLOAD_SECURITY_READY`       | PARTIAL                     | Limite 4 MiB, validação e scanner fail-closed preparados; falta scanner ClamAV real e execução integrada.                                       |
+| `DEPENDENCIES_SECURITY_READY` | PARTIAL                     | Alertas críticos removidos por Vitest 4.1.12; os três altos Prisma/deepmerge permanecem no audit.                                               |
+| `BACKUP_RECOVERY_READY`       | PARTIAL                     | Restore sintético anterior passou; backup histórico e Auth/Storage reais não estão disponíveis neste repositório/destino.                       |
+| `EXTERNAL_SERVICES_READY`     | PARTIAL                     | SMTP de captura existe na stack local mas não foi testado; configuração hospedada de ClamAV/crons/SMTP depende do primeiro escritório.          |
+| `COMMERCIAL_PILOT_READY`      | NO                          | Integração deste lote, scanner hospedado, backup real e serviços operacionais ainda não homologados.                                            |
+| `RELEASE_CANDIDATE_READY`     | NO                          | Não há execução GitHub Actions deste lote nem prova de restauração real.                                                                        |
+
+## Validação local complementar do sprint (2026-10-29)
+
+- Gates locais depois das correções: `npm run typecheck`, `npm run lint`, `npm run db:validate`, `npm run build` e `npm test` passaram. Vitest totalizou 204/204 (API 155, web 30, shared 19). Prisma avisou que o preview `metrics` está depreciado.
+- O bundle inicial ficou em 253.015 bytes gzip (limite do projeto: 260.000). ESLint passou sem warnings.
+- O Playwright mockado teve 17 cenários aprovados na primeira execução. Quatro encontraram stubs desatualizados após a consulta de advogados e a carga de contratos no formulário financeiro; os stubs foram atualizados e os quatro cenários afetados passaram isoladamente. Assim, há evidência local de 21 cenários aprovados em duas execuções; o gate consolidado do GitHub ainda deve ser repetido.
+- `npm run format:check` percorreu também `integrated-playwright-report.json`, artefato local não rastreado, e falhou somente nesse JSON. Esse artefato não será incluído no commit; a validação Prettier dos arquivos versionados e do código novo deve ser confirmada pelo gate limpo do GitHub.
+- O audit atual retorna 0 críticos, 0 moderados, 3 altas e 3 baixas na árvore completa. `npm audit --omit=dev` ainda mostra a cadeia `prisma` → `@prisma/config` → `deepmerge-ts` (GHSA-ggr8-5vv4-36mx); a correção automática indicada requer Prisma 7.10.1, upgrade major. Os críticos anteriores em Vitest/tinypool foram removidos pela atualização pontual para Vitest 4.1.12. A cadeia Prisma não foi alterada sem plano de compatibilidade.
+- Playwright integrado contra Supabase temporário e restore sintético continuam pendentes para este novo commit. Nenhuma evidência da execução #40936072471 foi atribuída a este lote.
+
+## Análise da exposição de dependências (2026-10-29)
+
+- Os dois alertas críticos anteriores eram `GHSA-5gmw-xhrv-c9v3` e `GHSA-85c8-ppgw-ccpr`, falhas de prototype pollution em opções de workers do Tinypool que podem permitir execução de código no worker. A cadeia crítica deixou a árvore instalada após Vitest 4.1.12; a versão corrigida do Vitest também cobre os avisos de `@vitest/mocker`. Fontes: https://github.com/advisories/GHSA-5gmw-xhrv-c9v3, https://github.com/advisories/GHSA-85c8-ppgw-ccpr, https://github.com/advisories/GHSA-qxg6-89mg-rqv8.
+- CI executa código de PR, então uma tomada do runner continua relevante. O workflow desta branch limita permissões a `contents: read`, define `persist-credentials: false`, não usa segredos e aponta dependências para loopback/placeholders; reduz o impacto sobre GitHub e serviços compartilhados, mas não substitui corrigir a cadeia. A mudança foi exercitada nos testes locais; Actions deste lote aguarda autorização de push.
+- O high remanescente é `GHSA-ggr8-5vv4-36mx`: `deepmerge-ts` abaixo de 8 pode entrar em recursão sem fim em dois grafos cíclicos, causando indisponibilidade. O pacote chega por `prisma@6.19.3 → @prisma/config@6.19.3`; o npm continua detectando-o com `--omit=dev` via peer opcional do `@prisma/client`. O call site de merge é a configuração Prisma local; a advisory descreve objeto recursivo controlado, e não encontramos entrada HTTP do produto chegando a esse call site. Ainda assim, o pacote consta na árvore instalada e o audit o mantém alto.
+- O audit sugere Prisma 7.10.1, mudança major. Um override consumer de `deepmerge-ts@8.0.2` foi tentado, mas a resolução/lock permaneceu em 7.1.5 e o audit não mudou; o override foi removido. Não contamos essa tentativa como mitigação. O bloqueio requer versão compatível publicada pelo Prisma ou migração isolada/validada do Prisma, com `generate`, `validate`, testes e builds.
+- Referência do alerta alto: https://github.com/advisories/GHSA-ggr8-5vv4-36mx. A validação real de ClamAV e CI deste lote continuam pendentes.
+
+## Fechamento da validação local (2026-10-29)
+
+- Depois de uma instalação limpa por `npm ci`, o gate consolidado local terminou verde: Vitest 204/204 (API 155, web 30, shared 19), TypeScript, ESLint sem warnings, Prisma Validate, build API/UI/web e bundle.
+- Bundle inicial: 253.015 bytes gzip para limite de 260.000. Prisma Validate reporta apenas a depreciação conhecida da preview `metrics`.
+- Playwright mockado consolidado: 21/21. Os novos stubs para `GET /matters/responsibles/lawyers` e `/finance/contracts` passaram com o restante da suíte.
+- Prettier passou nos arquivos suportados do lote. O comando global local ainda encontra o arquivo não rastreado `integrated-playwright-report.json` e o sinaliza; ele foi preservado fora do commit. O runner limpo do GitHub deve confirmar `format:check`.
+- `playwright --list --config playwright.integrated.config.ts` listou 9 testes. As seis jornadas de formulário foram parametrizadas para 360×800 e 1440×900, cada viewport com contexto separado. A execução integrada nova não foi feita: aguarda publicação autorizada para o Supabase temporário do Actions.
+- `npm audit --omit=dev` continua com 3 altas na cadeia Prisma/deepmerge-ts; a árvore completa mantém também 3 baixas de ferramentas. Não há críticos ou moderados após Vitest 4.1.12. A tentativa de override do Prisma não foi efetiva e foi retirada.
+- Nenhum commit foi publicado, nenhum workflow deste lote iniciou, e não houve deploy, migration ou acesso de escrita ao Supabase compartilhado. Antes de eventual push, os projetos Vercel foram relidos: `all_except_custom_domains` nos dois e `git.deploymentEnabled.validation/gha-ci-20261029=false` em ambos.

@@ -20,6 +20,7 @@ import type {
 import { DocumentGeneratorService } from './document-generator.service';
 import { DocumentSettingsService } from './document-settings.service';
 import { StorageService } from './storage.service';
+import { DocumentScannerService } from './document-scanner.service';
 
 const allowedMimeTypes = new Set([
   'application/pdf',
@@ -37,6 +38,7 @@ export class DocumentsService {
     private readonly config: ConfigService<ApiEnvironment, true>,
     private readonly generator: DocumentGeneratorService,
     private readonly documentSettings: DocumentSettingsService,
+    private readonly scanner: DocumentScannerService,
   ) {}
 
   async generate(actor: AuthenticatedActor, input: DocumentGenerationInput) {
@@ -207,6 +209,7 @@ export class DocumentsService {
   ) {
     this.validateFile(file);
     await this.assertLinks(actor.organizationId, metadata);
+    await this.scanner.assertClean(file.buffer);
     const documentId = randomUUID();
     const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
     await this.storage.upload(storageKey, file.buffer, file.mimetype);
@@ -264,6 +267,7 @@ export class DocumentsService {
   async addVersion(actor: AuthenticatedActor, documentId: string, file: Express.Multer.File) {
     this.validateFile(file);
     await this.getDocument(actor, documentId);
+    await this.scanner.assertClean(file.buffer);
     const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
     await this.storage.upload(storageKey, file.buffer, file.mimetype);
     try {

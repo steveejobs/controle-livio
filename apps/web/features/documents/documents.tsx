@@ -1,5 +1,6 @@
 'use client';
 
+import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate } from '../shared/format';
@@ -397,7 +398,7 @@ export function Documents({
             </div>
           )}
           <label className="form-wide">
-            Arquivo
+            Arquivo (PDF, DOCX, PNG ou JPG; até {MAX_DOCUMENT_UPLOAD_SIZE_MB} MB)
             <input
               required
               type="file"

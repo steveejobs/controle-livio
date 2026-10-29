@@ -26,6 +26,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     await service.list(actor, { clientId: 'outro-cliente', page: 1, pageSize: 25 });
     expect(findMany).toHaveBeenCalledWith(
@@ -51,6 +52,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       {} as never,
+      {} as never,
     );
     await expect(service.getDocument(actor, 'doc-b')).rejects.toBeInstanceOf(NotFoundException);
     expect(findFirst).toHaveBeenCalledWith(
@@ -70,6 +72,7 @@ describe('documentos privados', () => {
     const service = new DocumentsService(
       prisma as never,
       storage as never,
+      {} as never,
       {} as never,
       {} as never,
       {} as never,
@@ -127,6 +130,7 @@ describe('documentos privados', () => {
       config as never,
       generator as never,
       settings as never,
+      { assertClean: vi.fn() } as never,
     );
     const generatedResult = {
       id: 'generated-document',
@@ -170,6 +174,7 @@ describe('documentos privados', () => {
 
   it('nega a geração sem permissão de leitura dos dados usados no documento', async () => {
     const service = new DocumentsService(
+      {} as never,
       {} as never,
       {} as never,
       {} as never,

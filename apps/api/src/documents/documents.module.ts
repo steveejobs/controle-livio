@@ -8,6 +8,8 @@ import { DocumentsService } from './documents.service';
 import { DocumentGeneratorService } from './document-generator.service';
 import { DocumentSettingsService } from './document-settings.service';
 import { StorageService } from './storage.service';
+import { DocumentUploadAdmissionInterceptor } from './document-upload-guards';
+import { DocumentScannerService } from './document-scanner.service';
 
 @Module({
   imports: [AuthModule, AuditModule],
@@ -18,6 +20,8 @@ import { StorageService } from './storage.service';
     DocumentSettingsService,
     DocumentSigningService,
     StorageService,
+    DocumentUploadAdmissionInterceptor,
+    DocumentScannerService,
   ],
 })
 export class DocumentsModule {}

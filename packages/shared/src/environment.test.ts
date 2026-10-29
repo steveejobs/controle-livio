@@ -18,6 +18,11 @@ const base = {
 };
 
 describe('Supabase environment boundary', () => {
+  it('caps document uploads below the Vercel function request limit', () => {
+    expect(parseApiEnvironment(base).MAX_DOCUMENT_SIZE_MB).toBe(4);
+    expect(() => parseApiEnvironment({ ...base, MAX_DOCUMENT_SIZE_MB: '5' })).toThrow();
+  });
+
   it('accepts a coherent Supabase project configuration', () => {
     expect(parseApiEnvironment(base).SUPABASE_PROJECT_REF).toBe('projectref123');
   });
@@ -47,6 +52,17 @@ describe('Supabase environment boundary', () => {
       SUPABASE_ENVIRONMENT: 'test',
     });
     expect(parsed.SUPABASE_LOCAL).toBe(true);
+  });
+
+  it('requires a ClamAV host before staging or production can accept uploads', () => {
+    expect(() => parseApiEnvironment({ ...base, SUPABASE_ENVIRONMENT: 'staging' })).toThrow();
+    expect(
+      parseApiEnvironment({
+        ...base,
+        SUPABASE_ENVIRONMENT: 'staging',
+        CLAMAV_HOST: 'clamav.internal',
+      }).CLAMAV_HOST,
+    ).toBe('clamav.internal');
   });
 
   it('parses explicit false boolean values without enabling proxy trust', () => {
@@ -102,6 +118,7 @@ describe('Supabase environment boundary', () => {
         SUPABASE_ENVIRONMENT: 'staging',
         CORS_ORIGINS: 'https://app.example.com',
         SUPABASE_AUTH_REDIRECT_URL: 'https://app.example.com/auth/confirm',
+        CLAMAV_HOST: 'clamav.internal',
       }).SUPABASE_ENVIRONMENT,
     ).toBe('staging');
   });

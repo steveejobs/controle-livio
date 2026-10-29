@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
+import { addMonths, formatDate } from '../../features/shared/format';
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001/v1';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321';
@@ -10,7 +11,13 @@ const localPassword = 'LocalOnly-ChangeMe-2026!';
 const organizationA = '10000000-0000-4000-8000-000000000001';
 const organizationB = '20000000-0000-4000-8000-000000000001';
 const clientA = '11000000-0000-4000-8000-000000000001';
+const clientB = '11000000-0000-4000-8000-000000000002';
+const clientOrganizationB = '21000000-0000-4000-8000-000000000001';
 const matterA = '14000000-0000-4000-8000-000000000001';
+const formViewports = [
+  { width: 360, height: 800 },
+  { width: 1440, height: 900 },
+] as const;
 const lawyerUserA = 'a1000000-0000-4000-8000-000000000002';
 const financeUserA = 'a1000000-0000-4000-8000-000000000004';
 const apiOrigin = new URL(apiBase).origin;
@@ -333,6 +340,7 @@ async function browserUpload(
   fileName: string,
   mimeType: string,
   bytes: number[],
+  organizationId = organizationA,
 ): Promise<BrowserResult> {
   const accessToken = await browserAccessToken(page);
   if (!accessToken) return { status: 0, body: { error: 'Supabase browser session unavailable' } };
@@ -365,7 +373,7 @@ async function browserUpload(
       name: fileName,
       type: mimeType,
       content: bytes,
-      organizationId: organizationA,
+      organizationId,
       accessToken,
     },
   );
@@ -394,16 +402,6 @@ function pdfBytes(): number[] {
   return [...Buffer.from(document, 'ascii')];
 }
 
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function dateIso(offsetDays: number) {
-  const value = new Date();
-  value.setUTCDate(value.getUTCDate() + offsetDays);
-  return value.toISOString();
-}
-
 function dateInput(offsetDays = 0) {
   const value = new Date();
   value.setUTCDate(value.getUTCDate() + offsetDays);
@@ -425,6 +423,13 @@ function assertStatus(result: BrowserResult, expected: number, label: string) {
 
 function bodyAs<T>(result: BrowserResult): T {
   return result.body as T;
+}
+
+function amountUnits(value: string): bigint {
+  const normalized = value.trim().replace(',', '.');
+  const [whole, fraction = ''] = normalized.split('.');
+  if (!/^\d+(\.\d{1,4})?$/.test(normalized)) throw new Error(`Invalid decimal: ${value}`);
+  return BigInt(whole!) * 10_000n + BigInt(fraction.padEnd(4, '0'));
 }
 
 test('autenticação real, navegação, carregamento sob demanda e compartilhamento de membership', async ({
@@ -636,256 +641,531 @@ test('navegação repetida em duas sessões e organizações distintas', async (
   }
 });
 
-test('jornada 1: cliente, processo, responsável e atualização de status', async ({ page }) => {
-  await login(page, 'admin.aurora@example.test');
-  const suffix = randomUUID().slice(0, 8);
-  const clientName = `Cliente QA ${suffix}`;
-  await page.locator('#primary-navigation').getByRole('button', { name: 'Clientes' }).click();
-  await page.getByRole('button', { name: 'Novo cliente', exact: true }).click();
-  await page.getByLabel('Nome completo', { exact: true }).fill(clientName);
-  await page.getByLabel('E-mail', { exact: true }).fill('cliente-' + suffix + '@example.test');
-  const clientResponse = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === '/v1/clients' && response.request().method() === 'POST',
-  );
-  await page.getByRole('button', { name: 'Cadastrar e abrir cliente' }).click();
-  const client = await clientResponse;
-  expect(client.status()).toBe(201);
-  expect(client.request().postDataJSON()).toMatchObject({
-    type: 'PERSON',
-    displayName: clientName,
-  });
-  const createdClient = (await client.json()) as { id: string; displayName: string };
-  expect(createdClient.displayName).toBe(clientName);
-  await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
+test('jornada 1: cliente, processo, responsável e atualização de status', async ({ browser }) => {
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    try {
+      await login(page, 'admin.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const clientName = `Cliente QA ${suffix}`;
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Clientes' }).click();
+      await page.getByRole('button', { name: 'Novo cliente', exact: true }).click();
+      await page.getByLabel('Nome completo', { exact: true }).fill(clientName);
+      await page.getByLabel('E-mail', { exact: true }).fill('cliente-' + suffix + '@example.test');
+      const clientResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/clients' &&
+          response.request().method() === 'POST',
+      );
+      await page.getByRole('button', { name: 'Cadastrar e abrir cliente' }).click();
+      const client = await clientResponse;
+      expect(client.status()).toBe(201);
+      expect(client.request().postDataJSON()).toMatchObject({
+        type: 'PERSON',
+        displayName: clientName,
+      });
+      const createdClient = (await client.json()) as { id: string; displayName: string };
+      expect(createdClient.displayName).toBe(clientName);
+      await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
 
-  const reference = `QA-${suffix}`;
-  const matter = await browserApi(page, '/matters', {
-    method: 'POST',
-    body: {
-      clientId: createdClient.id,
-      pipelineId: '12000000-0000-4000-8000-000000000001',
-      currentStageId: '13000000-0000-4000-8000-000000000001',
-      responsibleLawyerId: lawyerUserA,
-      reference,
-      title: `Processo QA ${suffix}`,
-      status: 'ACTIVE',
-      priority: 'MEDIUM',
-    },
-  });
-  assertStatus(matter, 201, 'create matter');
-  const createdMatter = bodyAs<{ id: string; responsibleLawyerId: string }>(matter);
-  expect(createdMatter.responsibleLawyerId).toBe(lawyerUserA);
+      const reference = `QA-${suffix}`;
+      const matterTitle = `Processo QA ${suffix}`;
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Processos' }).click();
+      await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
+      const matterForm = page.locator('form').filter({
+        has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
+      });
+      await matterForm.getByLabel('Cliente').selectOption(createdClient.id);
+      await matterForm
+        .getByLabel('Fluxo de atendimento')
+        .selectOption('12000000-0000-4000-8000-000000000001');
+      await matterForm.getByLabel('Referência interna do processo').fill(reference);
+      await matterForm.getByLabel('Nome do processo').fill(matterTitle);
+      await expect(matterForm.getByLabel('Advogado responsável (opcional)')).toContainText(
+        'Advogado Aurora',
+      );
+      await matterForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
+      const matterResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/matters' &&
+          response.request().method() === 'POST',
+      );
+      await matterForm.getByRole('button', { name: 'Cadastrar processo' }).click();
+      const matter = await matterResponse;
+      expect(matter.status()).toBe(201);
+      expect(matter.request().postDataJSON()).toMatchObject({
+        clientId: createdClient.id,
+        pipelineId: '12000000-0000-4000-8000-000000000001',
+        responsibleLawyerId: lawyerUserA,
+        reference,
+        title: matterTitle,
+      });
+      const createdMatter = (await matter.json()) as { id: string };
+      await expect(page.getByRole('status')).toContainText('Processo cadastrado.');
 
-  const updated = await browserApi(page, `/matters/${createdMatter.id}`, {
-    method: 'PATCH',
-    body: { status: 'SUSPENDED' },
-  });
-  assertStatus(updated, 200, 'update matter status');
-  const persisted = await browserApi(page, `/matters/${createdMatter.id}`);
-  assertStatus(persisted, 200, 'read persisted matter');
-  expect(bodyAs<{ status: string; responsibleLawyerId: string }>(persisted)).toMatchObject({
-    status: 'SUSPENDED',
-    responsibleLawyerId: lawyerUserA,
-  });
+      const persisted = await browserApi(page, `/matters/${createdMatter.id}`);
+      assertStatus(persisted, 200, 'read persisted matter');
+      expect(
+        bodyAs<{
+          clientId: string;
+          pipelineId: string;
+          currentStageId: string;
+          responsibleLawyerId: string;
+          reference: string;
+          title: string;
+        }>(persisted),
+      ).toMatchObject({
+        clientId: createdClient.id,
+        pipelineId: '12000000-0000-4000-8000-000000000001',
+        currentStageId: '13000000-0000-4000-8000-000000000001',
+        responsibleLawyerId: lawyerUserA,
+        reference,
+        title: matterTitle,
+      });
 
-  await page.reload();
-  await page.locator('#primary-navigation').getByRole('button', { name: 'Clientes' }).click();
-  await expect(page.getByText(clientName, { exact: true })).toBeVisible();
-  await page.locator('#primary-navigation').getByRole('button', { name: 'Processos' }).click();
-  await expect(page.getByText(reference, { exact: true })).toBeVisible();
-  await screenshotEvidence(page, 'journey-client-matter');
+      await page.reload();
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Processos' }).click();
+      await expect(page.getByText(reference, { exact: true })).toBeVisible();
+      await expect(page.getByText('Advogado Aurora', { exact: true })).toBeVisible();
+
+      await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
+      const duplicateForm = page.locator('form').filter({
+        has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
+      });
+      await duplicateForm.getByLabel('Cliente').selectOption(createdClient.id);
+      await duplicateForm
+        .getByLabel('Fluxo de atendimento')
+        .selectOption('12000000-0000-4000-8000-000000000001');
+      await duplicateForm.getByLabel('Referência interna do processo').fill(reference);
+      await duplicateForm.getByLabel('Nome do processo').fill(`Duplicado ${matterTitle}`);
+      await duplicateForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
+      await duplicateForm.getByRole('button', { name: 'Cadastrar processo' }).click();
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      await screenshotEvidence(page, `journey-client-matter-${viewport.width}`);
+    } finally {
+      await context.close();
+    }
+  }
 });
 
-test('jornada 2: contrato, recebível, pagamento confirmado e relatório', async ({ page }) => {
-  await login(page, 'admin.aurora@example.test');
-  const suffix = randomUUID().slice(0, 8);
-  const contract = await browserApi(page, '/finance/contracts', {
-    method: 'POST',
-    body: {
-      clientId: clientA,
-      matterId: matterA,
-      number: `QA-CT-${suffix}`,
-      title: `Contrato QA ${suffix}`,
-      feeModel: 'FIXED',
-      fixedAmount: '137.50',
-      serviceNames: ['Consultoria sintética'],
-    },
-  });
-  assertStatus(contract, 201, 'create contract');
-  const createdContract = bodyAs<{ id: string }>(contract);
+test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência', async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    try {
+      await login(page, 'admin.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const contractNumber = `QA-CT-${suffix}`;
+      const contractTitle = `Contrato QA ${suffix}`;
 
-  const issueDate = todayIso();
-  const dueDate = dateIso(14);
-  const reference = `QA-REC-${suffix}`;
-  const receivable = await browserApi(page, '/finance/receivables', {
-    method: 'POST',
-    body: {
-      clientId: clientA,
-      matterId: matterA,
-      contractId: createdContract.id,
-      reference,
-      description: `Recebível sintético ${suffix}`,
-      originalAmount: '137.50',
-      issueDate,
-      installments: [{ sequence: 1, amount: '137.50', dueDate }],
-    },
-  });
-  assertStatus(receivable, 201, 'create receivable');
-  const createdReceivable = bodyAs<{ installments: Array<{ id: string }> }>(receivable);
-  expect(createdReceivable.installments).toHaveLength(1);
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Contratos' }).click();
+      await page.getByRole('button', { name: 'Novo contrato', exact: true }).click();
+      const contractForm = page.locator('form').filter({
+        has: page.getByRole('button', { name: 'Cadastrar contrato', exact: true }),
+      });
+      await contractForm.getByLabel('Cliente').selectOption(clientA);
+      await contractForm.getByLabel('Número do contrato').fill(contractNumber);
+      await contractForm.getByLabel('Nome do contrato').fill(contractTitle);
+      await contractForm.getByLabel('Modelo de honorários').selectOption('FIXED');
+      await contractForm.getByLabel('Valor fixo (R$)').fill('100,00');
+      const contractResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/finance/contracts' &&
+          response.request().method() === 'POST',
+      );
+      await contractForm.getByRole('button', { name: 'Cadastrar contrato' }).click();
+      const contractCreated = await contractResponse;
+      expect(contractCreated.status()).toBe(201);
+      expect(contractCreated.request().postDataJSON()).toMatchObject({
+        clientId: clientA,
+        number: contractNumber,
+        title: contractTitle,
+        feeModel: 'FIXED',
+        fixedAmount: '100.00',
+      });
+      const contract = (await contractCreated.json()) as { id: string; fixedAmount: string };
+      expect(amountUnits(contract.fixedAmount)).toBe(amountUnits('100.00'));
+      await expect(page.getByRole('status')).toContainText('Contrato cadastrado.');
+      await expect(page.getByRole('row').filter({ hasText: contractNumber })).toBeVisible();
 
-  const paymentReference = `QA-PG-${suffix}`;
-  let idempotencyKey: string | undefined;
-  page.on('request', (request) => {
-    if (request.method() === 'POST' && new URL(request.url()).pathname === '/v1/finance/payments') {
-      idempotencyKey = request.headers()['idempotency-key'];
+      const persistedContracts = await browserApi(page, '/finance/contracts?page=1&pageSize=100');
+      assertStatus(persistedContracts, 200, 'read contract persisted from form');
+      const persistedContract = bodyAs<{
+        items: Array<{ id: string; clientId: string; number: string; fixedAmount: string }>;
+      }>(persistedContracts).items.find((item) => item.id === contract.id);
+      expect(persistedContract).toMatchObject({
+        id: contract.id,
+        clientId: clientA,
+        number: contractNumber,
+      });
+      expect(amountUnits(persistedContract!.fixedAmount)).toBe(amountUnits('100.00'));
+
+      const reference = `QA-REC-${suffix}`;
+      const issueDate = dateInput();
+      const firstDueDate = dateInput(14);
+      await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      const receivableForm = page.locator('form').filter({
+        has: page.getByRole('button', { name: 'Criar cobrança e parcelas' }),
+      });
+      await receivableForm.getByLabel('Cliente').selectOption(clientA);
+      await receivableForm.getByLabel('Contrato associado (opcional)').selectOption(contract.id);
+      await receivableForm.getByLabel('Código da cobrança').fill(reference);
+      await receivableForm.getByLabel('Serviço ou motivo da cobrança').fill(`Honorários ${suffix}`);
+      await receivableForm.getByLabel('Valor total').fill('100,00');
+      await receivableForm.getByLabel('Parcelas após entrada').fill('3');
+      await receivableForm.getByLabel('Data de emissão').fill(issueDate);
+      await receivableForm.getByLabel('Primeiro vencimento').fill(firstDueDate);
+      const receivableResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/finance/receivables' &&
+          response.request().method() === 'POST',
+      );
+      await receivableForm.getByRole('button', { name: 'Criar cobrança e parcelas' }).click();
+      const receivableCreated = await receivableResponse;
+      expect(receivableCreated.status()).toBe(201);
+      const receivablePayload = receivableCreated.request().postDataJSON() as {
+        contractId: string;
+        originalAmount: string;
+        issueDate: string;
+        installments: Array<{ sequence: number; amount: string; dueDate: string }>;
+      };
+      expect(receivablePayload.contractId).toBe(contract.id);
+      expect(receivablePayload.issueDate.slice(0, 10)).toBe(issueDate);
+      expect(amountUnits(receivablePayload.originalAmount)).toBe(amountUnits('100.00'));
+      expect(receivablePayload.installments.map(({ sequence }) => sequence)).toEqual([1, 2, 3]);
+      expect(receivablePayload.installments.map(({ amount }) => amount)).toEqual([
+        '33.34',
+        '33.33',
+        '33.33',
+      ]);
+      const dueDates = [firstDueDate, addMonths(firstDueDate, 1), addMonths(firstDueDate, 2)];
+      expect(receivablePayload.installments.map(({ dueDate }) => dueDate.slice(0, 10))).toEqual(
+        dueDates,
+      );
+      expect(
+        receivablePayload.installments.reduce(
+          (sum, installment) => sum + amountUnits(installment.amount),
+          0n,
+        ),
+      ).toBe(amountUnits('100.00'));
+      const createdReceivable = (await receivableCreated.json()) as {
+        id: string;
+        installments: Array<{ id: string; sequence: number; amount: string; dueDate: string }>;
+      };
+      expect(createdReceivable.installments.map(({ dueDate }) => dueDate.slice(0, 10))).toEqual(
+        dueDates,
+      );
+      expect(createdReceivable.installments.map(({ amount }) => amountUnits(amount))).toEqual([
+        amountUnits('33.34'),
+        amountUnits('33.33'),
+        amountUnits('33.33'),
+      ]);
+      await expect(page.getByRole('status')).toContainText('Recebível e parcelas cadastrados.');
+
+      const persistedReceivables = await browserApi(
+        page,
+        `/finance/receivables?page=1&pageSize=100&clientId=${clientA}&contractId=${contract.id}`,
+      );
+      assertStatus(persistedReceivables, 200, 'read receivable persisted from form');
+      const persistedReceivable = bodyAs<{
+        items: Array<{
+          id: string;
+          contractId: string;
+          reference: string;
+          originalAmount: string;
+          installments: Array<{
+            id: string;
+            sequence: number;
+            amount: string;
+            dueDate: string;
+            allocations: Array<{ amount: string }>;
+          }>;
+          status: string;
+        }>;
+      }>(persistedReceivables).items.find((item) => item.id === createdReceivable.id);
+      expect(persistedReceivable).toMatchObject({
+        contractId: contract.id,
+        reference,
+        status: 'OPEN',
+      });
+      expect(amountUnits(persistedReceivable!.originalAmount)).toBe(amountUnits('100.00'));
+      expect(persistedReceivable!.installments.map(({ amount }) => amountUnits(amount))).toEqual([
+        amountUnits('33.34'),
+        amountUnits('33.33'),
+        amountUnits('33.33'),
+      ]);
+      expect(persistedReceivable!.installments.map(({ dueDate }) => dueDate.slice(0, 10))).toEqual(
+        dueDates,
+      );
+
+      const receivableRow = page.getByRole('row').filter({ hasText: reference });
+      await receivableRow.scrollIntoViewIfNeeded();
+      await expect(receivableRow).toContainText('Saldo em aberto: R$ 100,00');
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.getByRole('button', { name: 'Receber pagamento' }).click();
+      const paymentForm = page.locator('form').filter({
+        has: page.getByRole('button', { name: 'Confirmar pagamento' }),
+      });
+      await paymentForm.getByRole('combobox').nth(0).selectOption(clientA);
+
+      async function submitPayment(
+        installmentId: string,
+        amount: string,
+        paymentReference: string,
+        paidAt = new Date().toISOString().slice(0, 16),
+      ) {
+        await paymentForm.getByLabel('Parcela').selectOption(installmentId);
+        await paymentForm.getByLabel('Referência do pagamento').fill(paymentReference);
+        await paymentForm.getByLabel('Valor recebido').fill(amount);
+        await paymentForm.getByLabel('Data do pagamento').fill(paidAt);
+        const responsePromise = page.waitForResponse(
+          (response) =>
+            new URL(response.url()).pathname === '/v1/finance/payments' &&
+            response.request().method() === 'POST',
+        );
+        await paymentForm.getByRole('button', { name: 'Confirmar pagamento' }).click();
+        return responsePromise;
+      }
+
+      const firstInstallment = createdReceivable.installments[0]!;
+      const firstOption = paymentForm
+        .getByLabel('Parcela')
+        .locator('option')
+        .filter({
+          hasText: `${reference} · parcela 1`,
+        });
+      await expect(firstOption).toContainText('R$ 33,34 em aberto');
+
+      const retryReference = `QA-PG-RETRY-${suffix}`;
+      const retryPaidAt = new Date().toISOString().slice(0, 16);
+      const retriedKeys: string[] = [];
+      await page.route('**/v1/finance/payments', async (route) => {
+        retriedKeys.push(route.request().headers()['idempotency-key'] ?? '');
+        if (retriedKeys.length === 1) {
+          const storedResponse = await route.fetch();
+          expect(storedResponse.status()).toBe(201);
+          await route.abort('failed');
+        } else {
+          await route.continue();
+        }
+      });
+      await paymentForm.getByLabel('Parcela').selectOption(firstInstallment.id);
+      await paymentForm.getByLabel('Referência do pagamento').fill(retryReference);
+      await paymentForm.getByLabel('Valor recebido').fill('10,00');
+      await paymentForm.getByLabel('Data do pagamento').fill(retryPaidAt);
+      await paymentForm.getByRole('button', { name: 'Confirmar pagamento' }).click();
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      const retriedPayment = await submitPayment(
+        firstInstallment.id,
+        '10,00',
+        retryReference,
+        retryPaidAt,
+      );
+      expect(retriedPayment.status()).toBe(201);
+      await page.unroute('**/v1/finance/payments');
+      expect(retriedKeys).toHaveLength(2);
+      expect(retriedKeys[0]).toBeTruthy();
+      expect(retriedKeys[1]).toBe(retriedKeys[0]);
+      await expect(page.getByRole('status')).toContainText('Pagamento confirmado');
+      await expect(
+        page
+          .getByLabel('Parcela')
+          .locator('option')
+          .filter({
+            hasText: `${reference} · parcela 1`,
+          }),
+      ).toContainText('R$ 23,34 em aberto');
+
+      const duplicatePayment = await submitPayment(firstInstallment.id, '10,00', retryReference);
+      expect(duplicatePayment.status()).toBe(409);
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      await expect(
+        page
+          .getByLabel('Parcela')
+          .locator('option')
+          .filter({ hasText: `${reference} · parcela 1` }),
+      ).toContainText('R$ 23,34 em aberto');
+
+      const invalidOverpayment = await submitPayment(
+        firstInstallment.id,
+        '23,35',
+        `QA-PG-INV-${suffix}`,
+      );
+      expect(invalidOverpayment.status()).toBe(400);
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      await expect(
+        page
+          .getByLabel('Parcela')
+          .locator('option')
+          .filter({
+            hasText: `${reference} · parcela 1`,
+          }),
+      ).toContainText('R$ 23,34 em aberto');
+
+      const firstInstallmentPaid = await submitPayment(
+        firstInstallment.id,
+        '23,34',
+        `QA-PG-1-${suffix}`,
+      );
+      expect(firstInstallmentPaid.status()).toBe(201);
+      const secondInstallment = createdReceivable.installments[1]!;
+      const secondPaid = await submitPayment(secondInstallment.id, '33,33', `QA-PG-2-${suffix}`);
+      expect(secondPaid.status()).toBe(201);
+      const thirdInstallment = createdReceivable.installments[2]!;
+      const thirdPaid = await submitPayment(thirdInstallment.id, '33,33', `QA-PG-3-${suffix}`);
+      expect(thirdPaid.status()).toBe(201);
+
+      const finalReceivables = await browserApi(
+        page,
+        `/finance/receivables?page=1&pageSize=100&clientId=${clientA}&contractId=${contract.id}`,
+      );
+      assertStatus(finalReceivables, 200, 'read fully paid receivable');
+      const finalReceivable = bodyAs<{ items: Array<typeof persistedReceivable> }>(
+        finalReceivables,
+      ).items.find((item) => item?.id === createdReceivable.id);
+      expect(finalReceivable?.status).toBe('PAID');
+      expect(
+        finalReceivable?.installments.reduce(
+          (sum, installment) =>
+            sum +
+            installment.allocations.reduce(
+              (paid, allocation) => paid + amountUnits(allocation.amount),
+              0n,
+            ),
+          0n,
+        ),
+      ).toBe(amountUnits('100.00'));
+
+      await page.reload();
+      await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      const completedRow = page.getByRole('row').filter({ hasText: reference });
+      await completedRow.scrollIntoViewIfNeeded();
+      await expect(completedRow).toContainText('Saldo em aberto: R$ 0,00');
+      await expect(completedRow).toContainText('PAID');
+      await expect(completedRow).toContainText(formatDate(dueDates.at(-1)));
+      await page.getByRole('button', { name: 'Receber pagamento' }).click();
+      await paymentForm.getByRole('combobox').nth(0).selectOption(clientA);
+      await expect(page.getByText('Nenhuma parcela aberta para este cliente.')).toBeVisible();
+      await screenshotEvidence(page, `journey-contract-receivable-payment-${viewport.width}`);
+    } finally {
+      await context.close();
     }
-  });
-  await page.reload();
-  await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
-  await page.getByRole('button', { name: 'Receber pagamento' }).click();
-  const paymentForm = page.locator('form').filter({
-    has: page.getByRole('button', { name: 'Confirmar pagamento' }),
-  });
-  await paymentForm.getByRole('combobox').nth(0).selectOption(clientA);
-  const receivableOption = paymentForm
-    .getByLabel('Parcela')
-    .locator('option')
-    .filter({ hasText: reference });
-  await expect(receivableOption).toHaveCount(1);
-  const installmentOption = await receivableOption.getAttribute('value');
-  if (!installmentOption) throw new Error('A parcela do recebível não foi carregada.');
-  expect(installmentOption).toBe(createdReceivable.installments[0]!.id);
-  await paymentForm.getByRole('combobox').nth(1).selectOption(installmentOption);
-  await paymentForm.getByLabel('Referência do pagamento').fill(paymentReference);
-  await paymentForm.getByLabel('Valor recebido').fill('137,50');
-  await paymentForm.getByLabel('Data do pagamento').fill(new Date().toISOString().slice(0, 16));
-  await paymentForm.getByRole('button', { name: 'Confirmar pagamento' }).click();
-  await expect(page.getByRole('status').filter({ hasText: 'Pagamento confirmado' })).toBeVisible();
-  expect(idempotencyKey).toBeTruthy();
-
-  const payments = await browserApi(page, '/finance/payments?page=1&pageSize=100');
-  assertStatus(payments, 200, 'read persisted payment');
-  const persistedPayment = bodyAs<{
-    items: Array<{ reference: string; amount: string; status: string }>;
-  }>(payments).items.find((item) => item.reference === paymentReference);
-  expect(persistedPayment).toMatchObject({ reference: paymentReference, status: 'CONFIRMED' });
-  expect(Number(persistedPayment?.amount)).toBe(137.5);
-  const received = await browserApi(page, `/reports/received?${reportRange()}`);
-  assertStatus(received, 200, 'read received report');
-  const reportRows = bodyAs<{ rows: Array<{ amount: string }> }>(received).rows;
-  expect(reportRows.some((row) => Number(row.amount) >= 137.5)).toBe(true);
-
-  await page.reload();
-  await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
-  await expect(page.getByText(reference, { exact: true })).toBeVisible();
-  await page
-    .getByRole('heading', { name: 'Pagamentos recebidos', exact: true })
-    .scrollIntoViewIfNeeded();
-  await expect(page.getByText(paymentReference, { exact: true })).toBeVisible();
-  await page.locator('#primary-navigation').getByRole('button', { name: 'Relatórios' }).click();
-  await expect(page.getByRole('heading', { name: 'Relatórios', exact: true })).toBeVisible();
-  await page.locator('.report-filters').getByRole('combobox').nth(0).selectOption('received');
-  await expect(page.locator('tbody')).toContainText('137,50');
-  await screenshotEvidence(page, 'journey-contract-receivable-payment');
+  }
 });
 
 test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa', async ({
   browser,
 }) => {
-  const financeContext = await browser.newContext();
-  const adminContext = await browser.newContext();
-  const financePage = await financeContext.newPage();
-  const adminPage = await adminContext.newPage();
-  try {
-    await login(financePage, 'financeiro.aurora@example.test');
-    const suffix = randomUUID().slice(0, 8);
-    const description = `Despesa QA ${suffix}`;
-    await financePage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
-    await financePage.getByRole('button', { name: 'Nova despesa' }).click();
-    const expenseForm = financePage.locator('form').filter({
-      has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
-    });
-    await expenseForm.getByLabel('Cliente').selectOption(clientA);
-    await expenseForm.getByLabel('Processo').selectOption(matterA);
-    await expenseForm.getByLabel('Responsável').selectOption(financeUserA);
-    await expenseForm.getByLabel('Categoria').fill('QA sintético');
-    await expenseForm.getByLabel('Detalhes da despesa').fill(description);
-    await expenseForm.getByLabel('Valor').fill('42,25');
-    await expenseForm.getByLabel('Data da despesa').fill(dateInput());
-    await expenseForm.getByLabel('Vencimento').fill(dateInput(10));
-    await expenseForm.getByRole('button', { name: 'Cadastrar despesa' }).click();
-    await expect(
-      financePage.getByRole('status').filter({ hasText: 'Despesa cadastrada.' }),
-    ).toBeVisible();
-    await pageExpenseSection(financePage);
-    let expenseRow = financePage.getByRole('row').filter({ hasText: description });
-    await expect(expenseRow).toContainText('Rascunho');
-    await expenseRow.getByRole('button', { name: 'Enviar para aprovação' }).click();
-    await expect(
-      financePage.getByRole('status').filter({ hasText: 'Despesa enviada para aprovação.' }),
-    ).toBeVisible();
-    await expect(expenseRow).toContainText('Aguardando aprovação');
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const financeContext = await browser.newContext({ viewport });
+    const adminContext = await browser.newContext({ viewport });
+    const financePage = await financeContext.newPage();
+    const adminPage = await adminContext.newPage();
+    try {
+      await login(financePage, 'financeiro.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const description = `Despesa QA ${suffix}`;
+      await financePage
+        .locator('#primary-navigation')
+        .getByRole('button', { name: /Receb/ })
+        .click();
+      await financePage.getByRole('button', { name: 'Nova despesa' }).click();
+      const expenseForm = financePage.locator('form').filter({
+        has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
+      });
+      await expenseForm.getByLabel('Cliente').selectOption(clientA);
+      await expenseForm.getByLabel('Processo').selectOption(matterA);
+      await expenseForm.getByLabel('Responsável').selectOption(financeUserA);
+      await expenseForm.getByLabel('Categoria').fill('QA sintético');
+      await expenseForm.getByLabel('Detalhes da despesa').fill(description);
+      await expenseForm.getByLabel('Valor').fill('42,25');
+      await expenseForm.getByLabel('Data da despesa').fill(dateInput());
+      await expenseForm.getByLabel('Vencimento').fill(dateInput(10));
+      await expenseForm.getByRole('button', { name: 'Cadastrar despesa' }).click();
+      await expect(
+        financePage.getByRole('status').filter({ hasText: 'Despesa cadastrada.' }),
+      ).toBeVisible();
+      await pageExpenseSection(financePage);
+      let expenseRow = financePage.getByRole('row').filter({ hasText: description });
+      await expect(expenseRow).toContainText('Rascunho');
+      await expenseRow.getByRole('button', { name: 'Enviar para aprovação' }).click();
+      await expect(
+        financePage.getByRole('status').filter({ hasText: 'Despesa enviada para aprovação.' }),
+      ).toBeVisible();
+      await expect(expenseRow).toContainText('Aguardando aprovação');
 
-    await login(adminPage, 'admin.aurora@example.test');
-    await adminPage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
-    await pageExpenseSection(adminPage);
-    expenseRow = adminPage.getByRole('row').filter({ hasText: description });
-    await expect(expenseRow).toContainText('Aguardando aprovação');
-    await expenseRow.getByRole('button', { name: 'Aprovar' }).click();
-    await expect(
-      adminPage.getByRole('status').filter({ hasText: 'Despesa aprovada.' }),
-    ).toBeVisible();
-    await expect(expenseRow).toContainText('Aguardando pagamento');
-    await expenseRow.getByRole('button', { name: 'Registrar pagamento' }).click();
-    await adminPage.getByLabel('Valor integral').fill('42,25');
-    await adminPage.getByLabel('Data do pagamento').fill(dateInput());
-    await adminPage.getByLabel('Forma de pagamento').fill('PIX');
-    await adminPage.getByLabel('Referência').fill(`QA-${suffix}`);
-    await adminPage.getByRole('button', { name: 'Confirmar quitação integral' }).click();
-    await expect(
-      adminPage.getByRole('status').filter({ hasText: 'Pagamento integral registrado no caixa.' }),
-    ).toBeVisible();
-    await expect(expenseRow).toContainText('Paga');
+      await login(adminPage, 'admin.aurora@example.test');
+      await adminPage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await pageExpenseSection(adminPage);
+      expenseRow = adminPage.getByRole('row').filter({ hasText: description });
+      await expect(expenseRow).toContainText('Aguardando aprovação');
+      await expenseRow.getByRole('button', { name: 'Aprovar' }).click();
+      await expect(
+        adminPage.getByRole('status').filter({ hasText: 'Despesa aprovada.' }),
+      ).toBeVisible();
+      await expect(expenseRow).toContainText('Aguardando pagamento');
+      await expenseRow.getByRole('button', { name: 'Registrar pagamento' }).click();
+      await adminPage.getByLabel('Valor integral').fill('42,25');
+      await adminPage.getByLabel('Data do pagamento').fill(dateInput());
+      await adminPage.getByLabel('Forma de pagamento').fill('PIX');
+      await adminPage.getByLabel('Referência').fill(`QA-${suffix}`);
+      await adminPage.getByRole('button', { name: 'Confirmar quitação integral' }).click();
+      await expect(
+        adminPage
+          .getByRole('status')
+          .filter({ hasText: 'Pagamento integral registrado no caixa.' }),
+      ).toBeVisible();
+      await expect(expenseRow).toContainText('Paga');
 
-    const persistedExpenses = await browserApi(adminPage, '/finance/expenses?page=1&pageSize=100');
-    assertStatus(persistedExpenses, 200, 'read persisted paid expense');
-    const persistedExpense = bodyAs<{
-      items: Array<{ description: string; status: string; amount: string }>;
-    }>(persistedExpenses).items.find((item) => item.description === description);
-    expect(persistedExpense).toMatchObject({
-      description,
-      status: 'PAID',
-      amount: '42.25',
-    });
+      const persistedExpenses = await browserApi(
+        adminPage,
+        '/finance/expenses?page=1&pageSize=100',
+      );
+      assertStatus(persistedExpenses, 200, 'read persisted paid expense');
+      const persistedExpense = bodyAs<{
+        items: Array<{ description: string; status: string; amount: string }>;
+      }>(persistedExpenses).items.find((item) => item.description === description);
+      expect(persistedExpense).toMatchObject({
+        description,
+        status: 'PAID',
+        amount: '42.25',
+      });
 
-    const cashFlow = await browserApi(adminPage, `/reports/cash-flow?${reportRange()}`);
-    assertStatus(cashFlow, 200, 'read cash flow');
-    const rows = bodyAs<{ rows: Array<{ paid_expenses: string }> }>(cashFlow).rows;
-    expect(rows.some((row) => Number(row.paid_expenses) >= 42.25)).toBe(true);
+      const cashFlow = await browserApi(adminPage, `/reports/cash-flow?${reportRange()}`);
+      assertStatus(cashFlow, 200, 'read cash flow');
+      const rows = bodyAs<{ rows: Array<{ paid_expenses: string }> }>(cashFlow).rows;
+      expect(rows.some((row) => Number(row.paid_expenses) >= 42.25)).toBe(true);
 
-    await adminPage.reload();
-    await adminPage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
-    await pageExpenseSection(adminPage);
-    const paidExpenseRow = adminPage.getByRole('row').filter({ hasText: description });
-    await expect(paidExpenseRow).toContainText('Paga');
-    await screenshotEvidence(adminPage, 'journey-expense-paid');
-    await adminPage
-      .locator('#primary-navigation')
-      .getByRole('button', { name: 'Relatórios' })
-      .click();
-    await expect(adminPage.getByRole('heading', { name: 'Relatórios', exact: true })).toBeVisible();
-    await adminPage
-      .locator('.report-filters')
-      .getByRole('combobox')
-      .nth(0)
-      .selectOption('cash-flow');
-    await expect(adminPage.locator('tbody')).toContainText('42,25');
-    await screenshotEvidence(adminPage, 'journey-expense-cash-flow');
-  } finally {
-    await financeContext.close();
-    await adminContext.close();
+      await adminPage.reload();
+      await adminPage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await pageExpenseSection(adminPage);
+      const paidExpenseRow = adminPage.getByRole('row').filter({ hasText: description });
+      await expect(paidExpenseRow).toContainText('Paga');
+      await screenshotEvidence(adminPage, `journey-expense-paid-${viewport.width}`);
+      await adminPage
+        .locator('#primary-navigation')
+        .getByRole('button', { name: 'Relatórios' })
+        .click();
+      await expect(
+        adminPage.getByRole('heading', { name: 'Relatórios', exact: true }),
+      ).toBeVisible();
+      await adminPage
+        .locator('.report-filters')
+        .getByRole('combobox')
+        .nth(0)
+        .selectOption('cash-flow');
+      await expect(adminPage.locator('tbody')).toContainText('42,25');
+      await screenshotEvidence(adminPage, `journey-expense-cash-flow-${viewport.width}`);
+    } finally {
+      await financeContext.close();
+      await adminContext.close();
+    }
   }
 });
 
@@ -895,198 +1175,410 @@ async function pageExpenseSection(page: Page) {
 }
 
 test('jornada 4: upload, download protegido e assinatura eletrônica no navegador', async ({
-  page,
+  browser,
 }) => {
-  await login(page, 'admin.aurora@example.test');
-  const suffix = randomUUID().slice(0, 8);
-  const title = `PDF de assinatura QA ${suffix}`;
-  const upload = await browserUpload(
-    page,
-    { title, category: 'QA', visibility: 'CLIENT', clientId: clientA },
-    `qa-${suffix}.pdf`,
-    'application/pdf',
-    pdfBytes(),
-  );
-  assertStatus(upload, 201, 'upload PDF to local Storage');
-  const documentId = bodyAs<{ id: string }>(upload).id;
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    try {
+      await login(page, 'admin.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const title = `PDF de assinatura QA ${suffix}`;
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Documentos' }).click();
+      await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
+      const uploadForm = page.locator('form').filter({ has: page.getByLabel('Nome do documento') });
+      await uploadForm.getByLabel('Nome do documento').fill(title);
+      await uploadForm.getByLabel('Tipo de documento (opcional)').fill('QA');
+      await uploadForm.getByLabel('Visibilidade').selectOption('CLIENT');
+      await uploadForm.getByLabel('Cliente').selectOption(clientA);
+      await uploadForm.getByLabel('Arquivo').setInputFiles({
+        name: `qa-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: Buffer.from(pdfBytes()),
+      });
+      const uploadResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/documents' &&
+          response.request().method() === 'POST',
+      );
+      await uploadForm.getByRole('button', { name: 'Enviar documento' }).click();
+      const uploaded = await uploadResponse;
+      expect(uploaded.status()).toBe(201);
+      const uploadFields = uploaded.request().postDataBuffer()?.toString('latin1') ?? '';
+      expect(uploadFields).toContain(title);
+      expect(uploadFields).toContain('visibility');
+      await expect(page.getByRole('status')).toContainText('Documento enviado com segurança.');
+      const documentId = ((await uploaded.json()) as { id: string }).id;
+      const documentRow = page.getByRole('row').filter({ hasText: title });
+      await expect(documentRow).toBeVisible();
+      await expect(documentRow).toContainText('Cliente');
 
-  const download = await browserApi(page, `/documents/${documentId}/download-url`);
-  assertStatus(download, 200, 'create protected download URL');
-  const downloadUrl = bodyAs<{ url: string }>(download).url;
-  expect(new URL(downloadUrl).hostname).toBe('127.0.0.1');
-  const documentPage = await page.context().newPage();
-  const downloadPromise = documentPage.waitForEvent('download');
-  const downloadResponsePromise = documentPage.waitForResponse((response) => {
-    const responseUrl = new URL(response.url());
-    const requestedUrl = new URL(downloadUrl);
-    return (
-      responseUrl.origin === requestedUrl.origin && responseUrl.pathname === requestedUrl.pathname
-    );
-  });
-  await documentPage.goto(downloadUrl).catch((error: unknown) => {
-    if (!(error instanceof Error) || !error.message.includes('Download is starting')) throw error;
-  });
-  const [downloadedFile, downloadResponse] = await Promise.all([
-    downloadPromise,
-    downloadResponsePromise,
-  ]);
-  expect(downloadResponse.status()).toBe(200);
-  expect(downloadResponse.headers()['content-type']).toContain('application/pdf');
-  const downloadedPath = await downloadedFile.path();
-  if (!downloadedPath) throw new Error('O download do PDF sintético não foi salvo.');
-  expect(readFileSync(downloadedPath).subarray(0, 8).toString('ascii')).toContain('%PDF-');
-  await documentPage.close();
+      const persistedDocuments = await browserApi(page, '/documents?page=1&pageSize=100');
+      assertStatus(persistedDocuments, 200, 'read uploaded document metadata');
+      expect(
+        bodyAs<{
+          items: Array<{ id: string; title: string; clientId: string; visibility: string }>;
+        }>(persistedDocuments).items.find((item) => item.id === documentId),
+      ).toMatchObject({ id: documentId, title, clientId: clientA, visibility: 'CLIENT' });
 
-  const requested = await browserApi(page, `/documents/${documentId}/signature-requests`, {
-    method: 'POST',
-    body: { signerName: 'Cliente Ficticio Alfa', expiresInDays: 2 },
-  });
-  assertStatus(requested, 201, 'create signature request');
-  const signing = bodyAs<{ token: string; documentTitle: string }>(requested);
-  expect(signing.documentTitle).toBe(title);
+      const signedUrlResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === `/v1/documents/${documentId}/download-url`,
+      );
+      const storageResponsePromise = page
+        .context()
+        .waitForEvent('response', (response) =>
+          new URL(response.url()).pathname.startsWith('/storage/v1/object/sign/legal-documents/'),
+        );
+      const popupPromise = page.waitForEvent('popup');
+      await documentRow.getByRole('button', { name: 'Abrir' }).click();
+      const [signedUrl, documentPage] = await Promise.all([signedUrlResponse, popupPromise]);
+      expect(signedUrl.status()).toBe(200);
+      const downloadUrl = ((await signedUrl.json()) as { url: string }).url;
+      expect(new URL(downloadUrl).hostname).toBe('127.0.0.1');
+      const downloadResponse = await storageResponsePromise;
+      expect(new URL(downloadResponse.url()).pathname).toBe(new URL(downloadUrl).pathname);
+      expect(downloadResponse.status()).toBe(200);
+      expect(downloadResponse.headers()['content-type']).toContain('application/pdf');
+      expect(downloadResponse.body()).resolves.toHaveLength(pdfBytes().length);
+      await documentPage.close();
 
-  await page.goto(`/assinar/${signing.token}`);
-  await expect(page.getByRole('heading', { name: title, exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Usar nome digitado' }).click();
-  await page.getByRole('checkbox').check();
-  await page.getByRole('button', { name: 'Assinar documento' }).click();
-  await expect(page.getByRole('heading', { name: /Assinatura conclu.da/ })).toBeVisible({
-    timeout: 30_000,
-  });
-  await expect(page.getByText(title, { exact: true })).toBeVisible();
-  await screenshotEvidence(page, 'journey-document-signed');
+      await documentRow.getByRole('button', { name: 'Solicitar assinatura' }).click();
+      const requestDialog = page.getByRole('dialog', { name: 'Enviar para assinatura' });
+      await requestDialog.getByLabel('Nome de quem assinará').fill('Cliente Ficticio Alfa');
+      await requestDialog.getByLabel('Validade do link').selectOption('3');
+      const signingResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === `/v1/documents/${documentId}/signature-requests` &&
+          response.request().method() === 'POST',
+      );
+      await requestDialog.getByRole('button', { name: 'Criar link de assinatura' }).click();
+      const requested = await signingResponse;
+      expect(requested.status()).toBe(201);
+      expect(requested.request().postDataJSON()).toMatchObject({
+        signerName: 'Cliente Ficticio Alfa',
+        expiresInDays: 3,
+      });
+      const shareDialog = page.getByRole('dialog', { name: /Compartilhar com/ });
+      const signingLink = await shareDialog.getByLabel('Link de assinatura').inputValue();
+      const signingPath = new URL(signingLink).pathname;
+      expect(signingPath.startsWith('/assinar/')).toBe(true);
+      expect(signingPath.split('/').at(-1)?.length).toBe(64);
+      await expect(documentRow).toContainText('Aguardando Cliente Ficticio Alfa');
+      await shareDialog.getByRole('button', { name: 'Fechar' }).click();
+
+      const invalidTitle = `Arquivo inválido QA ${suffix}`;
+      await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
+      const invalidForm = page
+        .locator('form')
+        .filter({ has: page.getByLabel('Nome do documento') });
+      await invalidForm.getByLabel('Nome do documento').fill(invalidTitle);
+      await invalidForm.getByLabel('Visibilidade').selectOption('INTERNAL');
+      await invalidForm.getByLabel('Arquivo').setInputFiles({
+        name: `invalid-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: Buffer.from('not a PDF document'),
+      });
+      const invalidUpload = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/documents' &&
+          response.request().method() === 'POST',
+      );
+      await invalidForm.getByRole('button', { name: 'Enviar documento' }).click();
+      expect((await invalidUpload).status()).toBe(400);
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      await expect(page.getByRole('row').filter({ hasText: invalidTitle })).toHaveCount(0);
+
+      const oversizedTitle = `Arquivo grande QA ${suffix}`;
+      await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
+      const oversizedForm = page
+        .locator('form')
+        .filter({ has: page.getByLabel('Nome do documento') });
+      await oversizedForm.getByLabel('Nome do documento').fill(oversizedTitle);
+      await oversizedForm.getByLabel('Visibilidade').selectOption('INTERNAL');
+      await oversizedForm.getByLabel('Arquivo').setInputFiles({
+        name: `large-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: Buffer.alloc(4 * 1024 * 1024 + 1, 0x41),
+      });
+      const oversizedUpload = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/documents' &&
+          response.request().method() === 'POST',
+      );
+      await oversizedForm.getByRole('button', { name: 'Enviar documento' }).click();
+      expect((await oversizedUpload).status()).toBe(413);
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      await expect(page.getByRole('row').filter({ hasText: oversizedTitle })).toHaveCount(0);
+      await screenshotEvidence(page, `journey-document-signed-${viewport.width}`);
+    } finally {
+      await context.close();
+    }
+  }
 });
 
-test('jornada 5: tarefa atribuída a advogado e concluída', async ({ page }) => {
-  await login(page, 'admin.aurora@example.test');
-  const suffix = randomUUID().slice(0, 8);
-  const title = `Tarefa QA ${suffix}`;
-  await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
-  await page.getByRole('button', { name: 'Nova tarefa' }).click();
-  await page.getByLabel('O que precisa ser feito').fill(title);
-  const taskForm = page.locator('form').filter({
-    has: page.getByRole('button', { name: 'Criar tarefa', exact: true }),
-  });
-  await taskForm.locator('select[name="priority"]').selectOption('HIGH');
-  await expect(taskForm.locator('select[name="assigneeId"]')).toBeEnabled();
-  await taskForm.locator('select[name="assigneeId"]').selectOption(lawyerUserA);
-  const taskResponse = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname === '/v1/tasks' && response.request().method() === 'POST',
-  );
-  await page.getByRole('button', { name: 'Criar tarefa', exact: true }).click();
-  const created = await taskResponse;
-  expect(created.status()).toBe(201);
-  expect(created.request().postDataJSON()).toMatchObject({
-    title,
-    assigneeId: lawyerUserA,
-    priority: 'HIGH',
-  });
-  const taskId = ((await created.json()) as { id: string }).id;
-  await expect(page.getByRole('status')).toContainText('Tarefa criada.');
-  await page.getByLabel('Status de ' + title).selectOption('COMPLETED');
-  await expect(page.getByRole('status')).toContainText('Tarefa atualizada.');
-  const persisted = await browserApi(page, '/tasks');
-  assertStatus(persisted, 200, 'read persisted tasks');
-  expect(
-    bodyAs<Array<{ id: string; status: string }>>(persisted).find((task) => task.id === taskId)
-      ?.status,
-  ).toBe('COMPLETED');
+test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser }) => {
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    try {
+      await login(page, 'admin.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const title = `Tarefa QA ${suffix}`;
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
+      await page.getByRole('button', { name: 'Nova tarefa' }).click();
+      await page.getByLabel('O que precisa ser feito').fill(title);
+      const taskForm = page.locator('form').filter({
+        has: page.getByRole('button', { name: 'Criar tarefa', exact: true }),
+      });
+      await taskForm.locator('select[name="priority"]').selectOption('HIGH');
+      await expect(taskForm.locator('select[name="assigneeId"]')).toBeEnabled();
+      await taskForm.locator('select[name="assigneeId"]').selectOption(lawyerUserA);
+      const taskResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/tasks' &&
+          response.request().method() === 'POST',
+      );
+      await page.getByRole('button', { name: 'Criar tarefa', exact: true }).click();
+      const created = await taskResponse;
+      expect(created.status()).toBe(201);
+      expect(created.request().postDataJSON()).toMatchObject({
+        title,
+        assigneeId: lawyerUserA,
+        priority: 'HIGH',
+      });
+      const taskId = ((await created.json()) as { id: string }).id;
+      await expect(page.getByRole('status')).toContainText('Tarefa criada.');
+      await page.getByLabel('Status de ' + title).selectOption('COMPLETED');
+      await expect(page.getByRole('status')).toContainText('Tarefa atualizada.');
+      const persisted = await browserApi(page, '/tasks');
+      assertStatus(persisted, 200, 'read persisted tasks');
+      expect(
+        bodyAs<Array<{ id: string; status: string }>>(persisted).find((task) => task.id === taskId)
+          ?.status,
+      ).toBe('COMPLETED');
 
-  await page.reload();
-  await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
-  await expect(page.getByText(title, { exact: true })).toBeVisible();
-  await expect(page.getByLabel(`Status de ${title}`)).toHaveValue('COMPLETED');
-  await screenshotEvidence(page, 'journey-task-completed');
+      await page.reload();
+      await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
+      await expect(page.getByText(title, { exact: true })).toBeVisible();
+      await expect(page.getByLabel(`Status de ${title}`)).toHaveValue('COMPLETED');
+      await screenshotEvidence(page, `journey-task-completed-${viewport.width}`);
+    } finally {
+      await context.close();
+    }
+  }
 });
 
 test('jornada 6: portal, documento privado por cliente, mensagem persistida e isolamento', async ({
   browser,
 }) => {
-  const adminContext = await browser.newContext();
-  const clientContext = await browser.newContext();
-  const adminPage = await adminContext.newPage();
-  const clientPage = await clientContext.newPage();
-  try {
-    await login(adminPage, 'admin.aurora@example.test');
-    const suffix = randomUUID().slice(0, 8);
-    const visibleTitle = `Documento do portal QA ${suffix}`;
-    const internalTitle = `Documento interno QA ${suffix}`;
-    const image = [
-      ...Buffer.from(
-        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=',
-        'base64',
-      ),
-    ];
-    const visible = await browserUpload(
-      adminPage,
-      { title: visibleTitle, category: 'QA', visibility: 'CLIENT', clientId: clientA },
-      `portal-${suffix}.png`,
-      'image/png',
-      image,
-    );
-    assertStatus(visible, 201, 'upload client-visible file');
-    const visibleDocumentId = bodyAs<{ id: string }>(visible).id;
-    const internal = await browserUpload(
-      adminPage,
-      { title: internalTitle, category: 'QA', visibility: 'INTERNAL', clientId: clientA },
-      `internal-${suffix}.png`,
-      'image/png',
-      image,
-    );
-    assertStatus(internal, 201, 'upload internal-only file');
-    const internalId = bodyAs<{ id: string }>(internal).id;
-
-    await login(clientPage, 'cliente.aurora@example.test');
-    await expect(clientPage.getByRole('heading', { name: /Minha/ })).toBeVisible();
-    await expect(clientPage.getByRole('button', { name: new RegExp(visibleTitle) })).toBeVisible();
-    await expect(clientPage.getByText(internalTitle, { exact: true })).toHaveCount(0);
-    await screenshotEvidence(clientPage, 'journey-client-portal');
-
-    const forbiddenInternal = await browserApi(clientPage, `/documents/${internalId}`);
-    assertStatus(forbiddenInternal, 404, 'client cannot read internal document');
-    const crossOrganization = await browserApi(clientPage, '/clients?page=1&pageSize=5', {
-      organizationId: organizationB,
-    });
-    assertStatus(crossOrganization, 401, 'client cannot select another organization');
-
-    const message = `Mensagem sintética QA ${suffix}`;
-    await clientPage.getByLabel(/Responder ao escrit/).fill(message);
-    await clientPage.getByRole('button', { name: 'Enviar mensagem' }).click();
-    await expect(clientPage.getByRole('status')).toContainText('Mensagem enviada');
-    await expect(clientPage.getByText(message, { exact: true })).toBeVisible();
-    const persistedMessages = await browserApi(clientPage, `/client-messages?clientId=${clientA}`);
-    assertStatus(persistedMessages, 200, 'read persisted portal message');
-    expect(
-      bodyAs<Array<{ body: string }>>(persistedMessages).some((item) => item.body === message),
-    ).toBe(true);
-
-    const downloadUrlResponsePromise = clientPage.waitForResponse((response) =>
-      response.url().includes(`/v1/documents/${visibleDocumentId}/download-url`),
-    );
-    await clientPage.getByRole('button', { name: new RegExp(visibleTitle) }).click();
-    const downloadUrlResponse = await downloadUrlResponsePromise;
-    expect(downloadUrlResponse.status()).toBe(200);
-    const signedUrl = ((await downloadUrlResponse.json()) as { url: string }).url;
-    expect(new URL(signedUrl).hostname).toBe('127.0.0.1');
-    const documentPage = await clientContext.newPage();
-    const storageResponsePromise = documentPage.waitForResponse((response) => {
-      const responseUrl = new URL(response.url());
-      const requestedUrl = new URL(signedUrl);
-      return (
-        responseUrl.origin === requestedUrl.origin && responseUrl.pathname === requestedUrl.pathname
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const adminContext = await browser.newContext({ viewport });
+    const clientContext = await browser.newContext({ viewport });
+    const secondClientContext = await browser.newContext({ viewport });
+    const otherOrganizationContext = await browser.newContext({ viewport });
+    const otherOrganizationClientContext = await browser.newContext({ viewport });
+    const adminPage = await adminContext.newPage();
+    const clientPage = await clientContext.newPage();
+    const secondClientPage = await secondClientContext.newPage();
+    const otherOrganizationPage = await otherOrganizationContext.newPage();
+    const otherOrganizationClientPage = await otherOrganizationClientContext.newPage();
+    try {
+      await login(adminPage, 'admin.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const visibleTitle = `Documento do portal QA ${suffix}`;
+      const internalTitle = `Documento interno QA ${suffix}`;
+      const image = [
+        ...Buffer.from(
+          'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=',
+          'base64',
+        ),
+      ];
+      const visible = await browserUpload(
+        adminPage,
+        { title: visibleTitle, category: 'QA', visibility: 'CLIENT', clientId: clientA },
+        `portal-${suffix}.png`,
+        'image/png',
+        image,
       );
-    });
-    await documentPage.goto(signedUrl).catch((error: unknown) => {
-      if (!(error instanceof Error) || !error.message.includes('Download is starting')) throw error;
-    });
-    const storageResponse = await storageResponsePromise;
-    expect(storageResponse.status()).toBe(200);
-    expect(storageResponse.headers()['content-type']).toContain('image/png');
-    await documentPage.close();
-  } finally {
-    await adminContext.close();
-    await clientContext.close();
+      assertStatus(visible, 201, 'upload client-visible file');
+      const visibleDocumentId = bodyAs<{ id: string }>(visible).id;
+      const internal = await browserUpload(
+        adminPage,
+        { title: internalTitle, category: 'QA', visibility: 'INTERNAL', clientId: clientA },
+        `internal-${suffix}.png`,
+        'image/png',
+        image,
+      );
+      assertStatus(internal, 201, 'upload internal-only file');
+      const internalId = bodyAs<{ id: string }>(internal).id;
+      const secondClientTitle = `Documento do portal Beta QA ${suffix}`;
+      const secondClientDocument = await browserUpload(
+        adminPage,
+        { title: secondClientTitle, category: 'QA', visibility: 'CLIENT', clientId: clientB },
+        `portal-beta-${suffix}.png`,
+        'image/png',
+        image,
+      );
+      assertStatus(secondClientDocument, 201, 'prepare another client document in the same office');
+      const secondClientDocumentId = bodyAs<{ id: string }>(secondClientDocument).id;
+
+      await login(otherOrganizationPage, 'admin.horizonte@example.test');
+      const otherOrganizationTitle = `Documento Horizonte QA ${suffix}`;
+      const otherOrganizationDocument = await browserUpload(
+        otherOrganizationPage,
+        {
+          title: otherOrganizationTitle,
+          category: 'QA',
+          visibility: 'CLIENT',
+          clientId: clientOrganizationB,
+        },
+        `portal-horizonte-${suffix}.png`,
+        'image/png',
+        image,
+        organizationB,
+      );
+      assertStatus(otherOrganizationDocument, 201, 'prepare document in second organization');
+      const otherOrganizationDocumentId = bodyAs<{ id: string }>(otherOrganizationDocument).id;
+
+      await login(otherOrganizationClientPage, 'cliente.horizonte@example.test');
+      await expect(
+        otherOrganizationClientPage.getByRole('heading', { name: /Minha/ }),
+      ).toBeVisible();
+      await expect(
+        otherOrganizationClientPage.getByRole('button', {
+          name: new RegExp(otherOrganizationTitle),
+        }),
+      ).toBeVisible();
+      await expect(
+        otherOrganizationClientPage.getByText(visibleTitle, { exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        otherOrganizationClientPage.getByText(secondClientTitle, { exact: true }),
+      ).toHaveCount(0);
+      const crossOrganizationDocument = await browserApi(
+        otherOrganizationClientPage,
+        `/documents/${visibleDocumentId}`,
+        { organizationId: organizationB },
+      );
+      assertStatus(
+        crossOrganizationDocument,
+        404,
+        'client cannot read a document from another organization',
+      );
+      const crossOrganizationClientList = await browserApi(
+        otherOrganizationClientPage,
+        '/clients?page=1&pageSize=5',
+        { organizationId: organizationA },
+      );
+      assertStatus(crossOrganizationClientList, 401, 'client cannot select another organization');
+
+      await login(clientPage, 'cliente.aurora@example.test');
+      await expect(clientPage.getByRole('heading', { name: /Minha/ })).toBeVisible();
+      await expect(
+        clientPage.getByRole('button', { name: new RegExp(visibleTitle) }),
+      ).toBeVisible();
+      await expect(clientPage.getByText(internalTitle, { exact: true })).toHaveCount(0);
+      await expect(clientPage.getByText(secondClientTitle, { exact: true })).toHaveCount(0);
+      await screenshotEvidence(clientPage, `journey-client-portal-${viewport.width}`);
+
+      const forbiddenInternal = await browserApi(clientPage, `/documents/${internalId}`);
+      assertStatus(forbiddenInternal, 404, 'client cannot read internal document');
+      const forbiddenSameOrganization = await browserApi(
+        clientPage,
+        `/documents/${secondClientDocumentId}`,
+      );
+      assertStatus(forbiddenSameOrganization, 404, 'client cannot read another client document');
+      const crossOrganization = await browserApi(clientPage, '/clients?page=1&pageSize=5', {
+        organizationId: organizationB,
+      });
+      assertStatus(crossOrganization, 401, 'client cannot select another organization');
+
+      const message = `Mensagem sintética QA ${suffix}`;
+      await clientPage.getByLabel(/Responder ao escrit/).fill(message);
+      await clientPage.getByRole('button', { name: 'Enviar mensagem' }).click();
+      await expect(clientPage.getByRole('status')).toContainText('Mensagem enviada');
+      await expect(clientPage.getByText(message, { exact: true })).toBeVisible();
+      const persistedMessages = await browserApi(
+        clientPage,
+        `/client-messages?clientId=${clientA}`,
+      );
+      assertStatus(persistedMessages, 200, 'read persisted portal message');
+      expect(
+        bodyAs<Array<{ body: string }>>(persistedMessages).some((item) => item.body === message),
+      ).toBe(true);
+
+      await login(secondClientPage, 'cliente.beta@example.test');
+      await expect(secondClientPage.getByRole('heading', { name: /Minha/ })).toBeVisible();
+      await expect(
+        secondClientPage.getByRole('button', { name: new RegExp(secondClientTitle) }),
+      ).toBeVisible();
+      await expect(secondClientPage.getByText(visibleTitle, { exact: true })).toHaveCount(0);
+      const secondClientCannotReadFirst = await browserApi(
+        secondClientPage,
+        `/documents/${visibleDocumentId}`,
+      );
+      assertStatus(
+        secondClientCannotReadFirst,
+        404,
+        'second same-organization client cannot read first client document',
+      );
+
+      const firstOrganizationCannotReadSecond = await browserApi(
+        adminPage,
+        `/documents/${otherOrganizationDocumentId}`,
+      );
+      assertStatus(
+        firstOrganizationCannotReadSecond,
+        404,
+        'first organization cannot read second organization document',
+      );
+      const secondOrganizationCannotReadFirst = await browserApi(
+        otherOrganizationPage,
+        `/documents/${visibleDocumentId}`,
+        { organizationId: organizationB },
+      );
+      assertStatus(
+        secondOrganizationCannotReadFirst,
+        404,
+        'second organization cannot read first organization document',
+      );
+
+      const downloadUrlResponsePromise = clientPage.waitForResponse((response) =>
+        response.url().includes(`/v1/documents/${visibleDocumentId}/download-url`),
+      );
+      await clientPage.getByRole('button', { name: new RegExp(visibleTitle) }).click();
+      const downloadUrlResponse = await downloadUrlResponsePromise;
+      expect(downloadUrlResponse.status()).toBe(200);
+      const signedUrl = ((await downloadUrlResponse.json()) as { url: string }).url;
+      expect(new URL(signedUrl).hostname).toBe('127.0.0.1');
+      const documentPage = await clientContext.newPage();
+      const storageResponsePromise = documentPage.waitForResponse((response) => {
+        const responseUrl = new URL(response.url());
+        const requestedUrl = new URL(signedUrl);
+        return (
+          responseUrl.origin === requestedUrl.origin &&
+          responseUrl.pathname === requestedUrl.pathname
+        );
+      });
+      await documentPage.goto(signedUrl).catch((error: unknown) => {
+        if (!(error instanceof Error) || !error.message.includes('Download is starting'))
+          throw error;
+      });
+      const storageResponse = await storageResponsePromise;
+      expect(storageResponse.status()).toBe(200);
+      expect(storageResponse.headers()['content-type']).toContain('image/png');
+      await documentPage.close();
+    } finally {
+      await adminContext.close();
+      await clientContext.close();
+      await secondClientContext.close();
+      await otherOrganizationContext.close();
+      await otherOrganizationClientContext.close();
+    }
   }
 });
 

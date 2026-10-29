@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useMemo, useState, type FormEvent } from 'react';
+import { Fragment, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { addMonths, decimalToCents, formatDate, formatMoney, splitAmount } from '../shared/format';
 import { LoadMore } from '../shared/load-more';
@@ -22,6 +22,7 @@ type Installment = {
   dueDate: string;
   status: string;
   allocations: Array<{ amount: string }>;
+  adjustments?: Array<{ kind: string; amount: string }>;
 };
 type Receivable = {
   id: string;
@@ -35,6 +36,7 @@ type Receivable = {
   client: Client;
   installments: Installment[];
 };
+type ContractOption = { id: string; clientId: string; number: string; title: string };
 type Payment = {
   id: string;
   reference: string;
@@ -116,6 +118,47 @@ type ExpenseSummary = {
     paid: { count: number; amount: string };
   }>;
 };
+
+type PaymentAttempt = { payload: string; idempotencyKey: string };
+
+function decimalUnits(value: string): bigint {
+  const normalized = value.trim().replace(',', '.');
+  if (!/^\d+(\.\d{1,4})?$/.test(normalized)) throw new Error('Valor financeiro inválido.');
+  const [whole, fraction = ''] = normalized.split('.');
+  return BigInt(whole!) * 10_000n + BigInt(fraction.padEnd(4, '0'));
+}
+
+function unitsToDecimal(value: bigint): string {
+  const whole = value / 10_000n;
+  const fraction = String(value % 10_000n)
+    .padStart(4, '0')
+    .replace(/0+$/, '');
+  return fraction ? `${whole}.${fraction}` : String(whole);
+}
+
+function installmentBalance(installment: Installment): string {
+  const adjusted = (installment.adjustments ?? []).reduce(
+    (total, adjustment) =>
+      adjustment.kind === 'DISCOUNT'
+        ? total - decimalUnits(adjustment.amount)
+        : total + decimalUnits(adjustment.amount),
+    decimalUnits(installment.amount),
+  );
+  const paid = installment.allocations.reduce(
+    (total, allocation) => total + decimalUnits(allocation.amount),
+    0n,
+  );
+  return unitsToDecimal(adjusted > paid ? adjusted - paid : 0n);
+}
+
+function receivableBalance(receivable: Receivable): string {
+  return unitsToDecimal(
+    receivable.installments.reduce(
+      (total, installment) => total + decimalUnits(installmentBalance(installment)),
+      0n,
+    ),
+  );
+}
 
 type FinanceRead =
   | 'receivables'
@@ -256,6 +299,8 @@ export function FinanceOperations({
     100,
   );
   const [selectedClient, setSelectedClient] = useState('');
+  const [receivableClientId, setReceivableClientId] = useState('');
+  const [receivableContractId, setReceivableContractId] = useState('');
   const [expenseClientId, setExpenseClientId] = useState('');
   const [expenseStatusFilter, setExpenseStatusFilter] = useState('');
   const [expenseCategoryFilter, setExpenseCategoryFilter] = useState('');
@@ -313,6 +358,10 @@ export function FinanceOperations({
       ? `/finance/receivables?clientId=${encodeURIComponent(selectedClient)}`
       : undefined,
   );
+  const receivableContracts = usePaginatedData<ContractOption>(
+    mode === 'receivable' && canCreateReceivable ? '/finance/contracts' : undefined,
+    100,
+  );
   const [adjusting, setAdjusting] = useState<string>();
   const [reversing, setReversing] = useState<string>();
   const [editingPayment, setEditingPayment] = useState<Payment>();
@@ -321,6 +370,7 @@ export function FinanceOperations({
   const [expenseHistoryId, setExpenseHistoryId] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const paymentAttempt = useRef<PaymentAttempt | undefined>(undefined);
 
   const openInstallments = useMemo(
     () =>
@@ -333,6 +383,7 @@ export function FinanceOperations({
             )
             .map((installment) => ({
               ...installment,
+              remainingAmount: installmentBalance(installment),
               clientId: item.clientId,
               reference: item.reference,
               clientName: item.client.displayName,
@@ -395,6 +446,7 @@ export function FinanceOperations({
             method: 'POST',
             body: JSON.stringify({
               clientId: form.get('clientId'),
+              contractId: form.get('contractId') || undefined,
               reference: form.get('reference'),
               description: form.get('description'),
               originalAmount: String(form.get('total')).replace(',', '.'),
@@ -406,7 +458,11 @@ export function FinanceOperations({
         'Recebível e parcelas cadastrados.',
         ['receivables'],
       ).then((succeeded) => {
-        if (succeeded) target.reset();
+        if (succeeded) {
+          target.reset();
+          setReceivableClientId('');
+          setReceivableContractId('');
+        }
       });
     } catch (caught) {
       setFeedback(`Erro: ${caught instanceof Error ? caught.message : 'valores inválidos'}`);
@@ -423,26 +479,34 @@ export function FinanceOperations({
       return;
     }
     const amount = String(form.get('amount')).replace(',', '.');
-    const idempotencyKey = crypto.randomUUID();
+    const payload = {
+      clientId: installment.clientId,
+      reference: form.get('reference'),
+      amount,
+      currency: 'BRL',
+      paidAt: form.get('paidAt'),
+      method: form.get('method'),
+      allocations: [{ installmentId: installment.id, amount }],
+    };
+    const payloadKey = JSON.stringify(payload);
+    const currentAttempt = paymentAttempt.current;
+    const idempotencyKey =
+      currentAttempt?.payload === payloadKey ? currentAttempt.idempotencyKey : crypto.randomUUID();
+    paymentAttempt.current = { payload: payloadKey, idempotencyKey };
     void finish(
       () =>
         api('/finance/payments', {
           method: 'POST',
           headers: { 'Idempotency-Key': idempotencyKey },
-          body: JSON.stringify({
-            clientId: installment.clientId,
-            reference: form.get('reference'),
-            amount,
-            currency: 'BRL',
-            paidAt: form.get('paidAt'),
-            method: form.get('method'),
-            allocations: [{ installmentId: installment.id, amount }],
-          }),
+          body: JSON.stringify(payload),
         }),
       'Pagamento confirmado e alocado à parcela.',
       ['receivables', 'paymentReceivables', 'payments'],
     ).then((succeeded) => {
-      if (succeeded) target.reset();
+      if (succeeded) {
+        paymentAttempt.current = undefined;
+        target.reset();
+      }
     });
   };
 
@@ -772,7 +836,15 @@ export function FinanceOperations({
         <form className="surface form-grid" data-reveal onSubmit={createReceivable}>
           <label>
             Cliente
-            <select required name="clientId" defaultValue="">
+            <select
+              required
+              name="clientId"
+              value={receivableClientId}
+              onChange={(event) => {
+                setReceivableClientId(event.target.value);
+                setReceivableContractId('');
+              }}
+            >
               <option value="" disabled>
                 Selecione
               </option>
@@ -782,6 +854,32 @@ export function FinanceOperations({
                 </option>
               ))}
             </select>
+          </label>
+          <label>
+            Contrato associado (opcional)
+            <select
+              name="contractId"
+              value={receivableContractId}
+              onChange={(event) => setReceivableContractId(event.target.value)}
+              disabled={!receivableClientId || receivableContracts.loading}
+            >
+              <option value="">Sem vínculo com contrato</option>
+              {receivableContracts.data?.items
+                .filter((contract) => contract.clientId === receivableClientId)
+                .map((contract) => (
+                  <option value={contract.id} key={contract.id}>
+                    {contract.number} · {contract.title}
+                  </option>
+                ))}
+            </select>
+            {receivableClientId && receivableContracts.error && (
+              <small role="alert">
+                Não foi possível carregar os contratos.{' '}
+                <button type="button" onClick={receivableContracts.retry}>
+                  Tentar novamente
+                </button>
+              </small>
+            )}
           </label>
           <label>
             Código da cobrança
@@ -850,7 +948,7 @@ export function FinanceOperations({
               {openInstallments.map((item) => (
                 <option value={item.id} key={item.id}>
                   {item.clientName} · {item.reference} · parcela {item.sequence} ·{' '}
-                  {formatMoney(item.amount)}
+                  {formatMoney(item.remainingAmount)} em aberto
                 </option>
               ))}
             </select>
@@ -1009,7 +1107,12 @@ export function FinanceOperations({
                       <strong>{item.reference}</strong>
                       <small>{item.description}</small>
                     </td>
-                    <td>{formatMoney(item.originalAmount, item.currency)}</td>
+                    <td>
+                      {formatMoney(item.originalAmount, item.currency)}
+                      <small>
+                        Saldo em aberto: {formatMoney(receivableBalance(item), item.currency)}
+                      </small>
+                    </td>
                     <td>{item.installments.length}</td>
                     <td>{formatDate(item.dueDate)}</td>
                     <td>

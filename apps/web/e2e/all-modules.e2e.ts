@@ -330,6 +330,8 @@ async function mockApplication(page: Page) {
       pathname === '/v1/calendar-events'
     ) {
       body = [];
+    } else if (pathname === '/v1/matters/responsibles/lawyers') {
+      body = [{ id: 'qa-lawyer', fullName: 'Advogado QA' }];
     } else if (pathname === '/v1/pipelines') {
       body = pipelines;
     } else if (

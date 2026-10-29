@@ -70,6 +70,8 @@ test('payment form finds a client installment and submits the exact decimal amou
             ],
           }
         : { total: 0, items: [] };
+    } else if (url.pathname === '/v1/finance/contracts') {
+      body = { total: 0, items: [] };
     } else if (url.pathname === '/v1/finance/payments' && request.method() === 'GET') {
       body = { total: 0, items: [] };
     } else if (url.pathname === '/v1/finance/payments' && request.method() === 'POST') {
