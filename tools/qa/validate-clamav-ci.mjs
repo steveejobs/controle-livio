@@ -44,9 +44,12 @@ const previousReport =
     : undefined;
 if (
   process.argv[2] === '--failure-modes' &&
-  (!previousReport?.results?.['clean-file'] || !previousReport?.results?.['eicar-detection'])
+  (!previousReport?.results?.['clean-file'] ||
+    !previousReport?.results?.['clean-pdf'] ||
+    !previousReport?.results?.['eicar-detection'] ||
+    !previousReport?.results?.['eicar-pdf-detection'])
 )
-  fail('clean-file and EICAR checks must pass before failure-mode checks.');
+  fail('clean-file, clean-PDF and EICAR checks must pass before failure-mode checks.');
 const report = previousReport ?? {
   status: 'IN_PROGRESS',
   scannerImage: 'clamav/clamav:stable',
@@ -85,6 +88,39 @@ async function expectHttpStatus(operation, status) {
   fail(`scanner request unexpectedly succeeded instead of returning ${status}.`);
 }
 
+function pdfBytes(embeddedFile) {
+  const content = 'BT /F1 12 Tf 20 70 Td (Synthetic scanner probe) Tj ET';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  if (embeddedFile !== undefined) {
+    const fileSpecObjectNumber = objects.length + 1;
+    const embeddedFileObjectNumber = objects.length + 2;
+    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> >>`;
+    objects.push(
+      `<< /Type /Filespec /F (eicar.com) /EF << /F ${embeddedFileObjectNumber} 0 R >> >>`,
+      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Length ${Buffer.byteLength(embeddedFile, 'ascii')} >>\nstream\n${embeddedFile}\nendstream`,
+    );
+  }
+
+  let document = '%PDF-1.4\n';
+  const offsets = [0];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(Buffer.byteLength(document, 'ascii'));
+    document += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(document, 'ascii');
+  document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets.slice(1))
+    document += `${String(offset).padStart(10, '0')} 00000 n \n`;
+  document += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(document, 'ascii');
+}
+
 async function verifyReady() {
   const cleanService = service();
   const deadline = Date.now() + 180_000;
@@ -102,10 +138,14 @@ async function verifyReady() {
   }
   if (lastFailure) fail('official clamd did not become ready within three minutes.');
   record('clean-file', 'PASS', { verdict: 'clean' });
+  await cleanService.assertClean(pdfBytes());
+  record('clean-pdf', 'PASS', { verdict: 'clean' });
 
   const eicar = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
   await expectHttpStatus(cleanService.assertClean(Buffer.from(eicar, 'ascii')), 422);
   record('eicar-detection', 'PASS', { verdict: 'infected-rejected' });
+  await expectHttpStatus(cleanService.assertClean(pdfBytes(eicar)), 422);
+  record('eicar-pdf-detection', 'PASS', { verdict: 'infected-rejected' });
 }
 
 async function verifyFailureModes() {

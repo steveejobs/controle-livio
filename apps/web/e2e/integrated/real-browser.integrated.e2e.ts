@@ -9,6 +9,7 @@ import {
   type Locator,
   type Page,
   type Request,
+  type Route,
   type Response,
 } from '@playwright/test';
 import { addMonths, formatDate } from '../../features/shared/format';
@@ -327,6 +328,7 @@ const currentWorkflowStage = new Map<
   { testTitle: string; workflow: string; stage: string }
 >();
 let operationTraceSequence = 0;
+let workflowStageSequence = 0;
 
 test.afterEach(async ({ browser }, testInfo) => {
   if (testInfo.status !== testInfo.expectedStatus) {
@@ -399,8 +401,9 @@ function writeOperationTrace(page: Page, trace: OperationTrace) {
 
 function markWorkflowStage(page: Page, workflow: string, stage: string, details: JsonObject = {}) {
   currentWorkflowStage.set(page, { testTitle: test.info().title, workflow, stage });
+  const stageSequence = String(++workflowStageSequence).padStart(4, '0');
   writeQaArtifact(
-    `workflow-stages/${operationSlug(workflow)}-${page.viewportSize()?.width ?? 'unknown'}.json`,
+    `workflow-stages/${operationSlug(workflow)}-${page.viewportSize()?.width ?? 'unknown'}-${stageSequence}-${operationSlug(stage)}.json`,
     {
       testTitle: test.info().title,
       workflow,
@@ -555,6 +558,13 @@ function requestMatchesBodyFields(
   });
 }
 
+function requestBodyFieldMatches(request: Request, fields: Array<{ name: string; value: string }>) {
+  return fields.map(({ name, value }) => ({
+    name,
+    matchesExpectedValue: requestMatchesBodyFields(request, [{ name, value }]),
+  }));
+}
+
 async function clickUiOperation(page: Page, operation: UiOperation) {
   const method = operation.method ?? 'POST';
   const traceSequence = String(++operationTraceSequence).padStart(4, '0');
@@ -577,31 +587,31 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   currentOperationTrace.set(page, trace);
   let actionTriggered = false;
   let requestObserved = false;
+  let requestBodyMismatch = false;
   let submitObserved = false;
   let responseObserved = false;
   let responseStatus: number | undefined;
   const invalidFields: string[] = [];
-  const matchesRequest = (request: Request) =>
-    new URL(request.url()).pathname === operation.pathname &&
-    request.method() === method &&
-    requestMatchesBodyFields(request, bodyFields);
+  const matchesEndpoint = (request: Request) =>
+    new URL(request.url()).pathname === operation.pathname && request.method() === method;
   const requestListener = (request: Request) => {
-    if (!matchesRequest(request)) return;
+    if (!matchesEndpoint(request)) return;
     requestObserved = true;
+    const bodyFieldMatches = requestBodyFieldMatches(request, bodyFields);
+    requestBodyMismatch = bodyFieldMatches.some(
+      ({ matchesExpectedValue }) => !matchesExpectedValue,
+    );
     trace.events.push({
       stage: 'REQUEST_SENT',
       elapsedMs: Date.now() - trace.startedAt,
       method: request.method(),
       pathname: new URL(request.url()).pathname,
-      ...(operation.bodyField ? { matchedBodyField: operation.bodyField } : {}),
-      ...(operation.additionalBodyFields?.length
-        ? { matchedAdditionalBodyFields: operation.additionalBodyFields }
-        : {}),
+      bodyFieldMatches,
     });
     writeOperationTrace(page, trace);
   };
   const failedListener = (request: Request) => {
-    if (!matchesRequest(request)) return;
+    if (!matchesEndpoint(request)) return;
     trace.events.push({
       stage: 'REQUEST_FAILED',
       elapsedMs: Date.now() - trace.startedAt,
@@ -611,7 +621,7 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   };
   const responseListener = (response: Response) => {
     const request = response.request();
-    if (!matchesRequest(request)) return;
+    if (!matchesEndpoint(request)) return;
     responseObserved = true;
     responseStatus = response.status();
     trace.events.push({
@@ -713,12 +723,12 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
         );
       }
     }
-    requestPromise = page.waitForRequest(matchesRequest, { timeout: apiOperationTimeoutMs }).then(
+    requestPromise = page.waitForRequest(matchesEndpoint, { timeout: apiOperationTimeoutMs }).then(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
     responsePromise = page
-      .waitForResponse((response) => matchesRequest(response.request()), {
+      .waitForResponse((response) => matchesEndpoint(response.request()), {
         timeout: apiOperationTimeoutMs,
       })
       .then(
@@ -777,6 +787,28 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
     const { value: request } = requestResult;
     const { value: response } = responseResult;
     requestObserved = true;
+    const bodyFieldMatches = requestBodyFieldMatches(request, bodyFields);
+    requestBodyMismatch = bodyFieldMatches.some(
+      ({ matchesExpectedValue }) => !matchesExpectedValue,
+    );
+    if (requestBodyMismatch) {
+      trace.outcome = 'REQUEST_BODY_MISMATCH';
+      trace.events.push({
+        stage: trace.outcome,
+        elapsedMs: Date.now() - trace.startedAt,
+        method: request.method(),
+        pathname: new URL(request.url()).pathname,
+        status: response.status(),
+        bodyFieldMatches,
+      });
+      writeOperationTrace(page, trace);
+      throw new Error('the submitted request does not contain the selected form values');
+    }
+    trace.events.push({
+      stage: 'REQUEST_BODY_CONFIRMED',
+      elapsedMs: Date.now() - trace.startedAt,
+      bodyFieldMatches,
+    });
     trace.outcome = response.status() >= 400 ? 'REQUEST_REJECTED' : 'REQUEST_SUCCEEDED';
     trace.events.push({
       stage: trace.outcome,
@@ -789,17 +821,19 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
     return response;
   } catch (error) {
     if (!trace.events.some(({ stage }) => stage === 'ACTION_NOT_TRIGGERED')) {
-      trace.outcome = !actionTriggered
-        ? 'ACTION_NOT_TRIGGERED'
-        : responseObserved
-          ? responseStatus !== undefined && responseStatus >= 400
-            ? 'REQUEST_REJECTED'
-            : 'REQUEST_SUCCEEDED_UI_NOT_UPDATED'
-          : requestObserved
-            ? 'REQUEST_SENT_NO_RESPONSE'
-            : submitObserved
-              ? 'REQUEST_NOT_SENT'
-              : 'ACTION_NOT_TRIGGERED';
+      trace.outcome = requestBodyMismatch
+        ? 'REQUEST_BODY_MISMATCH'
+        : !actionTriggered
+          ? 'ACTION_NOT_TRIGGERED'
+          : responseObserved
+            ? responseStatus !== undefined && responseStatus >= 400
+              ? 'REQUEST_REJECTED'
+              : 'REQUEST_SUCCEEDED_UI_NOT_UPDATED'
+            : requestObserved
+              ? 'REQUEST_SENT_NO_RESPONSE'
+              : submitObserved
+                ? 'REQUEST_NOT_SENT'
+                : 'ACTION_NOT_TRIGGERED';
       trace.events.push({
         stage: trace.outcome,
         elapsedMs: Date.now() - trace.startedAt,
@@ -874,6 +908,127 @@ async function navigateTo(page: Page, name: string | RegExp) {
 
   if (isMobile) await expect(menu).toHaveAttribute('aria-expanded', 'false');
 }
+
+test('seletor de cliente: carregamento sob demanda, erro, nova tentativa e lista vazia', async ({
+  browser,
+}) => {
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    let releaseClientResponse: (() => void) | undefined;
+    try {
+      await login(page, 'admin.aurora@example.test');
+      await navigateTo(page, 'Processos');
+      const clientsPath = `${new URL(apiBase).pathname.replace(/\/$/, '')}/clients`;
+      const isClientListRequest = (route: Route) =>
+        route.request().method() === 'GET' &&
+        new URL(route.request().url()).pathname === clientsPath;
+
+      let clientRequestStarted = false;
+      const clientResponseGate = new Promise<void>((resolve) => {
+        releaseClientResponse = resolve;
+      });
+      await page.route('**/v1/clients**', async (route) => {
+        if (!isClientListRequest(route)) return route.continue();
+        const response = await route.fetch();
+        clientRequestStarted = true;
+        await clientResponseGate;
+        await route.fulfill({ response });
+      });
+      await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
+      const loadingForm = await formWithSubmitButton(page, 'Cadastrar processo');
+      const loadingClientSelect = loadingForm.getByRole('combobox', {
+        name: 'Cliente',
+        exact: true,
+      });
+      await expect.poll(() => clientRequestStarted, { timeout: apiOperationTimeoutMs }).toBe(true);
+      await expect(loadingForm.getByRole('status')).toContainText('Carregando clientes');
+      await expect(loadingClientSelect).toBeDisabled();
+      markWorkflowStage(page, 'client-select-state-probe', 'loading', {
+        fieldLabel: 'Cliente',
+        selectDisabled: true,
+      });
+      releaseClientResponse?.();
+      await expect(loadingClientSelect).toBeEnabled({ timeout: apiOperationTimeoutMs });
+      await expect(
+        loadingClientSelect.getByRole('option', { name: 'Cliente Ficticio Alfa', exact: true }),
+      ).toHaveAttribute('value', clientA);
+      await page.unroute('**/v1/clients**');
+
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
+      await navigateTo(page, 'Processos');
+      let listRequestCount = 0;
+      await page.route('**/v1/clients**', async (route) => {
+        if (!isClientListRequest(route)) return route.continue();
+        listRequestCount += 1;
+        if (listRequestCount === 1) {
+          await route.fulfill({
+            status: 503,
+            contentType: 'application/json',
+            body: JSON.stringify({ message: 'Falha temporária sintética.' }),
+          });
+          return;
+        }
+        await route.continue();
+      });
+      await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
+      const errorForm = await formWithSubmitButton(page, 'Cadastrar processo');
+      await expect(errorForm.getByRole('alert')).toContainText(
+        'Não foi possível carregar os clientes.',
+      );
+      const retryButton = errorForm.getByRole('button', {
+        name: 'Tentar carregar clientes novamente',
+        exact: true,
+      });
+      await expect(retryButton).toBeVisible();
+      await retryButton.click();
+      const retryClientSelect = errorForm.getByRole('combobox', { name: 'Cliente', exact: true });
+      await expect(
+        retryClientSelect.getByRole('option', { name: 'Cliente Ficticio Alfa', exact: true }),
+      ).toHaveAttribute('value', clientA);
+      expect(listRequestCount).toBe(2);
+      markWorkflowStage(page, 'client-select-state-probe', 'error-retried', {
+        requestCount: listRequestCount,
+        optionLabel: 'Cliente Ficticio Alfa',
+        optionValue: clientA,
+      });
+      await page.unroute('**/v1/clients**');
+
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
+      await navigateTo(page, 'Processos');
+      await page.route('**/v1/clients**', async (route) => {
+        if (!isClientListRequest(route)) return route.continue();
+        const response = await route.fetch();
+        const body = (await response.json()) as { items?: unknown[]; total?: number };
+        await route.fulfill({ response, json: { ...body, items: [], total: 0 } });
+      });
+      await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
+      const emptyForm = await formWithSubmitButton(page, 'Cadastrar processo');
+      const emptyClientSelect = emptyForm.getByRole('combobox', { name: 'Cliente', exact: true });
+      await expect(emptyForm.getByRole('status')).toContainText(
+        'Nenhum cliente acessível está cadastrado neste escritório.',
+      );
+      await expect(emptyClientSelect.locator('option')).toHaveCount(1);
+      await expect(emptyClientSelect.locator('option').first()).toHaveText(
+        'Nenhum cliente disponível',
+      );
+      expect(
+        await emptyClientSelect.evaluate(
+          (element) => (element as HTMLSelectElement).validity.valueMissing,
+        ),
+      ).toBe(true);
+      markWorkflowStage(page, 'client-select-state-probe', 'empty', {
+        fieldLabel: 'Cliente',
+        optionCount: 0,
+        placeholder: 'Nenhum cliente disponível',
+        requiredSelectionMissing: true,
+      });
+    } finally {
+      releaseClientResponse?.();
+      await context.close();
+    }
+  }
+});
 
 async function browserAccessToken(page: Page): Promise<string | undefined> {
   const cookieValue = await page.evaluate((cookieName) => {
@@ -1014,7 +1169,7 @@ async function browserUpload(
   );
 }
 
-function pdfBytes(comment?: string): number[] {
+function pdfBytes(embeddedFile?: string): number[] {
   const stream = 'BT /F1 12 Tf 20 70 Td (Synthetic local QA document) Tj ET';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -1023,13 +1178,21 @@ function pdfBytes(comment?: string): number[] {
     `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
   ];
+  if (embeddedFile !== undefined) {
+    const fileSpecObjectNumber = objects.length + 1;
+    const embeddedFileObjectNumber = objects.length + 2;
+    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> >>`;
+    objects.push(
+      `<< /Type /Filespec /F (eicar.com) /EF << /F ${embeddedFileObjectNumber} 0 R >> >>`,
+      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Length ${Buffer.byteLength(embeddedFile, 'ascii')} >>\nstream\n${embeddedFile}\nendstream`,
+    );
+  }
   let document = '%PDF-1.4\n';
   const offsets = [0];
   for (const [index, object] of objects.entries()) {
     offsets.push(Buffer.byteLength(document));
     document += `${index + 1} 0 obj\n${object}\nendobj\n`;
   }
-  if (comment) document += `% ${comment}\n`;
   const xrefOffset = Buffer.byteLength(document);
   document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (const offset of offsets.slice(1))
@@ -1535,7 +1698,8 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
       await navigateTo(page, 'Processos');
       await expect(page.getByText(reference, { exact: true })).toBeVisible();
-      await expect(page.getByText('Advogado Aurora', { exact: true })).toBeVisible();
+      const createdMatterCard = page.locator('article.kanban-card').filter({ hasText: reference });
+      await expect(createdMatterCard).toContainText('Advogado: Advogado Aurora');
 
       const statusSelect = page.getByLabel(`Status de ${matterTitle}`);
       const statusUpdate = page.waitForResponse(
@@ -1952,19 +2116,34 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
           0n,
         ),
       ).toBe(amountUnits('100.00'));
+      const totalPaidUnits =
+        finalReceivable?.installments.reduce(
+          (sum, installment) =>
+            sum +
+            installment.allocations.reduce(
+              (paid, allocation) => paid + amountUnits(allocation.amount),
+              0n,
+            ),
+          0n,
+        ) ?? 0n;
+      expect(amountUnits(finalReceivable!.originalAmount) - totalPaidUnits).toBe(0n);
       confirmPersistence(page, `post-payment-QA-PG-3-${suffix}`);
 
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(page, /Receb/);
-      const completedRow = page.getByRole('row').filter({ hasText: reference });
+      const receivablesRegion = page.getByRole('region', { name: 'Recebíveis', exact: true });
+      await receivablesRegion.scrollIntoViewIfNeeded();
+      const completedRow = receivablesRegion.getByRole('row').filter({ hasText: reference });
+      await expect(completedRow).toBeVisible({ timeout: apiOperationTimeoutMs });
       await completedRow.scrollIntoViewIfNeeded();
       await expect(completedRow).toContainText('Saldo em aberto: R$ 0,00');
       await expect(completedRow).toContainText('PAID');
       await expect(completedRow).toContainText(formatDate(dueDates.at(-1)));
       await page.getByRole('button', { name: 'Receber pagamento' }).click();
+      const finalPaymentForm = await formWithSubmitButton(page, 'Confirmar pagamento');
       await selectFormOptionByLabel(
         page,
-        paymentForm,
+        finalPaymentForm,
         'Cliente',
         'Cliente Ficticio Alfa',
         'journey-2-contract-receivable-payment',

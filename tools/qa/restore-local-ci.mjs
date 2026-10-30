@@ -488,7 +488,7 @@ const grantSnapshot = (database) =>
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
         CROSS JOIN LATERAL aclexplode(COALESCE(
           c.relacl,
-          acldefault(CASE WHEN c.relkind = 'S' THEN 'S' ELSE 'r' END, c.relowner)
+          acldefault(CASE WHEN c.relkind = 'S' THEN 'S'::"char" ELSE 'r'::"char" END, c.relowner)
         )) x
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
       UNION ALL

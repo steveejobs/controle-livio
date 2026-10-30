@@ -1016,6 +1016,7 @@ export function FinanceOperations({
             error={clients.error?.message}
             onRetry={clients.retry}
             canListClients={canViewClients}
+            name="clientId"
             value={expenseClientId}
             onChange={(event) => setExpenseClientId(event.target.value)}
             allowUnlinked
