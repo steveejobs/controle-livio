@@ -29,7 +29,8 @@ const parseTocEntry = (line) => {
     .slice(separator + 1)
     .trim()
     .split(/\s+/);
-  if (fields.length < 6) return null;
+  // Some pg_restore rows, including EXTENSION entries, have no owner column.
+  if (fields.length < 5) return null;
   const [catalogId, objectId] = fields;
   const description = multiWordTocDescriptions.find(
     (candidate) => fields.slice(2, 2 + candidate.split(' ').length).join(' ') === candidate,
@@ -38,14 +39,15 @@ const parseTocEntry = (line) => {
   const resolvedDescription = description ?? fields[2];
   const namespace = fields[2 + descriptionLength];
   const tagAndOwner = fields.slice(3 + descriptionLength);
-  const owner = tagAndOwner.at(-1);
+  const hasOwnerColumn = tagAndOwner.length > 1;
+  const owner = hasOwnerColumn ? tagAndOwner.at(-1) : undefined;
   return {
     dumpId: Number(line.slice(0, separator).trim()),
     catalogId: Number(catalogId),
     objectId: Number(objectId),
     description: resolvedDescription,
     namespace,
-    name: tagAndOwner.slice(0, -1).join(' '),
+    name: hasOwnerColumn ? tagAndOwner.slice(0, -1).join(' ') : tagAndOwner.join(' '),
     owner,
   };
 };
@@ -123,8 +125,10 @@ const tocFixture = [
   '1234; 0 0 DEFAULT ACL - DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA cron postgres',
   '1234; 0 0 COMMENT - SCHEMA cron postgres',
   '1234; 0 0 COMMENT - FUNCTION cron.alter_job(bigint) postgres',
-  '1235; 3079 16384 EXTENSION - pg_cron postgres',
-  '1236; 3079 16385 EXTENSION - pg_net postgres',
+  '7; 3079 19318 EXTENSION - pg_cron',
+  '6; 3079 16664 EXTENSION - pg_net',
+  '5445; 0 0 COMMENT - EXTENSION pg_cron supabase_admin',
+  '5448; 0 0 COMMENT - EXTENSION pg_net supabase_admin',
   '1237; 2615 2200 SCHEMA - public supabase_admin',
   '1237; 2615 2200 COMMENT - SCHEMA public supabase_admin',
   '1237; 1259 16400 TABLE public clients supabase_admin',
@@ -134,8 +138,25 @@ const tocFixture = [
 ];
 assert.deepEqual(
   filterUnsupportedTocEntries(tocFixture),
-  [tocFixture[10], tocFixture[11], tocFixture[12], tocFixture[13], tocFixture[14]],
+  [tocFixture[12], tocFixture[13], tocFixture[14], tocFixture[15], tocFixture[16]],
   'Scheduler schema objects/references and ACLs are removed while public structure and data remain',
+);
+assert.deepEqual(
+  tocFixture
+    .map(parseTocEntry)
+    .filter((entry) => entry?.description === 'EXTENSION')
+    .map(({ description, namespace, name, owner }) => ({ description, namespace, name, owner })),
+  [
+    { description: 'EXTENSION', namespace: '-', name: 'pg_cron', owner: undefined },
+    { description: 'EXTENSION', namespace: '-', name: 'pg_net', owner: undefined },
+  ],
+  'Ownerless extension rows preserve object type/name/schema from the actual pg_restore TOC layout',
+);
+assert(
+  filterUnsupportedTocEntries(tocFixture)
+    .map(parseTocEntry)
+    .every((entry) => !referencesExcludedScheduler(entry)),
+  'The filtered TOC must not retain scheduler schema or extension references',
 );
 const restorePlanFixture = restoreArguments(
   'livio_restore_fixture',
@@ -237,10 +258,6 @@ const tocEvidence = {
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
 };
 writeFileSync(join(evidenceDirectory, 'source-archive-toc.txt'), `${sourceToc.join('\n')}\n`);
-writeFileSync(
-  join(evidenceDirectory, 'schema-filtered-archive-toc.txt'),
-  `${schemaFilteredToc.join('\n')}\n`,
-);
 writeCheckpoint({ targetDatabase: target, ...tocEvidence });
 assert.equal(
   tocEvidence.schemaReferencesRemainingAfterNativeFilter.length,
@@ -248,6 +265,7 @@ assert.equal(
   `pg_restore --exclude-schema left entries for absent scheduler schemas: ${JSON.stringify(tocEvidence.schemaReferencesRemainingAfterNativeFilter)}`,
 );
 const toc = filterUnsupportedTocEntries(schemaFilteredToc).join('\n');
+writeFileSync(join(evidenceDirectory, 'schema-filtered-archive-toc.txt'), `${toc}\n`);
 const residualUnsupportedReferences = toc
   .split('\n')
   .map(parseTocEntry)
@@ -256,11 +274,15 @@ if (residualUnsupportedReferences.length > 0)
   throw new Error(
     `Restore list retains TOC entries for objects excluded from the destination: ${JSON.stringify(residualUnsupportedReferences)}`,
   );
+const filteredTocEntries = toc.split('\n').map(parseTocEntry).filter(Boolean);
+const filteredTocEvidence = {
+  effectiveRestoreTocEntries: filteredTocEntries.length,
+  prohibitedReferencesAfterFinalFilter: residualUnsupportedReferences,
+};
 assert(
-  !toc
-    .split('\n')
-    .map(parseTocEntry)
-    .some((entry) => entry?.description === 'ACL' || entry?.description === 'DEFAULT ACL'),
+  !filteredTocEntries.some(
+    (entry) => entry?.description === 'ACL' || entry?.description === 'DEFAULT ACL',
+  ),
   'Source ACL TOC entries must be omitted; the runner reapplies only checked-in application grants',
 );
 const effectiveRestoreArgs = restoreArguments(target, restoreList, archive);
@@ -273,6 +295,7 @@ assert(
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
+  ...filteredTocEvidence,
   effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
   aclRowsSuppressedByNoAcl: aclEntries.length,
@@ -301,6 +324,7 @@ restoreStage = 'pg_restore';
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
+  ...filteredTocEvidence,
   effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
   aclRowsSuppressedByNoAcl: aclEntries.length,
@@ -312,6 +336,7 @@ restoreStage = 'validate_recovery';
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
+  ...filteredTocEvidence,
   pgRestoreCompleted: true,
   effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
@@ -620,6 +645,7 @@ writeFileSync(
       requiredSupabaseRoles: Number(requiredRoles),
       databaseOwner,
       ...tocEvidence,
+      ...filteredTocEvidence,
       publicObjectsOwnedBy: 'supabase_admin',
       applicationGrantsAppliedAndVerified: true,
       foreignKeysComparedAndValidated: true,

@@ -411,6 +411,16 @@ function markWorkflowStage(page: Page, workflow: string, stage: string, details:
   );
 }
 
+async function formWithSubmitButton(page: Page, buttonName: string) {
+  const submitButton = page.getByRole('button', { name: buttonName, exact: true });
+  await expect(submitButton, `form submit button: ${buttonName}`).toBeVisible();
+  const form = submitButton.locator('xpath=ancestor::form');
+  await expect(form, `form containing submit button: ${buttonName}`).toHaveCount(1);
+  await expect(form).toBeVisible();
+  await expect(form.getByRole('button', { name: buttonName, exact: true })).toHaveCount(1);
+  return form;
+}
+
 async function selectFormOptionByLabel(
   page: Page,
   form: Locator,
@@ -420,7 +430,11 @@ async function selectFormOptionByLabel(
   stage: string,
   expectedFixtureValue?: string,
 ) {
-  const select = form.getByLabel(fieldLabel, { exact: true });
+  const escapedLabel = fieldLabel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const select = form.getByRole('combobox', {
+    name: new RegExp(`^${escapedLabel}(?:\\s|$)`),
+  });
+  await expect(select, `${workflow}: one accessible ${fieldLabel} control`).toHaveCount(1);
   await expect(select, `${workflow}: ${fieldLabel} control`).toBeVisible();
   const option = await select.evaluate((element, targetLabel) => {
     const matchingOptions = Array.from((element as HTMLSelectElement).options).filter(
@@ -438,12 +452,18 @@ async function selectFormOptionByLabel(
     : null;
   markWorkflowStage(page, workflow, `${stage}-option-inspected`, {
     fieldLabel,
+    optionLabel,
     optionCount: option.optionCount,
     targetOptionCount: option.matchCount,
+    optionValue: option.value,
     expectedFixtureValueMatches,
   });
   expect(option.matchCount, `${workflow}: one ${fieldLabel} option named ${optionLabel}`).toBe(1);
   expect(option.value, `${workflow}: ${fieldLabel} option has a value`).toBeTruthy();
+  if (expectedFixtureValue)
+    expect(option.value, `${workflow}: ${fieldLabel} UUID matches the fixture`).toBe(
+      expectedFixtureValue,
+    );
 
   const value = option.value!;
   const selectedValues = await select.selectOption(
@@ -453,11 +473,17 @@ async function selectFormOptionByLabel(
     },
   );
   expect(selectedValues).toEqual([value]);
+  if (expectedFixtureValue)
+    expect(value, `${workflow}: selected ${fieldLabel} UUID matches the fixture`).toBe(
+      expectedFixtureValue,
+    );
   await expect(select).toHaveValue(value, { timeout: apiOperationTimeoutMs });
   await expect(select.locator('option:checked')).toHaveText(optionLabel);
   markWorkflowStage(page, workflow, `${stage}-selected`, {
     fieldLabel,
     optionLabel,
+    selectedValue: value,
+    placeholderCleared: value !== '',
     selected: true,
     expectedFixtureValueMatches,
   });
@@ -472,6 +498,7 @@ type UiOperation = {
   button?: Locator;
   action?: () => Promise<unknown>;
   bodyField?: { name: string; value: string };
+  additionalBodyFields?: Array<{ name: string; value: string }>;
 };
 
 type DiagnosticWindow = Window & {
@@ -479,15 +506,31 @@ type DiagnosticWindow = Window & {
   __livioQaSubmitEvents?: Record<string, boolean>;
 };
 
-function requestMatchesBodyField(request: Request, field?: UiOperation['bodyField']) {
-  if (!field) return true;
+function requestMatchesBodyFields(
+  request: Request,
+  fields: Array<{ name: string; value: string }>,
+) {
+  if (!fields.length) return true;
   try {
-    const body = request.postDataJSON() as Record<string, unknown>;
-    if (body[field.name] === field.value) return true;
+    const body = request.postDataJSON() as Record<string, unknown> | null;
+    if (body && fields.every((field) => body[field.name] === field.value)) return true;
   } catch {
-    // Multipart bodies are correlated by a unique synthetic form value below.
+    // Multipart bodies are correlated by named synthetic form fields below.
   }
-  return request.postDataBuffer()?.toString('latin1').includes(field.value) ?? false;
+  const body = request.postDataBuffer()?.toString('latin1');
+  if (!body) return false;
+  return fields.every((field) => {
+    const fieldMarker = `name="${field.name}"`;
+    const markerIndex = body.indexOf(fieldMarker);
+    if (markerIndex < 0) return false;
+    const crlfSeparator = body.indexOf('\r\n\r\n', markerIndex);
+    const lfSeparator = body.indexOf('\n\n', markerIndex);
+    const separatorIndex = crlfSeparator >= 0 ? crlfSeparator : lfSeparator;
+    const separatorLength = crlfSeparator >= 0 ? 4 : 2;
+    if (separatorIndex < 0) return false;
+    const submittedValue = body.slice(separatorIndex + separatorLength).split(/\r?\n/, 1)[0];
+    return submittedValue === field.value;
+  });
 }
 
 async function clickUiOperation(page: Page, operation: UiOperation) {
@@ -495,6 +538,10 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   const traceSequence = String(++operationTraceSequence).padStart(4, '0');
   const run = process.env.LIVIO_PLAYWRIGHT_RUN ?? 'integrated';
   const clickObserverKey = `${run}-${traceSequence}`;
+  const bodyFields = [
+    ...(operation.bodyField ? [operation.bodyField] : []),
+    ...(operation.additionalBodyFields ?? []),
+  ];
   const trace: OperationTrace = {
     id: `${operationSlug(run)}-${page.viewportSize()?.width ?? 'unknown'}-${traceSequence}-${operationSlug(operation.operation)}`,
     run,
@@ -515,7 +562,7 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   const matchesRequest = (request: Request) =>
     new URL(request.url()).pathname === operation.pathname &&
     request.method() === method &&
-    requestMatchesBodyField(request, operation.bodyField);
+    requestMatchesBodyFields(request, bodyFields);
   const requestListener = (request: Request) => {
     if (!matchesRequest(request)) return;
     requestObserved = true;
@@ -524,6 +571,10 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
       elapsedMs: Date.now() - trace.startedAt,
       method: request.method(),
       pathname: new URL(request.url()).pathname,
+      ...(operation.bodyField ? { matchedBodyField: operation.bodyField } : {}),
+      ...(operation.additionalBodyFields?.length
+        ? { matchedAdditionalBodyFields: operation.additionalBodyFields }
+        : {}),
     });
     writeOperationTrace(page, trace);
   };
@@ -1302,9 +1353,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const client = await clickUiOperation(page, {
         operation: 'create-client',
         pathname: '/v1/clients',
-        form: page.locator('form').filter({
-          has: page.getByRole('button', { name: 'Cadastrar e abrir cliente', exact: true }),
-        }),
+        form: await formWithSubmitButton(page, 'Cadastrar e abrir cliente'),
         button: page.getByRole('button', { name: 'Cadastrar e abrir cliente', exact: true }),
         bodyField: { name: 'displayName', value: clientName },
       });
@@ -1328,9 +1377,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const matterTitle = `Processo QA ${suffix}`;
       await navigateTo(page, 'Processos');
       await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
-      const matterForm = page.locator('form').filter({
-        has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
-      });
+      const matterForm = await formWithSubmitButton(page, 'Cadastrar processo');
       const matterClientId = await selectFormOptionByLabel(
         page,
         matterForm,
@@ -1371,6 +1418,10 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
         form: matterForm,
         button: matterForm.getByRole('button', { name: 'Cadastrar processo' }),
         bodyField: { name: 'title', value: matterTitle },
+        additionalBodyFields: [
+          { name: 'clientId', value: matterClientId },
+          { name: 'responsibleLawyerId', value: responsibleLawyerId },
+        ],
       });
       expect(matter.status()).toBe(201);
       expect(matter.request().postDataJSON()).toMatchObject({
@@ -1412,9 +1463,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       await expect(page.getByText('Advogado Aurora', { exact: true })).toBeVisible();
 
       await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
-      const duplicateForm = page.locator('form').filter({
-        has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
-      });
+      const duplicateForm = await formWithSubmitButton(page, 'Cadastrar processo');
       await selectFormOptionByLabel(
         page,
         duplicateForm,
@@ -1482,9 +1531,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
 
       await navigateTo(page, 'Contratos');
       await page.getByRole('button', { name: 'Novo contrato', exact: true }).click();
-      const contractForm = page.locator('form').filter({
-        has: page.getByRole('button', { name: 'Cadastrar contrato', exact: true }),
-      });
+      const contractForm = await formWithSubmitButton(page, 'Cadastrar contrato');
       const contractClientId = await selectFormOptionByLabel(
         page,
         contractForm,
@@ -1506,6 +1553,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         form: contractForm,
         button: contractForm.getByRole('button', { name: 'Cadastrar contrato' }),
         bodyField: { name: 'number', value: contractNumber },
+        additionalBodyFields: [{ name: 'clientId', value: contractClientId }],
       });
       expect(contractCreated.status()).toBe(201);
       expect(contractCreated.request().postDataJSON()).toMatchObject({
@@ -1537,9 +1585,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const issueDate = dateInput();
       const firstDueDate = dateInput(14);
       await navigateTo(page, /Receb/);
-      const receivableForm = page.locator('form').filter({
-        has: page.getByRole('button', { name: 'Criar cobrança e parcelas' }),
-      });
+      const receivableForm = await formWithSubmitButton(page, 'Criar cobrança e parcelas');
       const receivableClientId = await selectFormOptionByLabel(
         page,
         receivableForm,
@@ -1564,14 +1610,17 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         form: receivableForm,
         button: receivableForm.getByRole('button', { name: 'Criar cobrança e parcelas' }),
         bodyField: { name: 'reference', value: reference },
+        additionalBodyFields: [{ name: 'clientId', value: receivableClientId }],
       });
       expect(receivableCreated.status()).toBe(201);
       const receivablePayload = receivableCreated.request().postDataJSON() as {
+        clientId: string;
         contractId: string;
         originalAmount: string;
         issueDate: string;
         installments: Array<{ sequence: number; amount: string; dueDate: string }>;
       };
+      expect(receivablePayload.clientId).toBe(receivableClientId);
       expect(receivablePayload.contractId).toBe(contract.id);
       expect(receivablePayload.issueDate.slice(0, 10)).toBe(issueDate);
       expect(amountUnits(receivablePayload.originalAmount)).toBe(amountUnits('100.00'));
@@ -1647,9 +1696,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       await expect(receivableRow).toContainText('Saldo em aberto: R$ 100,00');
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.getByRole('button', { name: 'Receber pagamento' }).click();
-      const paymentForm = page.locator('form').filter({
-        has: page.getByRole('button', { name: 'Confirmar pagamento' }),
-      });
+      const paymentForm = await formWithSubmitButton(page, 'Confirmar pagamento');
       const paymentClientId = await selectFormOptionByLabel(
         page,
         paymentForm,
@@ -1853,9 +1900,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       const description = `Despesa QA ${suffix}`;
       await navigateTo(financePage, /Receb/);
       await financePage.getByRole('button', { name: 'Nova despesa' }).click();
-      const expenseForm = financePage.locator('form').filter({
-        has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
-      });
+      const expenseForm = await formWithSubmitButton(financePage, 'Cadastrar despesa');
       const expenseClientId = await selectFormOptionByLabel(
         financePage,
         expenseForm,
@@ -1896,6 +1941,11 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
         form: expenseForm,
         button: expenseForm.getByRole('button', { name: 'Cadastrar despesa' }),
         bodyField: { name: 'description', value: description },
+        additionalBodyFields: [
+          { name: 'clientId', value: expenseClientId },
+          { name: 'matterId', value: expenseMatterId },
+          { name: 'responsibleUserId', value: expenseResponsibleId },
+        ],
       });
       expect(createExpenseResponse.status()).toBe(201);
       const expenseId = ((await createExpenseResponse.json()) as { id: string }).id;
@@ -1930,9 +1980,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await adminPage.getByLabel('Data do pagamento').fill(dateInput());
       await adminPage.getByLabel('Forma de pagamento').fill('PIX');
       await adminPage.getByLabel('Referência').fill(`QA-${suffix}`);
-      const paymentForm = adminPage.locator('form').filter({
-        has: adminPage.getByRole('button', { name: 'Confirmar quitação integral' }),
-      });
+      const paymentForm = await formWithSubmitButton(adminPage, 'Confirmar quitação integral');
       const payExpenseResponse = await clickUiOperation(adminPage, {
         operation: 'pay-approved-expense',
         pathname: `/v1/finance/expenses/${expenseId}/payment`,
@@ -2016,7 +2064,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const title = `PDF de assinatura QA ${suffix}`;
       await navigateTo(page, 'Documentos');
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
-      const uploadForm = page.locator('form').filter({ has: page.getByLabel('Nome do documento') });
+      const uploadForm = await formWithSubmitButton(page, 'Enviar documento');
       await uploadForm.getByLabel('Nome do documento').fill(title);
       await uploadForm.getByLabel('Tipo de documento (opcional)').fill('QA');
       await uploadForm.getByLabel('Visibilidade').selectOption('CLIENT');
@@ -2042,6 +2090,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         form: uploadForm,
         button: uploadForm.getByRole('button', { name: 'Enviar documento' }),
         bodyField: { name: 'title', value: title },
+        additionalBodyFields: [{ name: 'clientId', value: documentClientId }],
       });
       expect(uploaded.status()).toBe(201);
       const uploadFields = uploaded.request().postDataBuffer()?.toString('latin1') ?? '';
@@ -2055,9 +2104,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
 
       const infectedTitle = `Arquivo de teste bloqueado QA ${suffix}`;
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
-      const infectedForm = page
-        .locator('form')
-        .filter({ has: page.getByLabel('Nome do documento') });
+      const infectedForm = await formWithSubmitButton(page, 'Enviar documento');
       await infectedForm.getByLabel('Nome do documento').fill(infectedTitle);
       await infectedForm.getByLabel('Visibilidade').selectOption('INTERNAL');
       await infectedForm.getByLabel('Arquivo').setInputFiles({
@@ -2158,9 +2205,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
 
       const invalidTitle = `Arquivo inválido QA ${suffix}`;
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
-      const invalidForm = page
-        .locator('form')
-        .filter({ has: page.getByLabel('Nome do documento') });
+      const invalidForm = await formWithSubmitButton(page, 'Enviar documento');
       await invalidForm.getByLabel('Nome do documento').fill(invalidTitle);
       await invalidForm.getByLabel('Visibilidade').selectOption('INTERNAL');
       await invalidForm.getByLabel('Arquivo').setInputFiles({
@@ -2188,9 +2233,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
 
       const oversizedTitle = `Arquivo grande QA ${suffix}`;
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
-      const oversizedForm = page
-        .locator('form')
-        .filter({ has: page.getByLabel('Nome do documento') });
+      const oversizedForm = await formWithSubmitButton(page, 'Enviar documento');
       await oversizedForm.getByLabel('Nome do documento').fill(oversizedTitle);
       await oversizedForm.getByLabel('Visibilidade').selectOption('INTERNAL');
       await oversizedForm.getByLabel('Arquivo').setInputFiles({
@@ -2231,9 +2274,7 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
       await navigateTo(page, 'Tarefas');
       await page.getByRole('button', { name: 'Nova tarefa' }).click();
       await page.getByLabel('O que precisa ser feito').fill(title);
-      const taskForm = page.locator('form').filter({
-        has: page.getByRole('button', { name: 'Criar tarefa', exact: true }),
-      });
+      const taskForm = await formWithSubmitButton(page, 'Criar tarefa');
       await taskForm.locator('select[name="priority"]').selectOption('HIGH');
       await expect(taskForm.locator('select[name="assigneeId"]')).toBeEnabled();
       await taskForm.locator('select[name="assigneeId"]').selectOption(lawyerUserA);
