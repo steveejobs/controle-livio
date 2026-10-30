@@ -42,14 +42,6 @@ const previousReport =
   process.argv[2] === '--failure-modes' && existsSync(reportPath)
     ? JSON.parse(readFileSync(reportPath, 'utf8'))
     : undefined;
-if (
-  process.argv[2] === '--failure-modes' &&
-  (!previousReport?.results?.['clean-file'] ||
-    !previousReport?.results?.['clean-pdf'] ||
-    !previousReport?.results?.['eicar-detection'] ||
-    !previousReport?.results?.['eicar-pdf-detection'])
-)
-  fail('clean-file, clean-PDF and EICAR checks must pass before failure-mode checks.');
 const report = previousReport ?? {
   status: 'IN_PROGRESS',
   scannerImage: 'clamav/clamav:stable',
@@ -88,6 +80,50 @@ async function expectHttpStatus(operation, status) {
   fail(`scanner request unexpectedly succeeded instead of returning ${status}.`);
 }
 
+function statusOf(error) {
+  return typeof error?.getStatus === 'function' ? error.getStatus() : undefined;
+}
+
+async function recordExpectedStatus(name, operation, expectedStatus, details = {}) {
+  try {
+    const error = await expectHttpStatus(operation(), expectedStatus);
+    record(name, 'PASS', { expectedStatus, actualStatus: statusOf(error), ...details });
+    return true;
+  } catch (error) {
+    const actualStatus = statusOf(error);
+    record(name, 'FAIL', {
+      expectedStatus,
+      actualStatus: actualStatus ?? null,
+      verdict:
+        actualStatus !== undefined
+          ? 'wrong-http-status'
+          : error instanceof Error &&
+              error.message.includes('scanner request unexpectedly succeeded')
+            ? 'unexpectedly-accepted'
+            : 'scan-error',
+      ...details,
+    });
+    return false;
+  }
+}
+
+async function recordVerdict(name, operation, expectedStatus, verdict) {
+  try {
+    if (expectedStatus === undefined) {
+      await operation();
+      record(name, 'PASS', { verdict });
+    } else {
+      await recordExpectedStatus(name, operation, expectedStatus, { verdict });
+    }
+  } catch (error) {
+    record(name, 'FAIL', {
+      expectedStatus: expectedStatus ?? 'clean',
+      actualStatus: statusOf(error) ?? null,
+      verdict: 'scan-error',
+    });
+  }
+}
+
 function pdfBytes(embeddedFile) {
   const content = 'BT /F1 12 Tf 20 70 Td (Synthetic scanner probe) Tj ET';
   const objects = [
@@ -100,10 +136,11 @@ function pdfBytes(embeddedFile) {
   if (embeddedFile !== undefined) {
     const fileSpecObjectNumber = objects.length + 1;
     const embeddedFileObjectNumber = objects.length + 2;
-    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> >>`;
+    const embeddedFileSize = Buffer.byteLength(embeddedFile, 'ascii');
+    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> /AF [${fileSpecObjectNumber} 0 R] >>`;
     objects.push(
-      `<< /Type /Filespec /F (eicar.com) /EF << /F ${embeddedFileObjectNumber} 0 R >> >>`,
-      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Length ${Buffer.byteLength(embeddedFile, 'ascii')} >>\nstream\n${embeddedFile}\nendstream`,
+      `<< /Type /Filespec /F (eicar.com) /UF (eicar.com) /Desc (ClamAV EICAR scanner test) /AFRelationship /Data /EF << /F ${embeddedFileObjectNumber} 0 R /UF ${embeddedFileObjectNumber} 0 R >> >>`,
+      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Params << /Size ${embeddedFileSize} >> /Length ${embeddedFileSize} >>\nstream\n${embeddedFile}\nendstream`,
     );
   }
 
@@ -136,32 +173,63 @@ async function verifyReady() {
       await delay(2_000);
     }
   }
-  if (lastFailure) fail('official clamd did not become ready within three minutes.');
+  if (lastFailure) {
+    record('clean-file', 'FAIL', { verdict: 'scanner-unavailable' });
+    report.status = 'FAIL';
+    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    fail('official clamd did not become ready within three minutes.');
+  }
   record('clean-file', 'PASS', { verdict: 'clean' });
-  await cleanService.assertClean(pdfBytes());
-  record('clean-pdf', 'PASS', { verdict: 'clean' });
+  await recordVerdict('clean-pdf', () => cleanService.assertClean(pdfBytes()), undefined, 'clean');
 
   const eicar = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
-  await expectHttpStatus(cleanService.assertClean(Buffer.from(eicar, 'ascii')), 422);
-  record('eicar-detection', 'PASS', { verdict: 'infected-rejected' });
-  await expectHttpStatus(cleanService.assertClean(pdfBytes(eicar)), 422);
-  record('eicar-pdf-detection', 'PASS', { verdict: 'infected-rejected' });
+  await recordVerdict(
+    'eicar-detection',
+    () => cleanService.assertClean(Buffer.from(eicar, 'ascii')),
+    422,
+    'infected-rejected',
+  );
+  await recordVerdict(
+    'eicar-pdf-detection',
+    () => cleanService.assertClean(pdfBytes(eicar)),
+    422,
+    'infected-rejected',
+  );
 }
 
 async function verifyFailureModes() {
-  execFileSync('docker', ['pause', container], { stdio: 'ignore' });
-  const pausedAt = Date.now();
+  let pausedAt = Date.now();
   try {
-    await expectHttpStatus(
+    execFileSync('docker', ['pause', container], { stdio: 'ignore' });
+    pausedAt = Date.now();
+    const error = await expectHttpStatus(
       service({ CLAMAV_TIMEOUT_MS: 1_500 }).assertClean(Buffer.from('timeout probe')),
       503,
     );
     const elapsedMs = Date.now() - pausedAt;
-    if (elapsedMs < 1_000 || elapsedMs > 6_000)
-      fail(`paused daemon did not exercise the configured socket timeout (${elapsedMs} ms).`);
-    record('paused-daemon-timeout', 'PASS', { elapsedMs, verdict: 'release-blocked' });
+    const elapsedInRange = elapsedMs >= 1_000 && elapsedMs <= 6_000;
+    record('paused-daemon-timeout', elapsedInRange ? 'PASS' : 'FAIL', {
+      expectedStatus: 503,
+      actualStatus: statusOf(error),
+      elapsedMs,
+      verdict: elapsedInRange ? 'release-blocked' : 'unexpected-timeout-duration',
+    });
+  } catch (error) {
+    record('paused-daemon-timeout', 'FAIL', {
+      expectedStatus: 503,
+      actualStatus: statusOf(error) ?? null,
+      verdict:
+        error instanceof Error && error.message.includes('scanner request unexpectedly succeeded')
+          ? 'unexpectedly-accepted'
+          : 'timeout-probe-failed',
+    });
   } finally {
-    execFileSync('docker', ['unpause', container], { stdio: 'ignore' });
+    try {
+      execFileSync('docker', ['unpause', container], { stdio: 'ignore' });
+      record('clamav-resumed-after-timeout', 'PASS', { verdict: 'daemon-resumed' });
+    } catch {
+      record('clamav-resumed-after-timeout', 'FAIL', { verdict: 'daemon-not-resumed' });
+    }
   }
 
   const recoveryDeadline = Date.now() + 30_000;
@@ -176,11 +244,25 @@ async function verifyFailureModes() {
       await delay(1_000);
     }
   }
-  if (!recovered) fail('clamd did not recover after the pause was released.');
+  record('post-timeout-recovery', recovered ? 'PASS' : 'FAIL', {
+    verdict: recovered ? 'daemon-available' : 'daemon-did-not-recover',
+  });
 
-  execFileSync('docker', ['stop', container], { stdio: 'ignore' });
-  await expectHttpStatus(service().assertClean(Buffer.from('unavailable probe')), 503);
-  record('stopped-daemon-unavailable', 'PASS', { verdict: 'release-blocked' });
+  try {
+    execFileSync('docker', ['stop', container], { stdio: 'ignore' });
+    await recordExpectedStatus(
+      'stopped-daemon-unavailable',
+      () => service().assertClean(Buffer.from('unavailable probe')),
+      503,
+      { verdict: 'release-blocked' },
+    );
+  } catch (error) {
+    record('stopped-daemon-unavailable', 'FAIL', {
+      expectedStatus: 503,
+      actualStatus: statusOf(error) ?? null,
+      verdict: 'daemon-stop-probe-failed',
+    });
+  }
 }
 
 const mode = process.argv[2];
@@ -189,10 +271,11 @@ else if (mode === '--failure-modes') await verifyFailureModes();
 else fail('expected --ready or --failure-modes.');
 
 const results = Object.values(report.results);
-if (results.some((result) => result.status !== 'PASS')) fail('one or more scanner checks failed.');
 if (mode === '--ready') {
-  report.status = 'READY';
+  report.status = results.every((result) => result.status === 'PASS') ? 'READY' : 'FAIL';
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  if (report.status !== 'READY')
+    fail('one or more clean/EICAR scanner checks failed; see sanitized report.');
 }
 if (mode === '--failure-modes') {
   report.status = Object.values(report.results).every((result) => result.status === 'PASS')

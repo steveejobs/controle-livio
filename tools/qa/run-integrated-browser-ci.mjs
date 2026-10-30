@@ -381,14 +381,24 @@ try {
     'API and web are ready; starting one Chromium worker with real local Auth/API/DB/Storage.',
   );
   console.log('Retesting the navigation close path and four previously failing UI workflows.');
-  await runPlaywrightSuite(
-    'integrated-playwright-report-focused.json',
-    'carregamento sob demanda|jornada [1-4]:',
-  );
-  console.log(
-    'Focused UI workflows passed; running all nine integrated scenarios and both viewports.',
-  );
-  await runPlaywrightSuite('integrated-playwright-report-full.json', undefined);
+  for (const [reportName, grep] of [
+    ['integrated-playwright-report-focused.json', 'carregamento sob demanda|jornada [1-4]:'],
+    ['integrated-playwright-report-full.json', undefined],
+  ]) {
+    try {
+      await runPlaywrightSuite(reportName, grep);
+    } catch (error) {
+      runFailed = true;
+      const safeMessage = sanitize(
+        error instanceof Error ? error.message : 'Falha integrada sem detalhe.',
+      );
+      console.error(`${reportName} failed; sanitized report was retained: ${safeMessage}`);
+    }
+    if (reportName === 'integrated-playwright-report-focused.json')
+      console.log(
+        'Focused run finished; running the full integrated suite regardless of its result.',
+      );
+  }
 } catch (error) {
   runFailed = true;
   console.error(sanitize(error instanceof Error ? error.message : 'Falha integrada sem detalhe.'));

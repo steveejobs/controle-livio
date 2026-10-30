@@ -511,7 +511,7 @@ const grantSnapshot = (database) =>
         CROSS JOIN LATERAL aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) x
       WHERE n.nspname = 'public'
       UNION ALL
-      SELECT 'DEFAULT:' || n.nspname || ':' || pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype || ':' ||
+      SELECT 'DEFAULT:' || n.nspname || ':' || pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype::text || ':' ||
         x.privilege_type || ':' || CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
       FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
         CROSS JOIN LATERAL aclexplode(d.defaclacl) x

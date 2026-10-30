@@ -81,6 +81,7 @@ jobs:
       - name: Install the single browser used by the integrated suite
         run: npx playwright install --with-deps chromium
       - name: Start disposable Supabase and export loopback-only credentials
+        id: supabase-start
         run: node tools/qa/prepare-local-supabase-ci.mjs
       - name: Start official ClamAV bound to runner loopback
         id: clamav-start
@@ -91,11 +92,13 @@ jobs:
         id: clamav-ready
         run: node tools/qa/validate-clamav-ci.mjs --ready
       - name: Test real Auth, PostgreSQL RLS and Storage isolation
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
         run: npm run test:supabase
       - name: Run authenticated browser and workflow journeys
+        if: ${{ always() && steps.supabase-start.outcome == 'success' && steps.clamav-start.outcome == 'success' }}
         run: node tools/qa/run-integrated-browser-ci.mjs
       - name: Verify scanner timeout and unavailable fail-closed behavior
-        if: ${{ always() && steps.clamav-start.outcome == 'success' && steps.clamav-ready.outcome == 'success' }}
+        if: ${{ always() && steps.clamav-start.outcome == 'success' }}
         run: node tools/qa/validate-clamav-ci.mjs --failure-modes
       - name: Upload sanitized integrated evidence
         if: always()

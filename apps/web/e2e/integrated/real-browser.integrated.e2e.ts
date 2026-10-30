@@ -1181,10 +1181,11 @@ function pdfBytes(embeddedFile?: string): number[] {
   if (embeddedFile !== undefined) {
     const fileSpecObjectNumber = objects.length + 1;
     const embeddedFileObjectNumber = objects.length + 2;
-    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> >>`;
+    const embeddedFileSize = Buffer.byteLength(embeddedFile, 'ascii');
+    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> /AF [${fileSpecObjectNumber} 0 R] >>`;
     objects.push(
-      `<< /Type /Filespec /F (eicar.com) /EF << /F ${embeddedFileObjectNumber} 0 R >> >>`,
-      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Length ${Buffer.byteLength(embeddedFile, 'ascii')} >>\nstream\n${embeddedFile}\nendstream`,
+      `<< /Type /Filespec /F (eicar.com) /UF (eicar.com) /Desc (ClamAV EICAR scanner test) /AFRelationship /Data /EF << /F ${embeddedFileObjectNumber} 0 R /UF ${embeddedFileObjectNumber} 0 R >> >>`,
+      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Params << /Size ${embeddedFileSize} >> /Length ${embeddedFileSize} >>\nstream\n${embeddedFile}\nendstream`,
     );
   }
   let document = '%PDF-1.4\n';
