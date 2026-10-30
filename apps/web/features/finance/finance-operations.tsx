@@ -3,6 +3,7 @@
 import { Fragment, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { addMonths, decimalToCents, formatDate, formatMoney, splitAmount } from '../shared/format';
+import { ClientSelectField } from '../shared/client-select-field';
 import { LoadMore } from '../shared/load-more';
 import { useApiData } from '../shared/use-api-data';
 import { useNearViewport } from '../shared/use-near-viewport';
@@ -280,6 +281,7 @@ export function FinanceOperations({
   const canApproveExpenses = permissions.includes('expenses:approve');
   const canCreateDocuments = permissions.includes('documents:create');
   const canViewDocuments = permissions.includes('documents:view');
+  const canViewClients = permissions.includes('clients:view');
   const canManageExpensePolicy = isAdministrator && permissions.includes('organization:update');
   const [mode, setMode] = useState<'receivable' | 'payment' | 'expense'>(
     canCreateReceivable ? 'receivable' : canCreatePayment ? 'payment' : 'expense',
@@ -295,9 +297,13 @@ export function FinanceOperations({
     (mode === 'expense' && canCreateExpense) ||
     Boolean(editingExpense);
   const clients = usePaginatedData<Client>(
-    permissions.includes('clients:view') && clientsNeededForForm ? '/clients' : undefined,
+    canViewClients && clientsNeededForForm ? '/clients' : undefined,
     100,
   );
+  const clientOptionsReady =
+    canViewClients && Boolean(clients.data?.items.length) && !clients.loading && !clients.error;
+  const clientOptionsLoading =
+    clients.loading || (clientsNeededForForm && canViewClients && !clients.data && !clients.error);
   const [selectedClient, setSelectedClient] = useState('');
   const [receivableClientId, setReceivableClientId] = useState('');
   const [receivableContractId, setReceivableContractId] = useState('');
@@ -812,16 +818,11 @@ export function FinanceOperations({
       <OperationFeedback message={feedback} />
       <OperationFeedback
         message={
-          (clients.error && !clients.data) || receivables.error || payments.error
-            ? `Erro: ${(clients.error || receivables.error || payments.error)?.message}`
+          receivables.error || payments.error
+            ? `Erro: ${(receivables.error || payments.error)?.message}`
             : undefined
         }
       />
-      {clients.error && !clients.data && (
-        <button type="button" className="secondary" onClick={clients.retry}>
-          Tentar carregar clientes novamente
-        </button>
-      )}
       {clients.data && (canCreateReceivable || canCreatePayment || canCreateExpense) && (
         <LoadMore
           shown={clients.data.items.length}
@@ -834,27 +835,20 @@ export function FinanceOperations({
       )}
       {canCreateReceivable && mode === 'receivable' ? (
         <form className="surface form-grid" data-reveal onSubmit={createReceivable}>
-          <label>
-            Cliente
-            <select
-              required
-              name="clientId"
-              value={receivableClientId}
-              onChange={(event) => {
-                setReceivableClientId(event.target.value);
-                setReceivableContractId('');
-              }}
-            >
-              <option value="" disabled>
-                Selecione
-              </option>
-              {clients.data?.items.map((item) => (
-                <option value={item.id} key={item.id}>
-                  {item.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ClientSelectField
+            items={clients.data?.items}
+            loading={clientOptionsLoading}
+            error={clients.error?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            name="clientId"
+            value={receivableClientId}
+            onChange={(event) => {
+              setReceivableClientId(event.target.value);
+              setReceivableContractId('');
+            }}
+            required
+          />
           <label>
             Contrato associado (opcional)
             <select
@@ -916,34 +910,43 @@ export function FinanceOperations({
             Primeiro vencimento
             <input name="firstDueDate" type="date" defaultValue={today()} required />
           </label>
-          <button className="primary form-wide" disabled={busy}>
+          <button className="primary form-wide" disabled={busy || !clientOptionsReady}>
             {busy ? 'Salvando…' : 'Criar cobrança e parcelas'}
           </button>
         </form>
       ) : mode === 'payment' && canCreatePayment ? (
         <form className="surface form-grid" data-reveal onSubmit={createPayment}>
-          <label>
-            Cliente
-            <select
-              required
-              value={selectedClient}
-              onChange={(event) => setSelectedClient(event.target.value)}
-            >
-              <option value="" disabled>
-                Selecione um cliente
-              </option>
-              {clients.data?.items.map((item) => (
-                <option value={item.id} key={item.id}>
-                  {item.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ClientSelectField
+            items={clients.data?.items}
+            loading={clientOptionsLoading}
+            error={clients.error?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            value={selectedClient}
+            onChange={(event) => setSelectedClient(event.target.value)}
+            required
+          />
           <label className="form-wide">
             Parcela
-            <select required name="installmentId" defaultValue="">
+            <select
+              required
+              name="installmentId"
+              defaultValue=""
+              disabled={!selectedClient || paymentReceivables.loading || !paymentReceivables.data}
+              aria-busy={
+                Boolean(selectedClient && !paymentReceivables.data && !paymentReceivables.error) ||
+                paymentReceivables.loading
+              }
+            >
               <option value="" disabled>
-                Selecione uma parcela aberta
+                {!selectedClient
+                  ? 'Selecione um cliente primeiro'
+                  : paymentReceivables.loading ||
+                      (!paymentReceivables.data && !paymentReceivables.error)
+                    ? 'Carregando parcelas deste cliente…'
+                    : paymentReceivables.error
+                      ? 'Não foi possível carregar parcelas'
+                      : 'Selecione uma parcela aberta'}
               </option>
               {openInstallments.map((item) => (
                 <option value={item.id} key={item.id}>
@@ -1001,27 +1004,22 @@ export function FinanceOperations({
               <option>Dinheiro</option>
             </select>
           </label>
-          <button className="primary form-wide" disabled={busy}>
+          <button className="primary form-wide" disabled={busy || !clientOptionsReady}>
             {busy ? 'Confirmando…' : 'Confirmar pagamento'}
           </button>
         </form>
       ) : mode === 'expense' && canCreateExpense ? (
         <form className="surface form-grid" data-reveal onSubmit={createExpense}>
-          <label>
-            Cliente
-            <select
-              name="clientId"
-              value={expenseClientId}
-              onChange={(event) => setExpenseClientId(event.target.value)}
-            >
-              <option value="">Sem vínculo</option>
-              {clients.data?.items.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ClientSelectField
+            items={clients.data?.items}
+            loading={clientOptionsLoading}
+            error={clients.error?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            value={expenseClientId}
+            onChange={(event) => setExpenseClientId(event.target.value)}
+            allowUnlinked
+          />
           <label>
             Processo
             <select name="matterId" defaultValue="">
@@ -1874,17 +1872,16 @@ export function FinanceOperations({
                               className="form-grid expense-edit-form"
                               onSubmit={(event) => updateExpense(event, item)}
                             >
-                              <label>
-                                Cliente
-                                <select name="clientId" defaultValue={item.clientId ?? ''}>
-                                  <option value="">Sem vínculo</option>
-                                  {clients.data?.items.map((client) => (
-                                    <option value={client.id} key={client.id}>
-                                      {client.displayName}
-                                    </option>
-                                  ))}
-                                </select>
-                              </label>
+                              <ClientSelectField
+                                items={clients.data?.items}
+                                loading={clientOptionsLoading}
+                                error={clients.error?.message}
+                                onRetry={clients.retry}
+                                canListClients={canViewClients}
+                                name="clientId"
+                                defaultValue={item.clientId ?? ''}
+                                allowUnlinked
+                              />
                               <label>
                                 Processo
                                 <select name="matterId" defaultValue={item.matterId ?? ''}>

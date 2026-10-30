@@ -1,4 +1,9 @@
-import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  NotFoundException,
+  ServiceUnavailableException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import type { AuthenticatedActor } from '@livio/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { DocumentsService } from './documents.service';
@@ -12,6 +17,44 @@ const actor: AuthenticatedActor = {
 };
 
 describe('documentos privados', () => {
+  it.each([
+    ['arquivo infectado', new UnprocessableEntityException('Arquivo de teste bloqueado')],
+    ['scanner indisponível', new ServiceUnavailableException('Scanner de teste indisponível')],
+  ])('%s não chega ao Storage nem cria metadados', async (_scenario, scannerError) => {
+    const documentCreate = vi.fn();
+    const transaction = vi.fn();
+    const prisma = { document: { create: documentCreate }, $transaction: transaction };
+    const storage = { upload: vi.fn(), remove: vi.fn() };
+    const audit = { record: vi.fn() };
+    const scanner = { assertClean: vi.fn().mockRejectedValue(scannerError) };
+    const service = new DocumentsService(
+      prisma as never,
+      storage as never,
+      audit as never,
+      { get: vi.fn().mockReturnValue(4) } as never,
+      {} as never,
+      {} as never,
+      scanner as never,
+    );
+    const bytes = Buffer.from('%PDF-1.7 synthetic QA document');
+
+    await expect(
+      service.create(actor, { title: 'Documento seguro de teste', visibility: 'INTERNAL' }, {
+        originalname: 'qa-document.pdf',
+        mimetype: 'application/pdf',
+        size: bytes.length,
+        buffer: bytes,
+      } as Express.Multer.File),
+    ).rejects.toBe(scannerError);
+
+    expect(scanner.assertClean).toHaveBeenCalledWith(bytes);
+    expect(storage.upload).not.toHaveBeenCalled();
+    expect(storage.remove).not.toHaveBeenCalled();
+    expect(transaction).not.toHaveBeenCalled();
+    expect(documentCreate).not.toHaveBeenCalled();
+    expect(audit.record).not.toHaveBeenCalled();
+  });
+
   it('não permite que o filtro da listagem substitua o cliente autenticado do portal', async () => {
     const findMany = vi.fn().mockResolvedValue([]);
     const count = vi.fn().mockResolvedValue(0);

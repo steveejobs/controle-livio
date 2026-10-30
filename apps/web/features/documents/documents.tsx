@@ -4,6 +4,7 @@ import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate } from '../shared/format';
+import { ClientSelectField } from '../shared/client-select-field';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 import { DocumentTemplateEditor } from './document-template-editor';
@@ -56,12 +57,13 @@ export function Documents({
   permissions: readonly string[];
   isAdministrator: boolean;
 }) {
+  const canViewClients = permissions.includes('clients:view');
+  const [showUpload, setShowUpload] = useState(false);
   const documents = usePaginatedData<DocumentItem>('/documents');
   const clients = usePaginatedData<Client>(
-    permissions.includes('clients:view') ? '/clients' : undefined,
+    canViewClients && showUpload ? '/clients' : undefined,
     100,
   );
-  const [showUpload, setShowUpload] = useState(false);
   const [versionFor, setVersionFor] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
@@ -372,19 +374,15 @@ export function Documents({
               <option value="CLIENT">Visível ao cliente</option>
             </select>
           </label>
-          {clients.data && (
-            <label>
-              Cliente
-              <select name="clientId" defaultValue="">
-                <option value="">Sem vínculo</option>
-                {clients.data.items.map((client) => (
-                  <option key={client.id} value={client.id}>
-                    {client.displayName}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <ClientSelectField
+            items={clients.data?.items}
+            loading={clients.loading || (!clients.data && !clients.error && canViewClients)}
+            error={clients.error?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            name="clientId"
+            allowUnlinked
+          />
           {clients.data && (
             <div className="form-wide">
               <LoadMore

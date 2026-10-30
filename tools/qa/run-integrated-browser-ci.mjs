@@ -160,6 +160,11 @@ const webEnv = {
 
 const testEnv = { ...webEnv, NODE_ENV: 'test' };
 testEnv.LIVIO_QA_OUTPUT = outputDir;
+testEnv.GITHUB_RUN_ID = process.env.GITHUB_RUN_ID;
+testEnv.CLAMAV_HOST = process.env.CLAMAV_HOST;
+testEnv.CLAMAV_PORT = process.env.CLAMAV_PORT;
+testEnv.LIVIO_CLAMAV_INTEGRATION_FAILURES =
+  process.env.CLAMAV_HOST === '127.0.0.1' && process.env.CLAMAV_PORT === '13310' ? 'true' : 'false';
 const sensitiveValues = [
   process.env.DATABASE_URL,
   process.env.SUPABASE_ANON_KEY,

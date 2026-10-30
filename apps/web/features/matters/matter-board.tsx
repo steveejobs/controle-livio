@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { Empty, Loading, Notice, Title } from '../shared/crm-ui';
+import { ClientSelectField } from '../shared/client-select-field';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 
@@ -90,6 +91,7 @@ export function MatterBoard({
   permissions: readonly string[];
 }) {
   const canViewPipelines = permissions.includes('pipelines:view');
+  const canViewClients = permissions.includes('clients:view');
   const canCreate = permissions.includes('matters:create');
   const canMove = permissions.includes('matters:update');
   const description = Array.isArray(kind)
@@ -107,9 +109,14 @@ export function MatterBoard({
     error: pipeError,
     reload: reloadPipes,
   } = useLoad<Pipeline[]>(canViewPipelines ? '/pipelines' : undefined);
-  const clients = usePaginatedData<Client>(canCreate && showForm ? '/clients' : undefined, 100);
+  const clients = usePaginatedData<Client>(
+    canCreate && showForm && canViewClients ? '/clients' : undefined,
+    100,
+  );
   const clientPage = clients.data;
   const clientsError = clients.error;
+  const clientOptionsReady =
+    canViewClients && Boolean(clientPage?.items.length) && !clients.loading && !clientsError;
   const {
     data: matters,
     error,
@@ -333,19 +340,15 @@ export function MatterBoard({
       )}
       {showForm && canCreate && (
         <form className="surface form-grid" onSubmit={create}>
-          <label>
-            Cliente
-            <select required name="clientId" defaultValue="">
-              <option value="" disabled>
-                Selecione
-              </option>
-              {clientPage?.items.map((client) => (
-                <option value={client.id} key={client.id}>
-                  {client.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ClientSelectField
+            items={clientPage?.items}
+            loading={clients.loading || (!clientPage && !clientsError && canViewClients)}
+            error={clientsError?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            name="clientId"
+            required
+          />
           {clientPage && (
             <div className="form-wide">
               <LoadMore
@@ -419,7 +422,11 @@ export function MatterBoard({
                 <>
                   <label>
                     Advogado responsável (opcional)
-                    <select name="responsibleLawyerId" defaultValue="">
+                    <select
+                      name="responsibleLawyerId"
+                      defaultValue=""
+                      aria-busy={!lawyers.data && !lawyers.error}
+                    >
                       <option value="">Definir depois</option>
                       {lawyers.data?.map((lawyer) => (
                         <option value={lawyer.id} key={lawyer.id}>
@@ -427,6 +434,14 @@ export function MatterBoard({
                         </option>
                       ))}
                     </select>
+                    {!lawyers.data && !lawyers.error && (
+                      <small role="status">Carregando advogados ativos da organização…</small>
+                    )}
+                    {lawyers.data?.length === 0 && (
+                      <small role="status">
+                        Nenhum advogado ativo está disponível para atribuição.
+                      </small>
+                    )}
                     <small>Mostramos apenas advogados ativos desta organização.</small>
                   </label>
                   {lawyers.error && (
@@ -492,14 +507,18 @@ export function MatterBoard({
           )}
           <button
             className="primary form-wide"
-            disabled={moving === 'create' || (isUnifiedCrm && !selectedPipelines.length)}
+            disabled={
+              moving === 'create' ||
+              !clientOptionsReady ||
+              (isUnifiedCrm && !selectedPipelines.length)
+            }
           >
             {moving === 'create' ? 'Cadastrando…' : createButtonLabel}
           </button>
         </form>
       )}
       <Notice
-        error={pipeError ?? clientsError ?? (!matters ? error : undefined)}
+        error={pipeError ?? (!matters ? error : undefined)}
         onRetry={() => {
           void reload();
           void reloadPipes();

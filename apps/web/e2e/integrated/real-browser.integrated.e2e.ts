@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   expect,
@@ -436,6 +437,27 @@ async function selectFormOptionByLabel(
   });
   await expect(select, `${workflow}: one accessible ${fieldLabel} control`).toHaveCount(1);
   await expect(select, `${workflow}: ${fieldLabel} control`).toBeVisible();
+  const expectedOption = select.getByRole('option', { name: optionLabel, exact: true });
+  try {
+    await expect(
+      expectedOption,
+      `${workflow}: wait for the ${fieldLabel} option ${optionLabel} to load`,
+    ).toHaveCount(1);
+  } catch (error) {
+    const availableOptions = await select.locator('option').evaluateAll((elements) =>
+      elements.map((element) => {
+        const option = element as HTMLOptionElement;
+        return { label: option.label.trim(), value: option.value };
+      }),
+    );
+    markWorkflowStage(page, workflow, `${stage}-option-load-failed`, {
+      fieldLabel,
+      optionLabel,
+      availableOptions,
+      expectedFixtureValue: expectedFixtureValue ?? null,
+    });
+    throw error;
+  }
   const option = await select.evaluate((element, targetLabel) => {
     const matchingOptions = Array.from((element as HTMLSelectElement).options).filter(
       (candidate) => candidate.label.trim() === targetLabel,
@@ -992,7 +1014,7 @@ async function browserUpload(
   );
 }
 
-function pdfBytes(): number[] {
+function pdfBytes(comment?: string): number[] {
   const stream = 'BT /F1 12 Tf 20 70 Td (Synthetic local QA document) Tj ET';
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -1007,6 +1029,7 @@ function pdfBytes(): number[] {
     offsets.push(Buffer.byteLength(document));
     document += `${index + 1} 0 obj\n${object}\nendobj\n`;
   }
+  if (comment) document += `% ${comment}\n`;
   const xrefOffset = Buffer.byteLength(document);
   document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
   for (const offset of offsets.slice(1))
@@ -1015,19 +1038,71 @@ function pdfBytes(): number[] {
   return [...Buffer.from(document, 'ascii')];
 }
 
+function ownedClamavContainer(): string {
+  const runId = process.env.GITHUB_RUN_ID;
+  const runnerTemp = process.env.RUNNER_TEMP;
+  const expectedName = `livio-clamav-${runId}`;
+  if (
+    process.env.GITHUB_ACTIONS !== 'true' ||
+    process.env.RUNNER_OS !== 'Linux' ||
+    !/^\d+$/.test(runId ?? '') ||
+    !runnerTemp ||
+    process.env.CLAMAV_HOST !== '127.0.0.1' ||
+    process.env.CLAMAV_PORT !== '13310'
+  ) {
+    throw new Error("ClamAV integration failures require this run's loopback-only Linux service.");
+  }
+  const markerPath = join(runnerTemp, `${expectedName}.json`);
+  if (!existsSync(markerPath)) throw new Error('ClamAV run ownership marker is missing.');
+  const metadata = JSON.parse(readFileSync(markerPath, 'utf8')) as {
+    name?: string;
+    containerId?: string;
+  };
+  if (metadata.name !== expectedName || !metadata.containerId)
+    throw new Error('ClamAV service does not match this workflow run.');
+  return expectedName;
+}
+
+function controlClamavContainer(action: 'pause' | 'unpause' | 'stop' | 'start', name: string) {
+  execFileSync('docker', [action, name], { stdio: 'ignore' });
+}
+
 function dateInput(offsetDays = 0) {
   const value = new Date();
   value.setUTCDate(value.getUTCDate() + offsetDays);
   return value.toISOString().slice(0, 10);
 }
 
-function reportRange() {
+function reportDateRange() {
   const from = new Date();
   from.setUTCDate(from.getUTCDate() - 2);
   from.setUTCHours(0, 0, 0, 0);
   const to = new Date(from);
   to.setUTCDate(to.getUTCDate() + 7);
-  return `from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&groupBy=day`;
+  return {
+    from: from.toISOString(),
+    to: to.toISOString(),
+    fromDate: from.toISOString().slice(0, 10),
+    toDate: to.toISOString().slice(0, 10),
+  };
+}
+
+function reportRange(range = reportDateRange()) {
+  return `from=${encodeURIComponent(range.from)}&to=${encodeURIComponent(range.to)}&groupBy=day`;
+}
+
+function cashFlowPaidExpenseUnits(rows: Array<{ paid_expenses: string }>) {
+  return rows.reduce((total, row) => total + amountUnits(row.paid_expenses), 0n);
+}
+
+function formatCurrencyUnits(value: bigint) {
+  if (value % 100n !== 0n) throw new Error(`Currency has sub-cent precision: ${value}`);
+  const cents = value / 100n;
+  const sign = cents < 0n ? '-' : '';
+  const absoluteCents = cents < 0n ? -cents : cents;
+  const whole = (absoluteCents / 100n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const fraction = (absoluteCents % 100n).toString().padStart(2, '0');
+  return `R$ ${sign}${whole},${fraction}`;
 }
 
 function assertStatus(result: BrowserResult, expected: number, label: string) {
@@ -1462,6 +1537,22 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       await expect(page.getByText(reference, { exact: true })).toBeVisible();
       await expect(page.getByText('Advogado Aurora', { exact: true })).toBeVisible();
 
+      const statusSelect = page.getByLabel(`Status de ${matterTitle}`);
+      const statusUpdate = page.waitForResponse(
+        (response) =>
+          response.url().includes(`/v1/matters/${createdMatter.id}`) &&
+          response.request().method() === 'PATCH',
+      );
+      await statusSelect.selectOption('ACTIVE');
+      const statusResponse = await statusUpdate;
+      expect(statusResponse.status()).toBe(200);
+      expect(statusResponse.request().postDataJSON()).toEqual({ status: 'ACTIVE' });
+      await expectOperationFeedback(page, 'Processo atualizado.');
+      const persistedStatus = await browserApi(page, `/matters/${createdMatter.id}`);
+      assertStatus(persistedStatus, 200, 'read matter after status update');
+      expect(bodyAs<{ status: string }>(persistedStatus).status).toBe('ACTIVE');
+      confirmPersistence(page, 'update-matter-status');
+
       await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
       const duplicateForm = await formWithSubmitButton(page, 'Cadastrar processo');
       await selectFormOptionByLabel(
@@ -1792,9 +1883,12 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       expect(duplicatePayment.status()).toBe(409);
       expect(await duplicatePayment.json()).toMatchObject({
         code: 'conflict',
-        message: 'Chave idempotente já usada com outro conteúdo',
+        message: 'Já existe um registro com esses dados. Confira as informações e tente novamente.',
       });
-      await expectOperationFeedback(page, 'Erro: Chave idempotente já usada com outro conteúdo');
+      await expectOperationFeedback(
+        page,
+        'Erro: Já existe um registro com esses dados. Confira as informações e tente novamente.',
+      );
       await expect(
         page
           .getByLabel('Parcela')
@@ -1896,6 +1990,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
     const adminPage = await adminContext.newPage();
     try {
       await login(financePage, 'financeiro.aurora@example.test');
+      const cashFlowWindow = reportDateRange();
       const suffix = randomUUID().slice(0, 8);
       const description = `Despesa QA ${suffix}`;
       await navigateTo(financePage, /Receb/);
@@ -1975,6 +2070,16 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       expect(approveExpenseResponse.status()).toBe(201);
       await expectOperationFeedback(adminPage, 'Despesa aprovada.');
       await expect(expenseRow).toContainText('Aguardando pagamento');
+
+      const cashFlowBeforePayment = await browserApi(
+        adminPage,
+        `/reports/cash-flow?${reportRange(cashFlowWindow)}`,
+      );
+      assertStatus(cashFlowBeforePayment, 200, 'read cash flow before expense payment');
+      const paidExpensesBeforePayment = cashFlowPaidExpenseUnits(
+        bodyAs<{ rows: Array<{ paid_expenses: string }> }>(cashFlowBeforePayment).rows,
+      );
+
       await expenseRow.getByRole('button', { name: 'Registrar pagamento' }).click();
       await adminPage.getByLabel('Valor integral').fill('42,25');
       await adminPage.getByLabel('Data do pagamento').fill(dateInput());
@@ -2017,10 +2122,43 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       });
       confirmPersistence(adminPage, 'pay-approved-expense');
 
-      const cashFlow = await browserApi(adminPage, `/reports/cash-flow?${reportRange()}`);
+      const expenseAudit = await browserApi(
+        adminPage,
+        `/audit-logs?category=changes&page=1&pageSize=100&search=${encodeURIComponent(expenseId)}`,
+      );
+      assertStatus(expenseAudit, 200, 'read expense audit trail');
+      const expenseAuditEntries = bodyAs<{
+        items: Array<{
+          kind: string;
+          action: string;
+          resource: string;
+          resourceId: string;
+          actorUserId?: string;
+        }>;
+      }>(expenseAudit).items.filter(
+        (entry) =>
+          entry.kind === 'CHANGE' && entry.resource === 'expense' && entry.resourceId === expenseId,
+      );
+      expect(expenseAuditEntries.map(({ action }) => action)).toEqual(
+        expect.arrayContaining(['CREATE', 'UPDATE', 'APPROVE']),
+      );
+      expect(expenseAuditEntries.length).toBeGreaterThanOrEqual(4);
+      const expenseCreator = expenseAuditEntries.find(({ action }) => action === 'CREATE');
+      const expenseApprover = expenseAuditEntries.find(({ action }) => action === 'APPROVE');
+      expect(expenseCreator?.actorUserId).toBeTruthy();
+      expect(expenseApprover?.actorUserId).toBeTruthy();
+      expect(expenseApprover?.actorUserId).not.toBe(expenseCreator?.actorUserId);
+
+      const cashFlow = await browserApi(
+        adminPage,
+        `/reports/cash-flow?${reportRange(cashFlowWindow)}`,
+      );
       assertStatus(cashFlow, 200, 'read cash flow');
       const rows = bodyAs<{ rows: Array<{ paid_expenses: string }> }>(cashFlow).rows;
-      expect(rows.some((row) => Number(row.paid_expenses) >= 42.25)).toBe(true);
+      const paidExpensesAfterPayment = cashFlowPaidExpenseUnits(rows);
+      expect(paidExpensesAfterPayment - paidExpensesBeforePayment).toBe(
+        amountUnits(persistedExpense!.amount),
+      );
 
       await adminPage.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(adminPage, /Receb/);
@@ -2032,12 +2170,41 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await expect(
         adminPage.getByRole('heading', { name: 'Relatórios', exact: true }),
       ).toBeVisible();
-      await adminPage
-        .locator('.report-filters')
-        .getByRole('combobox')
-        .nth(0)
-        .selectOption('cash-flow');
-      await expect(adminPage.locator('tbody')).toContainText('42,25');
+      const reportFilters = adminPage.locator('.report-filters');
+      await reportFilters.getByLabel('Relatório').selectOption('cash-flow');
+      await reportFilters.getByLabel('Data inicial').fill(cashFlowWindow.fromDate);
+      await reportFilters.getByLabel('Data final').fill(cashFlowWindow.toDate);
+      const displayedCashFlowPromise = adminPage.waitForResponse((response) => {
+        const url = new URL(response.url());
+        return (
+          url.pathname.endsWith('/v1/reports/cash-flow') &&
+          url.searchParams.get('groupBy') === 'day' &&
+          url.searchParams.get('from') === cashFlowWindow.fromDate &&
+          url.searchParams.get('to') === cashFlowWindow.toDate
+        );
+      });
+      await reportFilters.getByLabel('Agrupar por').selectOption('day');
+      const displayedCashFlow = await displayedCashFlowPromise;
+      expect(displayedCashFlow.status()).toBe(200);
+      const displayedRows = (
+        (await displayedCashFlow.json()) as { rows: Array<{ paid_expenses: string }> }
+      ).rows;
+      expect(displayedRows.map(({ paid_expenses }) => amountUnits(paid_expenses))).toEqual(
+        rows.map(({ paid_expenses }) => amountUnits(paid_expenses)),
+      );
+      const reportTable = adminPage.getByRole('table');
+      const headers = await reportTable.locator('thead th').allTextContents();
+      const paidExpensesColumn = headers.findIndex(
+        (header) => header.trim().toLowerCase() === 'paid expenses',
+      );
+      expect(paidExpensesColumn).toBeGreaterThanOrEqual(0);
+      const renderedRows = reportTable.locator('tbody tr');
+      await expect(renderedRows).toHaveCount(displayedRows.length);
+      for (const [index, row] of displayedRows.entries()) {
+        await expect(renderedRows.nth(index).locator('td').nth(paidExpensesColumn)).toHaveText(
+          formatCurrencyUnits(amountUnits(row.paid_expenses)),
+        );
+      }
       await screenshotEvidence(adminPage, `journey-expense-cash-flow-${viewport.width}`);
     } finally {
       await financeContext.close();
@@ -2051,6 +2218,36 @@ async function pageExpenseSection(page: Page) {
   await expect(page.getByRole('heading', { name: 'Despesas', exact: true })).toBeVisible();
 }
 
+async function submitScannerProbe(page: Page, title: string, operation: string) {
+  const form = page.getByLabel('Nome do documento').locator('xpath=ancestor::form');
+  if ((await form.count()) === 0)
+    await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
+  await expect(form, `${operation}: document form`).toHaveCount(1);
+  await expect(form).toBeVisible();
+  await form.getByLabel('Nome do documento').fill(title);
+  await form.getByLabel('Visibilidade').selectOption('INTERNAL');
+  await form.getByLabel('Arquivo').setInputFiles({
+    name: `${operation}.pdf`,
+    mimeType: 'application/pdf',
+    buffer: Buffer.from(pdfBytes()),
+  });
+  return clickUiOperation(page, {
+    operation,
+    pathname: '/v1/documents',
+    form,
+    button: form.getByRole('button', { name: 'Enviar documento', exact: true }),
+    bodyField: { name: 'title', value: title },
+  });
+}
+
+async function expectNoPersistedDocument(page: Page, title: string) {
+  await expect(page.getByRole('row').filter({ hasText: title })).toHaveCount(0);
+  const response = await browserApi(page, '/documents?page=1&pageSize=100');
+  assertStatus(response, 200, `confirm blocked upload is absent: ${title}`);
+  const items = bodyAs<{ items: Array<{ title: string }> }>(response).items;
+  expect(items.some((document) => document.title === title)).toBe(false);
+}
+
 test('jornada 4: upload, download protegido e assinatura eletrônica no navegador', async ({
   browser,
 }) => {
@@ -2062,6 +2259,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await login(page, 'admin.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const title = `PDF de assinatura QA ${suffix}`;
+      const cleanPdf = Buffer.from(pdfBytes());
       await navigateTo(page, 'Documentos');
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
       const uploadForm = await formWithSubmitButton(page, 'Enviar documento');
@@ -2080,7 +2278,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await uploadForm.getByLabel('Arquivo').setInputFiles({
         name: `qa-${suffix}.pdf`,
         mimeType: 'application/pdf',
-        buffer: Buffer.from(pdfBytes()),
+        buffer: cleanPdf,
       });
       markWorkflowStage(page, 'journey-4-document-upload-download-signature', 'upload-form-ready');
       await screenshotEvidence(page, `journey-4-upload-form-ready-${viewport.width}`);
@@ -2110,7 +2308,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await infectedForm.getByLabel('Arquivo').setInputFiles({
         name: `eicar-${suffix}.pdf`,
         mimeType: 'application/pdf',
-        buffer: Buffer.concat([Buffer.from(pdfBytes()), Buffer.from(eicarTestFile, 'ascii')]),
+        buffer: Buffer.from(pdfBytes(eicarTestFile)),
       });
       const infectedResponse = await clickUiOperation(page, {
         operation: 'reject-infected-document-upload',
@@ -2160,7 +2358,9 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       expect(downloadResponse.status()).toBe(200);
       expect(downloadResponse.headers()['content-type']).toContain('application/pdf');
       const downloadedBytes = await downloadResponse.body();
-      expect(downloadedBytes).toHaveLength(pdfBytes().length);
+      const uploadedChecksum = createHash('sha256').update(cleanPdf).digest('hex');
+      const downloadedChecksum = createHash('sha256').update(downloadedBytes).digest('hex');
+      expect(downloadedChecksum).toBe(uploadedChecksum);
       recordOperationStage(page, 'request-protected-document-download', 'DOWNLOAD_BYTES_CONFIRMED');
       await documentPage.close();
 
@@ -2255,6 +2455,104 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       });
       await expectOperationFeedback(page, 'Erro: A requisição excede o limite de upload.');
       await expect(page.getByRole('row').filter({ hasText: oversizedTitle })).toHaveCount(0);
+
+      if (
+        process.env.LIVIO_CLAMAV_INTEGRATION_FAILURES === 'true' &&
+        process.env.LIVIO_PLAYWRIGHT_RUN === 'focused' &&
+        viewport.width === 360
+      ) {
+        const container = ownedClamavContainer();
+        const timeoutTitle = `Upload bloqueado por timeout QA ${suffix}`;
+        controlClamavContainer('pause', container);
+        try {
+          const timeoutStartedAt = Date.now();
+          const timeoutResponse = await submitScannerProbe(
+            page,
+            timeoutTitle,
+            'clamav-timeout-upload',
+          );
+          const timeoutElapsedMs = Date.now() - timeoutStartedAt;
+          expect(timeoutResponse.status()).toBe(503);
+          expect(timeoutElapsedMs).toBeGreaterThanOrEqual(8_500);
+          const timeoutBody = await timeoutResponse.json();
+          expect(timeoutBody).toMatchObject({
+            statusCode: 503,
+            code: 'service_unavailable',
+            message: 'Ocorreu um erro interno',
+          });
+          await expectOperationFeedback(page, 'Erro: Ocorreu um erro interno');
+          await expectNoPersistedDocument(page, timeoutTitle);
+          markWorkflowStage(page, 'document-upload-clamav-timeout', 'TIMEOUT_BLOCKED', {
+            status: timeoutResponse.status(),
+            code: timeoutBody.code,
+            message: timeoutBody.message,
+            elapsedMs: timeoutElapsedMs,
+            documentPersisted: false,
+          });
+          await screenshotEvidence(page, 'clamav-timeout-blocked-upload');
+        } finally {
+          controlClamavContainer('unpause', container);
+        }
+
+        const unavailableTitle = `Upload bloqueado sem scanner QA ${suffix}`;
+        controlClamavContainer('stop', container);
+        try {
+          const unavailableResponse = await submitScannerProbe(
+            page,
+            unavailableTitle,
+            'clamav-unavailable-upload',
+          );
+          expect(unavailableResponse.status()).toBe(503);
+          const unavailableBody = await unavailableResponse.json();
+          expect(unavailableBody).toMatchObject({
+            statusCode: 503,
+            code: 'service_unavailable',
+            message: 'Ocorreu um erro interno',
+          });
+          await expectOperationFeedback(page, 'Erro: Ocorreu um erro interno');
+          await expectNoPersistedDocument(page, unavailableTitle);
+          markWorkflowStage(page, 'document-upload-clamav-unavailable', 'UNAVAILABLE_BLOCKED', {
+            status: unavailableResponse.status(),
+            code: unavailableBody.code,
+            message: unavailableBody.message,
+            documentPersisted: false,
+          });
+          await screenshotEvidence(page, 'clamav-unavailable-blocked-upload');
+        } finally {
+          controlClamavContainer('start', container);
+        }
+
+        const recoveryDeadline = Date.now() + 90_000;
+        let recoveredDocument = false;
+        let recoveryAttempt = 0;
+        while (Date.now() < recoveryDeadline && !recoveredDocument) {
+          recoveryAttempt += 1;
+          const recoveryTitle = `Upload liberado apos recuperacao QA ${suffix} ${recoveryAttempt}`;
+          const recoveryOperation = `clamav-recovery-upload-${recoveryAttempt}`;
+          const recoveryResponse = await submitScannerProbe(page, recoveryTitle, recoveryOperation);
+          if (recoveryResponse.status() === 201) {
+            const document = (await recoveryResponse.json()) as { id: string; title: string };
+            expect(document.title).toBe(recoveryTitle);
+            await expectOperationFeedback(page, 'Documento enviado com seguranÃ§a.');
+            await expect(page.getByRole('row').filter({ hasText: recoveryTitle })).toBeVisible();
+            const persistedResponse = await browserApi(page, '/documents?page=1&pageSize=100');
+            assertStatus(persistedResponse, 200, 'confirm upload after ClamAV recovery');
+            expect(
+              bodyAs<{ items: Array<{ id: string; title: string }> }>(persistedResponse).items,
+            ).toContainEqual(expect.objectContaining({ id: document.id, title: recoveryTitle }));
+            confirmPersistence(page, recoveryOperation);
+            recoveredDocument = true;
+          } else {
+            expect(recoveryResponse.status()).toBe(503);
+            await expectOperationFeedback(page, 'Erro: Ocorreu um erro interno');
+            await page.waitForTimeout(1_000);
+          }
+        }
+        expect(recoveredDocument, 'ClamAV must accept uploads after the runner restarts it').toBe(
+          true,
+        );
+      }
+
       await screenshotEvidence(page, `journey-document-signed-${viewport.width}`);
     } finally {
       await context.close();

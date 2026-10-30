@@ -15,13 +15,14 @@ const multiWordTocDescriptions = [
   'DEFAULT ACL',
   'BLOB COMMENTS',
   'INDEX ATTACH',
+  'SECURITY LABEL',
   'FK CONSTRAINT',
   'CHECK CONSTRAINT',
   'USER MAPPING',
 ];
 
 // pg_restore TOC rows are structured as dump-id; catalog-id object-id description namespace tag owner.
-const parseTocEntry = (line) => {
+const parseTocEntry = (line, knownOwners = new Set()) => {
   if (!line.trim() || line.trimStart().startsWith(';')) return null;
   const separator = line.indexOf(';');
   if (separator < 1 || !/^\d+$/.test(line.slice(0, separator).trim())) return null;
@@ -39,8 +40,12 @@ const parseTocEntry = (line) => {
   const resolvedDescription = description ?? fields[2];
   const namespace = fields[2 + descriptionLength];
   const tagAndOwner = fields.slice(3 + descriptionLength);
-  const hasOwnerColumn = tagAndOwner.length > 1;
-  const owner = hasOwnerColumn ? tagAndOwner.at(-1) : undefined;
+  const commentLikeEntry =
+    resolvedDescription === 'COMMENT' || resolvedDescription === 'SECURITY LABEL';
+  const candidateOwner = tagAndOwner.at(-1);
+  const hasOwnerColumn =
+    tagAndOwner.length > 1 && (!commentLikeEntry || knownOwners.has(candidateOwner));
+  const owner = hasOwnerColumn ? candidateOwner : undefined;
   return {
     dumpId: Number(line.slice(0, separator).trim()),
     catalogId: Number(catalogId),
@@ -50,6 +55,17 @@ const parseTocEntry = (line) => {
     name: hasOwnerColumn ? tagAndOwner.slice(0, -1).join(' ') : tagAndOwner.join(' '),
     owner,
   };
+};
+
+const discoverTocOwners = (lines) => {
+  const owners = new Set(['postgres', 'supabase_admin', 'pg_database_owner']);
+  for (const line of lines) {
+    const entry = parseTocEntry(line);
+    if (entry?.owner && entry.description !== 'COMMENT' && entry.description !== 'SECURITY LABEL') {
+      owners.add(entry.owner);
+    }
+  }
+  return owners;
 };
 
 const referencesExcludedSchema = (entry) => {
@@ -82,9 +98,9 @@ const referencesExcludedScheduler = (entry) => {
   return false;
 };
 
-const filterUnsupportedTocEntries = (entries) =>
+const filterUnsupportedTocEntries = (entries, knownOwners = new Set()) =>
   entries.filter((line) => {
-    const entry = parseTocEntry(line);
+    const entry = parseTocEntry(line, knownOwners);
     return (
       entry?.description !== 'ACL' &&
       entry?.description !== 'DEFAULT ACL' &&
@@ -116,6 +132,19 @@ const restoreArguments = (target, restoreList, archive) => [
 ];
 const dockerExecArguments = (container, args) => ['exec', container, ...args];
 
+const normalizeDecimalText = (value) => {
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(value);
+  assert(match, `Invalid decimal value in restore assertion: ${value}`);
+  const whole = match[2].replace(/^0+(?=\d)/, '');
+  const fraction = (match[3] ?? '').replace(/0+$/, '');
+  const sign = match[1] === '-' && (whole !== '0' || fraction) ? '-' : '';
+  return `${sign}${whole}${fraction ? `.${fraction}` : ''}`;
+};
+assert.equal(normalizeDecimalText('2400.0000'), '2400');
+assert.equal(normalizeDecimalText('002400.0500'), '2400.05');
+assert.equal(normalizeDecimalText('-0.000'), '0');
+assert.notEqual(normalizeDecimalText('2400.0001'), normalizeDecimalText('2400.0000'));
+
 const tocFixture = [
   '1233; 2615 2200 SCHEMA - cron postgres',
   '1233; 2615 2200 TABLE cron alter_job postgres',
@@ -127,8 +156,12 @@ const tocFixture = [
   '1234; 0 0 COMMENT - FUNCTION cron.alter_job(bigint) postgres',
   '7; 3079 19318 EXTENSION - pg_cron',
   '6; 3079 16664 EXTENSION - pg_net',
+  '5443; 0 0 COMMENT - EXTENSION pg_cron',
+  '5444; 0 0 COMMENT - EXTENSION pg_net',
   '5445; 0 0 COMMENT - EXTENSION pg_cron supabase_admin',
   '5448; 0 0 COMMENT - EXTENSION pg_net supabase_admin',
+  '5449; 0 0 SECURITY LABEL - EXTENSION pg_cron',
+  '5450; 0 0 SECURITY LABEL - EXTENSION pg_net supabase_admin',
   '1237; 2615 2200 SCHEMA - public supabase_admin',
   '1237; 2615 2200 COMMENT - SCHEMA public supabase_admin',
   '1237; 1259 16400 TABLE public clients supabase_admin',
@@ -136,14 +169,21 @@ const tocFixture = [
   '1237; 0 0 COMMENT - TABLE public.clients supabase_admin',
   '1238; 0 0 ACL - TABLE public clients supabase_admin',
 ];
+const fixtureOwners = discoverTocOwners(tocFixture);
 assert.deepEqual(
-  filterUnsupportedTocEntries(tocFixture),
-  [tocFixture[12], tocFixture[13], tocFixture[14], tocFixture[15], tocFixture[16]],
+  filterUnsupportedTocEntries(tocFixture, fixtureOwners),
+  [
+    '1237; 2615 2200 SCHEMA - public supabase_admin',
+    '1237; 2615 2200 COMMENT - SCHEMA public supabase_admin',
+    '1237; 1259 16400 TABLE public clients supabase_admin',
+    '1237; 0 16401 TABLE DATA public clients supabase_admin',
+    '1237; 0 0 COMMENT - TABLE public.clients supabase_admin',
+  ],
   'Scheduler schema objects/references and ACLs are removed while public structure and data remain',
 );
 assert.deepEqual(
   tocFixture
-    .map(parseTocEntry)
+    .map((line) => parseTocEntry(line, fixtureOwners))
     .filter((entry) => entry?.description === 'EXTENSION')
     .map(({ description, namespace, name, owner }) => ({ description, namespace, name, owner })),
   [
@@ -152,9 +192,28 @@ assert.deepEqual(
   ],
   'Ownerless extension rows preserve object type/name/schema from the actual pg_restore TOC layout',
 );
+assert.deepEqual(
+  tocFixture
+    .map((line) => parseTocEntry(line, fixtureOwners))
+    .filter(
+      (entry) =>
+        (entry?.description === 'COMMENT' || entry?.description === 'SECURITY LABEL') &&
+        entry.name.startsWith('EXTENSION '),
+    )
+    .map(({ description, name, owner }) => ({ description, name, owner })),
+  [
+    { description: 'COMMENT', name: 'EXTENSION pg_cron', owner: undefined },
+    { description: 'COMMENT', name: 'EXTENSION pg_net', owner: undefined },
+    { description: 'COMMENT', name: 'EXTENSION pg_cron', owner: 'supabase_admin' },
+    { description: 'COMMENT', name: 'EXTENSION pg_net', owner: 'supabase_admin' },
+    { description: 'SECURITY LABEL', name: 'EXTENSION pg_cron', owner: undefined },
+    { description: 'SECURITY LABEL', name: 'EXTENSION pg_net', owner: 'supabase_admin' },
+  ],
+  'Ownerless and owned COMMENT/SECURITY LABEL rows retain the object tag and schema target',
+);
 assert(
-  filterUnsupportedTocEntries(tocFixture)
-    .map(parseTocEntry)
+  filterUnsupportedTocEntries(tocFixture, fixtureOwners)
+    .map((line) => parseTocEntry(line, fixtureOwners))
     .every((entry) => !referencesExcludedScheduler(entry)),
   'The filtered TOC must not retain scheduler schema or extension references',
 );
@@ -228,7 +287,8 @@ run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
 restoreStage = 'archive_toc_preflight';
 const sourceToc = run('pg_restore', '-l', archive).split('\n');
 const schemaFilteredToc = run(...listArguments(archive)).split('\n');
-const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line) }));
+const tocOwners = discoverTocOwners(sourceToc);
+const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line, tocOwners) }));
 const excludedExtensionEntries = tocEntries.filter(
   ({ entry }) => entry?.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name),
 );
@@ -242,7 +302,7 @@ const sourceSchedulerReferences = tocEntries
   .filter(({ entry }) => referencesExcludedScheduler(entry))
   .map(({ line }) => line.trim());
 const schedulerReferencesRemainingAfterNativeFilter = schemaFilteredToc
-  .filter((line) => referencesExcludedScheduler(parseTocEntry(line)))
+  .filter((line) => referencesExcludedScheduler(parseTocEntry(line, tocOwners)))
   .map((line) => line.trim());
 const tocEvidence = {
   sourceTocEntries: tocEntries.filter(({ entry }) => entry).length,
@@ -250,10 +310,12 @@ const tocEvidence = {
   sourceSchedulerReferences,
   nativeSchemaFilterApplied: true,
   schemaFilterListArguments: listArguments(archive).slice(1),
-  schemaFilteredTocEntries: schemaFilteredToc.map(parseTocEntry).filter(Boolean).length,
+  schemaFilteredTocEntries: schemaFilteredToc
+    .map((line) => parseTocEntry(line, tocOwners))
+    .filter(Boolean).length,
   schedulerReferencesRemainingAfterNativeFilter,
   schemaReferencesRemainingAfterNativeFilter: schemaFilteredToc
-    .filter((line) => referencesExcludedSchema(parseTocEntry(line)))
+    .filter((line) => referencesExcludedSchema(parseTocEntry(line, tocOwners)))
     .map((line) => line.trim()),
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
 };
@@ -264,17 +326,20 @@ assert.equal(
   0,
   `pg_restore --exclude-schema left entries for absent scheduler schemas: ${JSON.stringify(tocEvidence.schemaReferencesRemainingAfterNativeFilter)}`,
 );
-const toc = filterUnsupportedTocEntries(schemaFilteredToc).join('\n');
+const toc = filterUnsupportedTocEntries(schemaFilteredToc, tocOwners).join('\n');
 writeFileSync(join(evidenceDirectory, 'schema-filtered-archive-toc.txt'), `${toc}\n`);
 const residualUnsupportedReferences = toc
   .split('\n')
-  .map(parseTocEntry)
+  .map((line) => parseTocEntry(line, tocOwners))
   .filter(referencesExcludedScheduler);
 if (residualUnsupportedReferences.length > 0)
   throw new Error(
     `Restore list retains TOC entries for objects excluded from the destination: ${JSON.stringify(residualUnsupportedReferences)}`,
   );
-const filteredTocEntries = toc.split('\n').map(parseTocEntry).filter(Boolean);
+const filteredTocEntries = toc
+  .split('\n')
+  .map((line) => parseTocEntry(line, tocOwners))
+  .filter(Boolean);
 const filteredTocEvidence = {
   effectiveRestoreTocEntries: filteredTocEntries.length,
   prohibitedReferencesAfterFinalFilter: residualUnsupportedReferences,
@@ -315,7 +380,7 @@ run('createdb', '-U', 'supabase_admin', '-T', 'template0', target);
 if (
   toc
     .split('\n')
-    .map(parseTocEntry)
+    .map((line) => parseTocEntry(line, tocOwners))
     .some((entry) => entry?.description === 'SCHEMA' && entry.name === 'public')
 ) {
   sql(target, 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty');
@@ -390,13 +455,23 @@ const financialSnapshot = (database) =>
       'expenses', json_build_object('count', (SELECT count(*) FROM public.expenses), 'amount', (SELECT COALESCE(sum(amount), 0)::text FROM public.expenses))
     )::text`,
   );
-const financials = financialSnapshot('postgres');
-assert.equal(financialSnapshot(target), financials, 'Recovered financial totals differ');
-const recoveredFinancials = JSON.parse(financials);
-assert.deepEqual(
-  recoveredFinancials.receivables,
-  { count: 2, amount: '2400.00' },
-  'Synthetic restore fixture must contain both known receivables and their exact total',
+const normalizeFinancialSnapshot = (database) => {
+  const snapshot = JSON.parse(financialSnapshot(database));
+  for (const totals of Object.values(snapshot)) totals.amount = normalizeDecimalText(totals.amount);
+  return snapshot;
+};
+const financials = normalizeFinancialSnapshot('postgres');
+const recoveredFinancials = normalizeFinancialSnapshot(target);
+assert.deepEqual(recoveredFinancials, financials, 'Recovered financial totals differ');
+assert.equal(
+  recoveredFinancials.receivables.count,
+  2,
+  'Synthetic restore fixture must contain both known receivables',
+);
+assert.equal(
+  recoveredFinancials.receivables.amount,
+  normalizeDecimalText('2400.00'),
+  'Synthetic restore fixture must contain the exact receivables total independent of NUMERIC scale',
 );
 
 const grantSnapshot = (database) =>
