@@ -4,76 +4,158 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 
-const excludedSchedulerSchemas = new Set(['cron', 'net']);
-const tocReferencesExcludedSchema = (line) => {
-  const entry = line.match(/^\s*\d+;\s+\d+\s+\d+\s+(.+)$/)?.[1];
-  if (!entry) return false;
-  if (/\b(?:cron|net)\./i.test(entry)) return true;
+const excludedSchedulerSchemas = ['cron', 'net'];
+const excludedSchedulerExtensions = new Set(['pg_cron', 'pg_net']);
+const multiWordTocDescriptions = [
+  'MATERIALIZED VIEW DATA',
+  'PUBLICATION TABLES IN SCHEMA',
+  'FOREIGN DATA WRAPPER',
+  'SEQUENCE SET',
+  'TABLE DATA',
+  'DEFAULT ACL',
+  'BLOB COMMENTS',
+  'INDEX ATTACH',
+  'FK CONSTRAINT',
+  'CHECK CONSTRAINT',
+  'USER MAPPING',
+];
 
-  const object = entry.match(
-    /^(?:(?:ACL|COMMENT|SECURITY LABEL)\s+-\s+)?(?:SCHEMA(?:\s+-)?|TABLE DATA|TABLE|SEQUENCE SET|SEQUENCE|VIEW|MATERIALIZED VIEW|FOREIGN TABLE|FUNCTION|PROCEDURE|AGGREGATE|TYPE|DOMAIN|POLICY|TRIGGER|RULE|DEFAULT ACL(?:\s+-\s+SCHEMA)?)\s+(\S+)/,
+// pg_restore TOC rows are structured as dump-id; catalog-id object-id description namespace tag owner.
+const parseTocEntry = (line) => {
+  if (!line.trim() || line.trimStart().startsWith(';')) return null;
+  const separator = line.indexOf(';');
+  if (separator < 1 || !/^\d+$/.test(line.slice(0, separator).trim())) return null;
+  const fields = line
+    .slice(separator + 1)
+    .trim()
+    .split(/\s+/);
+  if (fields.length < 6) return null;
+  const [catalogId, objectId] = fields;
+  const description = multiWordTocDescriptions.find(
+    (candidate) => fields.slice(2, 2 + candidate.split(' ').length).join(' ') === candidate,
   );
-  return object ? excludedSchedulerSchemas.has(object[1].toLowerCase()) : false;
+  const descriptionLength = description?.split(' ').length ?? 1;
+  const resolvedDescription = description ?? fields[2];
+  const namespace = fields[2 + descriptionLength];
+  const tagAndOwner = fields.slice(3 + descriptionLength);
+  const owner = tagAndOwner.at(-1);
+  return {
+    dumpId: Number(line.slice(0, separator).trim()),
+    catalogId: Number(catalogId),
+    objectId: Number(objectId),
+    description: resolvedDescription,
+    namespace,
+    name: tagAndOwner.slice(0, -1).join(' '),
+    owner,
+  };
 };
-const isExcludedSchedulerTocEntry = (line) =>
-  !line.trimStart().startsWith(';') &&
-  (/\b(?:pg_cron|pg_net)\b/.test(line) || tocReferencesExcludedSchema(line));
-const filterRestoreToc = (entries) => entries.filter((line) => !isExcludedSchedulerTocEntry(line));
 
-// Exercise the TOC parser without Docker; this does not perform a restore.
-assert.equal(
-  tocReferencesExcludedSchema('1233; 2615 2200 SCHEMA - cron postgres'),
-  true,
-  'Scheduler schema entries must be excluded from the restore list',
-);
-assert.equal(
-  tocReferencesExcludedSchema('1233; 0 0 ACL - SCHEMA cron postgres'),
-  true,
-  'Scheduler schema ACL entries must be excluded from the restore list',
-);
-assert.equal(
-  tocReferencesExcludedSchema('1234; 0 0 ACL - FUNCTION cron alter_job(bigint) postgres'),
-  true,
-  'Scheduler function ACL entries must be excluded from the restore list',
-);
-assert.equal(
-  tocReferencesExcludedSchema('1234; 0 0 ACL - FUNCTION net some_job() postgres'),
-  true,
-  'Network extension function ACL entries must be excluded from the restore list',
-);
-assert.equal(
-  tocReferencesExcludedSchema('1234; 0 0 DEFAULT ACL - SCHEMA cron postgres'),
-  true,
-  'Scheduler default privilege entries must be excluded from the restore list',
-);
-assert.equal(
-  tocReferencesExcludedSchema('1235; 0 0 ACL - FUNCTION public unrelated() postgres'),
-  false,
-  'Public function ACL entries must remain in the restore list',
-);
+const referencesExcludedSchema = (entry) => {
+  if (!entry) return false;
+  if (excludedSchedulerSchemas.includes(entry.namespace)) return true;
+  if (entry.description === 'SCHEMA' && excludedSchedulerSchemas.includes(entry.name)) return true;
+
+  // COMMENT/SECURITY LABEL TOC rows put their object kind and name in the tag field.
+  // Their namespace column is '-', so inspect that typed payload instead of the whole row text.
+  if (entry.description === 'COMMENT' || entry.description === 'SECURITY LABEL') {
+    const [targetKind, ...targetParts] = entry.name.split(' ');
+    const targetName = targetParts.join(' ');
+    if (targetKind === 'SCHEMA' && excludedSchedulerSchemas.includes(targetName)) return true;
+    if (excludedSchedulerSchemas.includes(targetName.split(' ')[0] ?? '')) return true;
+    const qualifiedName = targetName.split(/[ (]/, 1)[0] ?? '';
+    if (excludedSchedulerSchemas.some((schema) => qualifiedName.startsWith(`${schema}.`)))
+      return true;
+  }
+  return false;
+};
+
+const referencesExcludedScheduler = (entry) => {
+  if (referencesExcludedSchema(entry)) return true;
+  if (!entry) return false;
+  if (entry.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name)) return true;
+  if (entry.description === 'COMMENT' || entry.description === 'SECURITY LABEL') {
+    const [targetKind, ...targetParts] = entry.name.split(' ');
+    return targetKind === 'EXTENSION' && excludedSchedulerExtensions.has(targetParts.join(' '));
+  }
+  return false;
+};
+
+const filterUnsupportedTocEntries = (entries) =>
+  entries.filter((line) => {
+    const entry = parseTocEntry(line);
+    return (
+      entry?.description !== 'ACL' &&
+      entry?.description !== 'DEFAULT ACL' &&
+      !referencesExcludedScheduler(entry)
+    );
+  });
+
+const listArguments = (archive) => [
+  'pg_restore',
+  '-l',
+  '--exclude-schema=cron',
+  '--exclude-schema=net',
+  archive,
+];
+
+const restoreArguments = (target, restoreList, archive) => [
+  'pg_restore',
+  '-U',
+  'supabase_admin',
+  '-d',
+  target,
+  '--exit-on-error',
+  '--no-acl',
+  '--no-owner',
+  ...excludedSchedulerSchemas.flatMap((schema) => ['--exclude-schema', schema]),
+  '--use-list',
+  restoreList,
+  archive,
+];
+
 const tocFixture = [
   '1233; 2615 2200 SCHEMA - cron postgres',
-  '1234; 0 0 ACL - FUNCTION cron alter_job(bigint) postgres',
-  '1235; 0 0 ACL - SCHEMA net postgres',
-  '1236; 0 0 COMMENT - EXTENSION pg_cron postgres',
+  '1233; 2615 2200 TABLE cron alter_job postgres',
+  '1233; 0 16400 TABLE DATA cron jobs postgres',
+  '1234; 0 0 ACL - FUNCTION cron.alter_job(bigint) postgres',
+  '1234; 0 0 ACL - cron postgres',
+  '1234; 0 0 DEFAULT ACL - DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA cron postgres',
+  '1234; 0 0 COMMENT - SCHEMA cron postgres',
+  '1234; 0 0 COMMENT - FUNCTION cron.alter_job(bigint) postgres',
+  '1235; 3079 16384 EXTENSION - pg_cron postgres',
+  '1236; 3079 16385 EXTENSION - pg_net postgres',
   '1237; 2615 2200 SCHEMA - public supabase_admin',
+  '1237; 2615 2200 COMMENT - SCHEMA public supabase_admin',
+  '1237; 1259 16400 TABLE public clients supabase_admin',
+  '1237; 0 16401 TABLE DATA public clients supabase_admin',
+  '1237; 0 0 COMMENT - TABLE public.clients supabase_admin',
   '1238; 0 0 ACL - TABLE public clients supabase_admin',
-  '1239; 0 0 ACL - FUNCTION public unrelated() postgres',
 ];
-const filteredTocFixture = filterRestoreToc(tocFixture);
 assert.deepEqual(
-  filteredTocFixture,
-  tocFixture.slice(4),
-  'Public schemas and ACLs must be retained',
+  filterUnsupportedTocEntries(tocFixture),
+  [tocFixture[10], tocFixture[11], tocFixture[12], tocFixture[13], tocFixture[14]],
+  'Scheduler schema objects/references and ACLs are removed while public structure and data remain',
 );
-const residualFixtureEntries = filteredTocFixture.filter(isExcludedSchedulerTocEntry);
+const restorePlanFixture = restoreArguments(
+  'livio_restore_fixture',
+  '/tmp/restore.list',
+  '/tmp/restore.dump',
+);
 assert.deepEqual(
-  residualFixtureEntries,
-  [],
-  'Filtered TOC must contain no excluded scheduler entries',
+  listArguments('/tmp/restore.dump'),
+  ['pg_restore', '-l', '--exclude-schema=cron', '--exclude-schema=net', '/tmp/restore.dump'],
+  'TOC preflight must apply pg_restore schema filters to the source list',
+);
+assert(restorePlanFixture.includes('--no-acl'), 'Restore must suppress source ACL statements');
+assert(restorePlanFixture.includes('--no-owner'), 'Restore must use the disposable runner owner');
+assert(
+  restorePlanFixture.includes('--exclude-schema') &&
+    restorePlanFixture.includes('cron') &&
+    restorePlanFixture.includes('net'),
+  'Restore must exclude both scheduler schemas using pg_restore schema filters',
 );
 if (process.argv.includes('--check-toc-filter')) {
-  console.log('Restore TOC filter fixtures passed; no database or backup was accessed.');
+  console.log('Restore plan fixtures passed; no database or backup was accessed.');
   process.exit(0);
 }
 
@@ -95,16 +177,105 @@ const run = (...args) =>
 const sql = (database, query) =>
   run('psql', '-U', 'supabase_admin', '-d', database, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query);
 const started = Date.now();
+const evidenceDirectory = join(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
+mkdirSync(evidenceDirectory, { recursive: true });
+const evidencePath = join(evidenceDirectory, 'restore-rehearsal.json');
+let restoreStage = 'temporary_dump';
+const writeCheckpoint = (details = {}) =>
+  writeFileSync(
+    evidencePath,
+    JSON.stringify(
+      {
+        status: 'INCOMPLETE',
+        stage: restoreStage,
+        elapsedMs: Date.now() - started,
+        ...details,
+      },
+      null,
+      2,
+    ),
+  );
+writeCheckpoint({ targetDatabase: target });
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
 run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
+restoreStage = 'archive_toc_preflight';
 const sourceToc = run('pg_restore', '-l', archive).split('\n');
-const excludedTocEntries = sourceToc.filter(isExcludedSchedulerTocEntry);
-const toc = filterRestoreToc(sourceToc).join('\n');
-const residualSchedulerEntries = toc.split('\n').filter(isExcludedSchedulerTocEntry);
-if (residualSchedulerEntries.length > 0)
+const schemaFilteredToc = run(...listArguments(archive)).split('\n');
+const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line) }));
+const excludedExtensionEntries = tocEntries.filter(
+  ({ entry }) => entry?.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name),
+);
+const aclEntries = tocEntries.filter(
+  ({ entry }) => entry?.description === 'ACL' || entry?.description === 'DEFAULT ACL',
+);
+const cronAlterJobTocEntries = tocEntries
+  .filter(({ line, entry }) => entry?.description === 'ACL' && /alter_job/i.test(line))
+  .map(({ line }) => line.trim());
+const sourceSchedulerReferences = tocEntries
+  .filter(({ entry }) => referencesExcludedScheduler(entry))
+  .map(({ line }) => line.trim());
+const schedulerReferencesRemainingAfterNativeFilter = schemaFilteredToc
+  .filter((line) => referencesExcludedScheduler(parseTocEntry(line)))
+  .map((line) => line.trim());
+const tocEvidence = {
+  sourceTocEntries: tocEntries.filter(({ entry }) => entry).length,
+  sourceAclRows: aclEntries.length,
+  sourceSchedulerReferences,
+  nativeSchemaFilterApplied: true,
+  schemaFilterListArguments: listArguments(archive).slice(1),
+  schemaFilteredTocEntries: schemaFilteredToc.map(parseTocEntry).filter(Boolean).length,
+  schedulerReferencesRemainingAfterNativeFilter,
+  schemaReferencesRemainingAfterNativeFilter: schemaFilteredToc
+    .filter((line) => referencesExcludedSchema(parseTocEntry(line)))
+    .map((line) => line.trim()),
+  cronAlterJobAclTocRows: cronAlterJobTocEntries,
+};
+writeFileSync(join(evidenceDirectory, 'source-archive-toc.txt'), `${sourceToc.join('\n')}\n`);
+writeFileSync(
+  join(evidenceDirectory, 'schema-filtered-archive-toc.txt'),
+  `${schemaFilteredToc.join('\n')}\n`,
+);
+writeCheckpoint({ targetDatabase: target, ...tocEvidence });
+assert.equal(
+  tocEvidence.schemaReferencesRemainingAfterNativeFilter.length,
+  0,
+  `pg_restore --exclude-schema left entries for absent scheduler schemas: ${JSON.stringify(tocEvidence.schemaReferencesRemainingAfterNativeFilter)}`,
+);
+const toc = filterUnsupportedTocEntries(schemaFilteredToc).join('\n');
+const residualUnsupportedReferences = toc
+  .split('\n')
+  .map(parseTocEntry)
+  .filter(referencesExcludedScheduler);
+if (residualUnsupportedReferences.length > 0)
   throw new Error(
-    `Restore list still contains excluded scheduler schemas/extensions:\n${residualSchedulerEntries.join('\n')}`,
+    `Restore list retains TOC entries for objects excluded from the destination: ${JSON.stringify(residualUnsupportedReferences)}`,
   );
+assert(
+  !toc
+    .split('\n')
+    .map(parseTocEntry)
+    .some((entry) => entry?.description === 'ACL' || entry?.description === 'DEFAULT ACL'),
+  'Source ACL TOC entries must be omitted; the runner reapplies only checked-in application grants',
+);
+const effectiveRestoreArgs = restoreArguments(target, restoreList, archive);
+for (const requiredFlag of ['--no-acl', '--no-owner', '--exclude-schema', '--use-list'])
+  assert(effectiveRestoreArgs.includes(requiredFlag), `Restore plan is missing ${requiredFlag}`);
+assert(
+  excludedSchedulerSchemas.every((schema) => effectiveRestoreArgs.includes(schema)),
+  'Restore plan must exclude cron and net schemas using pg_restore native filters',
+);
+writeCheckpoint({
+  targetDatabase: target,
+  ...tocEvidence,
+  effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+  schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
+  aclRowsSuppressedByNoAcl: aclEntries.length,
+  cronAlterJobAclTocRows: cronAlterJobTocEntries,
+  excludedSchedulerSchemas,
+});
+console.log(
+  `Restore TOC preflight passed: ${tocEntries.filter(({ entry }) => entry?.description === 'SCHEMA' && excludedSchedulerSchemas.includes(entry.name)).length} scheduler schema rows excluded; ${excludedExtensionEntries.length} scheduler extension rows removed; ${aclEntries.length} ACL/default ACL rows removed from the TOC and suppressed with --no-acl; ${cronAlterJobTocEntries.length} alter_job ACL rows found.`,
+);
 execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
   input: toc,
   stdio: ['pipe', 'ignore', 'pipe'],
@@ -112,20 +283,36 @@ execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
 // createdb fails if the randomly named destination exists. Never clean or overwrite a database.
 run('createdb', '-U', 'supabase_admin', '-T', 'template0', target);
 // PostgreSQL may omit the built-in public schema from the archive. Preserve it in that case.
-if (/\bSCHEMA - public\b/.test(toc)) {
+if (
+  toc
+    .split('\n')
+    .map(parseTocEntry)
+    .some((entry) => entry?.description === 'SCHEMA' && entry.name === 'public')
+) {
   sql(target, 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty');
 }
-run(
-  'pg_restore',
-  '-U',
-  'supabase_admin',
-  '-d',
-  target,
-  '--exit-on-error',
-  '--use-list',
-  restoreList,
-  archive,
-);
+restoreStage = 'pg_restore';
+writeCheckpoint({
+  targetDatabase: target,
+  ...tocEvidence,
+  effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+  schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
+  aclRowsSuppressedByNoAcl: aclEntries.length,
+  cronAlterJobAclTocRows: cronAlterJobTocEntries,
+  excludedSchedulerSchemas,
+});
+run(...effectiveRestoreArgs.slice(1));
+restoreStage = 'validate_recovery';
+writeCheckpoint({
+  targetDatabase: target,
+  ...tocEvidence,
+  pgRestoreCompleted: true,
+  effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+  schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
+  aclRowsSuppressedByNoAcl: aclEntries.length,
+  cronAlterJobAclTocRows: cronAlterJobTocEntries,
+  excludedSchedulerSchemas,
+});
 assert.equal(
   sql(target, "SELECT count(*)::text FROM pg_namespace WHERE nspname IN ('cron', 'net')"),
   '0',
@@ -225,8 +412,6 @@ const grantSnapshot = (database) =>
       WHERE n.nspname = 'public'
     ) grants`,
   );
-assert.equal(grantSnapshot(target), grantSnapshot('postgres'), 'Recovered public grants differ');
-
 const ownerSnapshot = (database) =>
   sql(
     database,
@@ -247,12 +432,82 @@ const ownerSnapshot = (database) =>
       WHERE n.nspname = 'public'
     ) owners`,
   );
-assert.equal(ownerSnapshot(target), ownerSnapshot('postgres'), 'Recovered public owners differ');
 const requiredRoles = sql(
   target,
   "SELECT count(*)::text FROM pg_roles WHERE rolname IN ('supabase_admin', 'anon', 'authenticated', 'service_role')",
 );
 assert.equal(requiredRoles, '4', 'Required Supabase roles are missing from the restore target');
+
+// ACLs from the source are suppressed. Re-apply only the checked-in application grants.
+sql(
+  target,
+  `BEGIN;
+   GRANT USAGE ON SCHEMA public TO authenticated;
+   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
+   REVOKE ALL ON FUNCTION public.current_organization_ids() FROM PUBLIC;
+   REVOKE ALL ON FUNCTION public.has_permission(uuid, text, text) FROM PUBLIC;
+   REVOKE ALL ON FUNCTION public.current_client_id(uuid) FROM PUBLIC;
+   REVOKE ALL ON FUNCTION public.can_access_client_resource(uuid, uuid, text, text) FROM PUBLIC;
+   REVOKE ALL ON FUNCTION public.storage_object_organization_id(text) FROM PUBLIC;
+   REVOKE ALL ON FUNCTION public.can_download_storage_object(text) FROM PUBLIC;
+   GRANT EXECUTE ON FUNCTION public.current_organization_ids() TO authenticated;
+   GRANT EXECUTE ON FUNCTION public.has_permission(uuid, text, text) TO authenticated;
+   GRANT EXECUTE ON FUNCTION public.current_client_id(uuid) TO authenticated;
+   GRANT EXECUTE ON FUNCTION public.can_access_client_resource(uuid, uuid, text, text) TO authenticated;
+   GRANT EXECUTE ON FUNCTION public.storage_object_organization_id(text) TO authenticated;
+   GRANT EXECUTE ON FUNCTION public.can_download_storage_object(text) TO authenticated;
+   COMMIT;`,
+);
+
+assert.equal(
+  sql(
+    target,
+    `SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+       AND NOT (has_table_privilege('authenticated', c.oid, 'SELECT')
+         AND has_table_privilege('authenticated', c.oid, 'INSERT')
+         AND has_table_privilege('authenticated', c.oid, 'UPDATE')
+         AND has_table_privilege('authenticated', c.oid, 'DELETE'))`,
+  ),
+  '0',
+  'Authenticated application table privileges are incomplete',
+);
+assert.equal(
+  sql(
+    target,
+    `SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+       AND (has_table_privilege('authenticated', c.oid, 'TRUNCATE')
+         OR has_table_privilege('authenticated', c.oid, 'REFERENCES')
+         OR has_table_privilege('authenticated', c.oid, 'TRIGGER'))`,
+  ),
+  '0',
+  'Authenticated role received an application table privilege outside the checked-in policy',
+);
+assert.equal(
+  sql(
+    target,
+    `SELECT count(*)::text FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public'
+       AND p.proname IN ('current_organization_ids', 'has_permission', 'current_client_id',
+         'can_access_client_resource', 'storage_object_organization_id', 'can_download_storage_object')
+       AND (NOT has_function_privilege('authenticated', p.oid, 'EXECUTE')
+         OR EXISTS (SELECT 1 FROM aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x
+           WHERE x.grantee = 0 AND x.privilege_type = 'EXECUTE'))`,
+  ),
+  '0',
+  'Security function grants do not match the checked-in authenticated-only policy',
+);
+assert(
+  grantSnapshot(target).includes('SCHEMA:public:USAGE:authenticated:false'),
+  'Application schema usage grant was not restored',
+);
+const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
+assert(restoredOwners.length > 0, 'No public owners were found in the restore target');
+assert(
+  restoredOwners.every((entry) => entry.endsWith(':supabase_admin')),
+  'Restore target objects must be owned by the disposable runner role because --no-owner is used',
+);
 
 const foreignKeySnapshot = (database) =>
   sql(
@@ -266,6 +521,15 @@ const foreignKeySnapshot = (database) =>
     WHERE n.nspname = 'public' AND k.contype = 'f'`,
   );
 assert.equal(foreignKeySnapshot(target), foreignKeySnapshot('postgres'), 'Recovered FKs differ');
+assert(
+  Number(
+    sql(
+      target,
+      "SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname IN ('current_organization_ids', 'has_permission', 'current_client_id', 'can_access_client_resource', 'storage_object_organization_id', 'can_download_storage_object')",
+    ),
+  ) >= 6,
+  'One or more checked-in security functions are missing from the restore target',
+);
 assert.equal(
   sql(
     target,
@@ -330,31 +594,43 @@ assert.equal(
   structureSnapshot('postgres'),
   'Recovered structure differs',
 );
-const directory = join(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
-mkdirSync(directory, { recursive: true });
+const databaseOwner = sql(
+  target,
+  'SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()',
+);
+assert.equal(databaseOwner, 'supabase_admin', 'Disposable restore database owner differs');
+restoreStage = 'complete';
 writeFileSync(
-  join(directory, 'restore-rehearsal.json'),
+  evidencePath,
   JSON.stringify(
     {
       status: 'PASS',
+      stage: restoreStage,
+      targetDatabase: target,
       scope:
-        'Synthetic disposable database; public table set and data, financial totals, sequences, owners, grants, structure and foreign keys compared',
+        'New disposable database; public tables, rows, sequences, financial totals, schema structure, FKs, controlled owners, and application grants verified',
       tables: tables.length,
       sequences: sequenceSnapshot('postgres').split('\n').filter(Boolean).length,
       requiredSupabaseRoles: Number(requiredRoles),
-      publicOwnersCompared: true,
-      publicGrantsCompared: true,
+      databaseOwner,
+      ...tocEvidence,
+      publicObjectsOwnedBy: 'supabase_admin',
+      applicationGrantsAppliedAndVerified: true,
       foreignKeysComparedAndValidated: true,
       financialTotalsCompared: recoveredFinancials,
-      excludedSchedulerTocEntries: excludedTocEntries.length,
+      effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+      schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
+      aclRowsSuppressedByNoAcl: aclEntries.length,
+      cronAlterJobAclTocRows: cronAlterJobTocEntries,
       excludedSchedulerSchemasAbsent: true,
       elapsedMs: Date.now() - started,
       limitations: [
-        'Not the historical shared public backup',
+        'Synthetic temporary source, not a historical shared backup',
         'Storage objects not restored',
         'Hosted Auth configuration and external secrets not restored',
-        'Global roles are not created by pg_dump; required runner roles are checked',
-        'Scheduler extensions and jobs are deliberately excluded',
+        'Global roles are provided by the disposable Supabase runner and checked',
+        'Source ACLs/owners are intentionally not replayed; checked-in application grants are applied explicitly',
+        'Scheduler extensions and schemas are deliberately excluded',
       ],
     },
     null,

@@ -109,6 +109,11 @@ jobs:
             ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics-*.json
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report-focused.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report-full.json
+            ${{ runner.temp }}/livio-integrated-artifacts/operation-traces/*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/workflow-stages/*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results/**
             ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
             ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log
             ${{ runner.temp }}/livio-integrated-artifacts/web-server.log
@@ -145,7 +150,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: synthetic-restore-evidence
-          path: ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
+          path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/source-archive-toc.txt
+            ${{ runner.temp }}/livio-integrated-artifacts/schema-filtered-archive-toc.txt
           if-no-files-found: ignore
       - name: Stop only this disposable Supabase project
         if: always()

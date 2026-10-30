@@ -18,7 +18,6 @@ const outputDir =
   join(process.env.RUNNER_TEMP ?? tmpdir(), 'livio-integrated-artifacts');
 const apiLogPath = join(tmpdir(), `livio-api-${process.pid}.raw.log`);
 const webLogPath = join(tmpdir(), `livio-web-${process.pid}.raw.log`);
-const playwrightReportRawPath = join(tmpdir(), `livio-playwright-${process.pid}.raw.json`);
 const output = (name) => join(outputDir, name);
 const safeEnvironmentKeys = [
   'PATH',
@@ -161,7 +160,6 @@ const webEnv = {
 
 const testEnv = { ...webEnv, NODE_ENV: 'test' };
 testEnv.LIVIO_QA_OUTPUT = outputDir;
-testEnv.LIVIO_PLAYWRIGHT_REPORT_RAW = playwrightReportRawPath;
 const sensitiveValues = [
   process.env.DATABASE_URL,
   process.env.SUPABASE_ANON_KEY,
@@ -330,14 +328,27 @@ function writeSanitizedLogs() {
   }
 }
 
-function sanitizePlaywrightReport() {
-  if (!existsSync(playwrightReportRawPath)) return;
-  writeFileSync(
-    output('integrated-playwright-report.json'),
-    sanitize(readFileSync(playwrightReportRawPath, 'utf8')),
-    'utf8',
-  );
-  unlinkSync(playwrightReportRawPath);
+function sanitizePlaywrightReport(sourcePath, destinationName) {
+  if (!existsSync(sourcePath)) return;
+  writeFileSync(output(destinationName), sanitize(readFileSync(sourcePath, 'utf8')), 'utf8');
+  unlinkSync(sourcePath);
+}
+
+async function runPlaywrightSuite(reportName, grep) {
+  const reportRawPath = join(tmpdir(), `livio-playwright-${process.pid}-${reportName}.raw.json`);
+  testEnv.LIVIO_PLAYWRIGHT_REPORT_RAW = reportRawPath;
+  testEnv.LIVIO_PLAYWRIGHT_RUN = reportName.includes('focused') ? 'focused' : 'full';
+  const args = [
+    'node_modules/playwright/cli.js',
+    'test',
+    '--config=playwright.integrated.config.ts',
+  ];
+  if (grep) args.push('--grep', grep);
+  try {
+    await execute(process.execPath, args, testEnv);
+  } finally {
+    sanitizePlaywrightReport(reportRawPath, reportName);
+  }
 }
 
 let api;
@@ -364,11 +375,15 @@ try {
   console.log(
     'API and web are ready; starting one Chromium worker with real local Auth/API/DB/Storage.',
   );
-  await execute(
-    process.execPath,
-    ['node_modules/playwright/cli.js', 'test', '--config=playwright.integrated.config.ts'],
-    testEnv,
+  console.log('Retesting the navigation close path and four previously failing UI workflows.');
+  await runPlaywrightSuite(
+    'integrated-playwright-report-focused.json',
+    'carregamento sob demanda|jornada [1-4]:',
   );
+  console.log(
+    'Focused UI workflows passed; running all nine integrated scenarios and both viewports.',
+  );
+  await runPlaywrightSuite('integrated-playwright-report-full.json', undefined);
 } catch (error) {
   runFailed = true;
   console.error(sanitize(error instanceof Error ? error.message : 'Falha integrada sem detalhe.'));
@@ -376,7 +391,6 @@ try {
   await stopChild(web);
   await stopChild(api);
   writeSanitizedLogs();
-  sanitizePlaywrightReport();
 }
 
 let browserMetrics = {};

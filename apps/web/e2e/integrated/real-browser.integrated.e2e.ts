@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { expect, test, type BrowserContext, type Page, type Request } from '@playwright/test';
+import {
+  expect,
+  test,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  type Request,
+} from '@playwright/test';
 import { addMonths, formatDate } from '../../features/shared/format';
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001/v1';
@@ -232,17 +239,439 @@ async function screenshotEvidence(page: Page, name: string) {
   if (!directory) return;
   const screenshots = join(directory, 'screenshots');
   mkdirSync(screenshots, { recursive: true });
-  await page.screenshot({
-    path: join(screenshots, `${name}.png`),
-    fullPage: false,
-    animations: 'disabled',
+  const maskedInputs = await page.locator('input').evaluateAll((elements) => {
+    const sensitiveSigningPath = /(\/(?:assinar|public\/signatures)\/)[A-Za-z0-9_-]{32,}/gi;
+    return elements.flatMap((element, index) => {
+      const input = element as HTMLInputElement;
+      const originalValue = input.value;
+      const redactedValue = originalValue.replace(sensitiveSigningPath, '$1[REDACTED]');
+      if (redactedValue === originalValue) return [];
+      input.value = redactedValue;
+      return [{ index, originalValue }];
+    });
   });
+  try {
+    await page.screenshot({
+      path: join(screenshots, `${name}.png`),
+      fullPage: false,
+      animations: 'disabled',
+    });
+  } finally {
+    for (const { index, originalValue } of maskedInputs) {
+      await page
+        .locator('input')
+        .nth(index)
+        .evaluate((element, value) => {
+          (element as HTMLInputElement).value = value;
+        }, originalValue)
+        .catch(() => undefined);
+    }
+  }
 }
 
 async function expectOperationFeedback(page: Page, message: string) {
-  const feedback = page.getByRole('status').filter({ hasText: message });
-  await expect(feedback).toHaveCount(1);
-  await expect(feedback).toHaveText(message);
+  const statuses = page.getByRole('status');
+  try {
+    await expect
+      .poll(
+        async () =>
+          (await statuses.allTextContents()).filter((text) => text.trim() === message).length,
+      )
+      .toBe(1);
+  } catch (error) {
+    const trace = currentOperationTrace.get(page);
+    if (trace) {
+      trace.outcome =
+        trace.outcome === 'REQUEST_REJECTED'
+          ? 'REQUEST_REJECTED_UI_NOT_UPDATED'
+          : 'REQUEST_SUCCEEDED_UI_NOT_UPDATED';
+      trace.events.push({
+        stage: trace.outcome,
+        elapsedMs: Date.now() - trace.startedAt,
+      });
+      writeOperationTrace(page, trace);
+    }
+    throw error;
+  }
+  const statusTexts = await statuses.allTextContents();
+  const exactIndex = statusTexts.findIndex((text) => text.trim() === message);
+  await expect(statuses.nth(exactIndex)).toHaveText(message);
+  const trace = currentOperationTrace.get(page);
+  if (trace) {
+    trace.events.push({ stage: 'UI_FEEDBACK_CONFIRMED', elapsedMs: Date.now() - trace.startedAt });
+    writeOperationTrace(page, trace);
+  }
+}
+
+const apiOperationTimeoutMs = 15_000;
+type OperationTrace = {
+  id: string;
+  run: string;
+  operation: string;
+  testTitle: string;
+  viewport: { width: number; height: number } | null;
+  startedAt: number;
+  outcome: string;
+  events: Array<Record<string, JsonValue>>;
+};
+
+const currentOperationTrace = new Map<Page, OperationTrace>();
+const currentWorkflowStage = new Map<
+  Page,
+  { testTitle: string; workflow: string; stage: string }
+>();
+let operationTraceSequence = 0;
+
+test.afterEach(async ({ browser }, testInfo) => {
+  if (testInfo.status !== testInfo.expectedStatus) {
+    for (const context of browser.contexts()) {
+      for (const page of context.pages()) {
+        if (!page.isClosed())
+          await screenshotEvidence(
+            page,
+            `test-failure-${operationSlug(testInfo.title)}-${page.viewportSize()?.width ?? 'unknown'}`,
+          ).catch(() => undefined);
+      }
+    }
+  }
+  for (const [page, trace] of currentOperationTrace) {
+    if (trace.testTitle !== testInfo.title) continue;
+    if (testInfo.status !== testInfo.expectedStatus) {
+      const hasUiFeedback = trace.events.some(({ stage }) => stage === 'UI_FEEDBACK_CONFIRMED');
+      if (trace.outcome === 'REQUEST_SUCCEEDED' && hasUiFeedback)
+        trace.outcome = 'PERSISTENCE_NOT_CONFIRMED';
+      trace.events.push({
+        stage: 'TEST_FAILED',
+        elapsedMs: Date.now() - trace.startedAt,
+        testStatus: testInfo.status ?? 'unknown',
+      });
+      writeOperationTrace(page, trace);
+      if (!page.isClosed())
+        await screenshotEvidence(page, `test-failure-${trace.id}`).catch(() => undefined);
+    }
+    currentOperationTrace.delete(page);
+  }
+  for (const [page, stage] of currentWorkflowStage) {
+    if (stage.testTitle !== testInfo.title) continue;
+    if (testInfo.status !== testInfo.expectedStatus) {
+      writeQaArtifact(
+        `workflow-stages/failure-${operationSlug(stage.workflow)}-${page.viewportSize()?.width ?? 'unknown'}.json`,
+        {
+          ...stage,
+          testStatus: testInfo.status ?? 'unknown',
+          failedAt: new Date().toISOString(),
+        },
+      );
+      if (!page.isClosed())
+        await screenshotEvidence(
+          page,
+          `test-failure-${operationSlug(stage.workflow)}-${page.viewportSize()?.width ?? 'unknown'}`,
+        ).catch(() => undefined);
+    }
+    currentWorkflowStage.delete(page);
+  }
+});
+
+function operationSlug(value: string) {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .toLowerCase()
+    .slice(0, 64);
+}
+
+function writeOperationTrace(page: Page, trace: OperationTrace) {
+  const directory = process.env.LIVIO_QA_OUTPUT;
+  if (!directory) return;
+  writeQaArtifact(`operation-traces/${trace.id}.json`, {
+    ...trace,
+    elapsedMs: Date.now() - trace.startedAt,
+  });
+}
+
+function markWorkflowStage(page: Page, workflow: string, stage: string) {
+  currentWorkflowStage.set(page, { testTitle: test.info().title, workflow, stage });
+  writeQaArtifact(
+    `workflow-stages/${operationSlug(workflow)}-${page.viewportSize()?.width ?? 'unknown'}.json`,
+    {
+      testTitle: test.info().title,
+      workflow,
+      stage,
+      recordedAt: new Date().toISOString(),
+      viewport: page.viewportSize(),
+    },
+  );
+}
+
+type UiOperation = {
+  operation: string;
+  pathname: string;
+  method?: string;
+  form?: Locator;
+  button?: Locator;
+  action?: () => Promise<unknown>;
+  bodyField?: { name: string; value: string };
+};
+
+type DiagnosticWindow = Window & { __livioQaClickEvents?: Record<string, boolean> };
+
+function requestMatchesBodyField(request: Request, field?: UiOperation['bodyField']) {
+  if (!field) return true;
+  try {
+    const body = request.postDataJSON() as Record<string, unknown>;
+    if (body[field.name] === field.value) return true;
+  } catch {
+    // Multipart bodies are correlated by a unique synthetic form value below.
+  }
+  return request.postDataBuffer()?.toString('latin1').includes(field.value) ?? false;
+}
+
+async function clickUiOperation(page: Page, operation: UiOperation) {
+  const method = operation.method ?? 'POST';
+  const traceSequence = String(++operationTraceSequence).padStart(4, '0');
+  const run = process.env.LIVIO_PLAYWRIGHT_RUN ?? 'integrated';
+  const clickObserverKey = `${run}-${traceSequence}`;
+  const trace: OperationTrace = {
+    id: `${operationSlug(run)}-${page.viewportSize()?.width ?? 'unknown'}-${traceSequence}-${operationSlug(operation.operation)}`,
+    run,
+    operation: operation.operation,
+    testTitle: test.info().title,
+    viewport: page.viewportSize(),
+    startedAt: Date.now(),
+    outcome: 'ACTION_NOT_TRIGGERED',
+    events: [],
+  };
+  currentOperationTrace.set(page, trace);
+  let actionTriggered = false;
+  let requestObserved = false;
+  let submitObserved = false;
+  const invalidFields: string[] = [];
+  const matchesRequest = (request: Request) =>
+    new URL(request.url()).pathname === operation.pathname &&
+    request.method() === method &&
+    requestMatchesBodyField(request, operation.bodyField);
+  const requestListener = (request: Request) => {
+    if (!matchesRequest(request)) return;
+    requestObserved = true;
+    trace.events.push({ stage: 'REQUEST_SENT', elapsedMs: Date.now() - trace.startedAt });
+    writeOperationTrace(page, trace);
+  };
+  const failedListener = (request: Request) => {
+    if (!matchesRequest(request)) return;
+    trace.events.push({
+      stage: 'REQUEST_FAILED',
+      elapsedMs: Date.now() - trace.startedAt,
+      reason: request.failure()?.errorText?.slice(0, 120) ?? 'unknown',
+    });
+    writeOperationTrace(page, trace);
+  };
+  page.on('request', requestListener);
+  page.on('requestfailed', failedListener);
+
+  let requestPromise: Promise<{ value: Request } | { error: unknown }> | undefined;
+  let responsePromise:
+    | Promise<{ value: Awaited<ReturnType<Page['waitForResponse']>> } | { error: unknown }>
+    | undefined;
+  try {
+    if (!operation.button && !operation.action)
+      throw new Error('Operation requires an accessible button or UI action');
+    if (operation.button) {
+      await expect(operation.button, `${operation.operation}: action control`).toBeVisible();
+      await expect(operation.button, `${operation.operation}: action control`).toBeEnabled();
+      await operation.button.evaluate((element, observerKey) => {
+        const diagnosticWindow = window as DiagnosticWindow;
+        diagnosticWindow.__livioQaClickEvents ??= {};
+        diagnosticWindow.__livioQaClickEvents[observerKey] = false;
+        element.addEventListener(
+          'click',
+          () => {
+            diagnosticWindow.__livioQaClickEvents![observerKey] = true;
+          },
+          { capture: true, once: true },
+        );
+      }, clickObserverKey);
+    }
+    if (operation.form) {
+      await expect(operation.form, `${operation.operation}: form`).toBeVisible();
+      const formState = await operation.form.evaluate((element) => {
+        const form = element as HTMLFormElement;
+        return {
+          valid: form.checkValidity(),
+          invalidFields: Array.from(
+            form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>(
+              'input, select, textarea',
+            ),
+          )
+            .filter((field) => !field.validity.valid)
+            .map((field) => ({
+              name: field.name || field.id || field.tagName,
+              validationMessage: field.validationMessage,
+            })),
+        };
+      });
+      invalidFields.push(...formState.invalidFields.map(({ name }) => name));
+      trace.events.push({
+        stage: 'FORM_CHECKED',
+        elapsedMs: Date.now() - trace.startedAt,
+        valid: formState.valid,
+        invalidFields: formState.invalidFields,
+      });
+      await operation.form.evaluate((element) => {
+        const form = element as HTMLFormElement;
+        form.dataset.livioSubmitObserved = 'false';
+        form.addEventListener(
+          'submit',
+          () => {
+            form.dataset.livioSubmitObserved = 'true';
+          },
+          { capture: true, once: true },
+        );
+      });
+      if (invalidFields.length) {
+        await operation.button!.click();
+        actionTriggered =
+          (await page.evaluate(
+            (observerKey) =>
+              (window as DiagnosticWindow).__livioQaClickEvents?.[observerKey] === true,
+            clickObserverKey,
+          )) ?? false;
+        trace.events.push({
+          stage: 'BUTTON_CLICK_EVENT',
+          elapsedMs: Date.now() - trace.startedAt,
+          observed: actionTriggered,
+        });
+        trace.outcome = 'ACTION_NOT_TRIGGERED';
+        trace.events.push({
+          stage: trace.outcome,
+          elapsedMs: Date.now() - trace.startedAt,
+          invalidFieldCount: invalidFields.length,
+        });
+        writeOperationTrace(page, trace);
+        throw new Error(
+          `${trace.outcome}: browser validation blocked submit; invalid fields: ${invalidFields.join(', ')}`,
+        );
+      }
+    }
+    requestPromise = page.waitForRequest(matchesRequest, { timeout: apiOperationTimeoutMs }).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    responsePromise = page
+      .waitForResponse((response) => matchesRequest(response.request()), {
+        timeout: apiOperationTimeoutMs,
+      })
+      .then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+    if (operation.button) {
+      await operation.button.click();
+      actionTriggered =
+        (await page.evaluate(
+          (observerKey) =>
+            (window as DiagnosticWindow).__livioQaClickEvents?.[observerKey] === true,
+          clickObserverKey,
+        )) ?? false;
+      trace.events.push({
+        stage: 'BUTTON_CLICK_EVENT',
+        elapsedMs: Date.now() - trace.startedAt,
+        observed: actionTriggered,
+      });
+    } else {
+      await operation.action!();
+      actionTriggered = true;
+    }
+    trace.events.push({
+      stage: operation.button ? 'BUTTON_CLICKED' : 'UI_ACTION_TRIGGERED',
+      elapsedMs: Date.now() - trace.startedAt,
+    });
+    submitObserved = operation.form
+      ? (await operation.form.getAttribute('data-livio-submit-observed')) === 'true'
+      : true;
+    trace.events.push({
+      stage: operation.form ? 'FORM_SUBMIT_EVENT' : 'UI_ACTION_DISPATCHED',
+      elapsedMs: Date.now() - trace.startedAt,
+      observed: submitObserved,
+    });
+    if (invalidFields.length || !submitObserved || (operation.button && !actionTriggered)) {
+      trace.outcome = 'ACTION_NOT_TRIGGERED';
+      trace.events.push({
+        stage: trace.outcome,
+        elapsedMs: Date.now() - trace.startedAt,
+        invalidFieldCount: invalidFields.length,
+        clickObserved: operation.button ? actionTriggered : null,
+        submitObserved,
+      });
+      throw new Error(
+        `${trace.outcome}: ${operation.operation}; invalid fields: ${invalidFields.join(', ') || 'none'}; click observed: ${operation.button ? actionTriggered : 'not applicable'}; submit observed: ${submitObserved}`,
+      );
+    }
+    const [requestResult, responseResult] = await Promise.all([requestPromise, responsePromise]);
+    if ('error' in requestResult) throw requestResult.error;
+    if ('error' in responseResult) throw responseResult.error;
+    const { value: request } = requestResult;
+    const { value: response } = responseResult;
+    requestObserved = true;
+    trace.outcome = response.status() >= 400 ? 'REQUEST_REJECTED' : 'REQUEST_SUCCEEDED';
+    trace.events.push({
+      stage: trace.outcome,
+      elapsedMs: Date.now() - trace.startedAt,
+      method: request.method(),
+      pathname: new URL(request.url()).pathname,
+      status: response.status(),
+    });
+    writeOperationTrace(page, trace);
+    return response;
+  } catch (error) {
+    if (!trace.events.some(({ stage }) => stage === 'ACTION_NOT_TRIGGERED')) {
+      trace.outcome = !actionTriggered
+        ? 'ACTION_NOT_TRIGGERED'
+        : requestObserved
+          ? 'REQUEST_SENT_NO_RESPONSE'
+          : submitObserved
+            ? 'REQUEST_NOT_SENT'
+            : 'ACTION_NOT_TRIGGERED';
+      trace.events.push({
+        stage: trace.outcome,
+        elapsedMs: Date.now() - trace.startedAt,
+        invalidFieldCount: invalidFields.length,
+      });
+    }
+    writeOperationTrace(page, trace);
+    const directory = process.env.LIVIO_QA_OUTPUT;
+    if (directory) {
+      await screenshotEvidence(page, `operation-failure-${trace.id}`).catch(() => undefined);
+    }
+    throw new Error(`${trace.outcome}: ${operation.operation} (${method} ${operation.pathname})`, {
+      cause: error,
+    });
+  } finally {
+    page.off('request', requestListener);
+    page.off('requestfailed', failedListener);
+    if (operation.button)
+      await page
+        .evaluate((observerKey) => {
+          delete (window as DiagnosticWindow).__livioQaClickEvents?.[observerKey];
+        }, clickObserverKey)
+        .catch(() => undefined);
+  }
+}
+
+function confirmPersistence(page: Page, operation: string) {
+  const trace = currentOperationTrace.get(page);
+  if (!trace || trace.operation !== operation) return;
+  trace.outcome = 'PERSISTENCE_CONFIRMED';
+  trace.events.push({ stage: 'PERSISTENCE_CONFIRMED', elapsedMs: Date.now() - trace.startedAt });
+  writeOperationTrace(page, trace);
+}
+
+function recordOperationStage(page: Page, operation: string, stage: string) {
+  const trace = currentOperationTrace.get(page);
+  if (!trace || trace.operation !== operation) return;
+  trace.events.push({ stage, elapsedMs: Date.now() - trace.startedAt });
+  writeOperationTrace(page, trace);
 }
 
 async function login(page: Page, email: string, onSubmit?: () => void) {
@@ -510,6 +939,22 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
         await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
         await menuToggle.click();
         await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
+        await expect(page.locator('.sidebar-backdrop')).toBeVisible();
+        await screenshotEvidence(page, 'navigation-menu-open-360');
+        const closePoint = {
+          x: viewport.width - 12,
+          y: Math.floor(viewport.height / 2),
+        };
+        const backdropOwnsClosePoint = await page.evaluate(
+          ({ x, y }) => Boolean(document.elementFromPoint(x, y)?.closest('.sidebar-backdrop')),
+          closePoint,
+        );
+        expect(backdropOwnsClosePoint).toBe(true);
+        await page.locator('.sidebar-backdrop').click({ position: closePoint });
+        await expect(page.locator('.sidebar-backdrop')).toBeHidden();
+        await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
+        await menuToggle.click();
+        await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
         const dashboardItem = page
           .locator('#primary-navigation')
           .getByRole('button', { name: 'Visão geral', exact: true });
@@ -755,13 +1200,17 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       await page.getByRole('button', { name: 'Novo cliente', exact: true }).click();
       await page.getByLabel('Nome completo', { exact: true }).fill(clientName);
       await page.getByLabel('E-mail', { exact: true }).fill('cliente-' + suffix + '@example.test');
-      const clientResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/clients' &&
-          response.request().method() === 'POST',
-      );
-      await page.getByRole('button', { name: 'Cadastrar e abrir cliente' }).click();
-      const client = await clientResponse;
+      markWorkflowStage(page, 'journey-1-client-process-lawyer', 'client-form-ready');
+      await screenshotEvidence(page, `journey-1-client-form-ready-${viewport.width}`);
+      const client = await clickUiOperation(page, {
+        operation: 'create-client',
+        pathname: '/v1/clients',
+        form: page.locator('form').filter({
+          has: page.getByRole('button', { name: 'Cadastrar e abrir cliente', exact: true }),
+        }),
+        button: page.getByRole('button', { name: 'Cadastrar e abrir cliente', exact: true }),
+        bodyField: { name: 'displayName', value: clientName },
+      });
       expect(client.status()).toBe(201);
       expect(client.request().postDataJSON()).toMatchObject({
         type: 'PERSON',
@@ -770,6 +1219,13 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const createdClient = (await client.json()) as { id: string; displayName: string };
       expect(createdClient.displayName).toBe(clientName);
       await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
+      const persistedClient = await browserApi(page, `/clients/${createdClient.id}`);
+      assertStatus(persistedClient, 200, 'read client created by the UI form');
+      expect(bodyAs<{ id: string; displayName: string }>(persistedClient)).toMatchObject({
+        id: createdClient.id,
+        displayName: clientName,
+      });
+      confirmPersistence(page, 'create-client');
 
       const reference = `QA-${suffix}`;
       const matterTitle = `Processo QA ${suffix}`;
@@ -788,13 +1244,15 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
         'Advogado Aurora',
       );
       await matterForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
-      const matterResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/matters' &&
-          response.request().method() === 'POST',
-      );
-      await matterForm.getByRole('button', { name: 'Cadastrar processo' }).click();
-      const matter = await matterResponse;
+      markWorkflowStage(page, 'journey-1-client-process-lawyer', 'matter-form-ready');
+      await screenshotEvidence(page, `journey-1-matter-form-ready-${viewport.width}`);
+      const matter = await clickUiOperation(page, {
+        operation: 'create-matter',
+        pathname: '/v1/matters',
+        form: matterForm,
+        button: matterForm.getByRole('button', { name: 'Cadastrar processo' }),
+        bodyField: { name: 'title', value: matterTitle },
+      });
       expect(matter.status()).toBe(201);
       expect(matter.request().postDataJSON()).toMatchObject({
         clientId: createdClient.id,
@@ -825,6 +1283,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
         reference,
         title: matterTitle,
       });
+      confirmPersistence(page, 'create-matter');
 
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(page, 'Clientes');
@@ -844,13 +1303,13 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       await duplicateForm.getByLabel('Referência interna do processo').fill(reference);
       await duplicateForm.getByLabel('Nome do processo').fill(`Duplicado ${matterTitle}`);
       await duplicateForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
-      const duplicateMatterResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/matters' &&
-          response.request().method() === 'POST',
-      );
-      await duplicateForm.getByRole('button', { name: 'Cadastrar processo' }).click();
-      const duplicateMatter = await duplicateMatterResponse;
+      const duplicateMatter = await clickUiOperation(page, {
+        operation: 'reject-duplicate-matter',
+        pathname: '/v1/matters',
+        form: duplicateForm,
+        button: duplicateForm.getByRole('button', { name: 'Cadastrar processo' }),
+        bodyField: { name: 'title', value: `Duplicado ${matterTitle}` },
+      });
       expect(duplicateMatter.status()).toBe(409);
       expect(await duplicateMatter.json()).toMatchObject({
         code: 'conflict',
@@ -890,13 +1349,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       await contractForm.getByLabel('Nome do contrato').fill(contractTitle);
       await contractForm.getByLabel('Modelo de honorários').selectOption('FIXED');
       await contractForm.getByLabel('Valor fixo (R$)').fill('100,00');
-      const contractResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/finance/contracts' &&
-          response.request().method() === 'POST',
-      );
-      await contractForm.getByRole('button', { name: 'Cadastrar contrato' }).click();
-      const contractCreated = await contractResponse;
+      markWorkflowStage(page, 'journey-2-contract-receivable-payment', 'contract-form-ready');
+      await screenshotEvidence(page, `journey-2-contract-form-ready-${viewport.width}`);
+      const contractCreated = await clickUiOperation(page, {
+        operation: 'create-contract',
+        pathname: '/v1/finance/contracts',
+        form: contractForm,
+        button: contractForm.getByRole('button', { name: 'Cadastrar contrato' }),
+        bodyField: { name: 'number', value: contractNumber },
+      });
       expect(contractCreated.status()).toBe(201);
       expect(contractCreated.request().postDataJSON()).toMatchObject({
         clientId: clientA,
@@ -921,6 +1382,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         number: contractNumber,
       });
       expect(amountUnits(persistedContract!.fixedAmount)).toBe(amountUnits('100.00'));
+      confirmPersistence(page, 'create-contract');
 
       const reference = `QA-REC-${suffix}`;
       const issueDate = dateInput();
@@ -937,13 +1399,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       await receivableForm.getByLabel('Parcelas após entrada').fill('3');
       await receivableForm.getByLabel('Data de emissão').fill(issueDate);
       await receivableForm.getByLabel('Primeiro vencimento').fill(firstDueDate);
-      const receivableResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/finance/receivables' &&
-          response.request().method() === 'POST',
-      );
-      await receivableForm.getByRole('button', { name: 'Criar cobrança e parcelas' }).click();
-      const receivableCreated = await receivableResponse;
+      markWorkflowStage(page, 'journey-2-contract-receivable-payment', 'receivable-form-ready');
+      await screenshotEvidence(page, `journey-2-receivable-form-ready-${viewport.width}`);
+      const receivableCreated = await clickUiOperation(page, {
+        operation: 'create-receivable-and-installments',
+        pathname: '/v1/finance/receivables',
+        form: receivableForm,
+        button: receivableForm.getByRole('button', { name: 'Criar cobrança e parcelas' }),
+        bodyField: { name: 'reference', value: reference },
+      });
       expect(receivableCreated.status()).toBe(201);
       const receivablePayload = receivableCreated.request().postDataJSON() as {
         contractId: string;
@@ -1019,6 +1483,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       expect(persistedReceivable!.installments.map(({ dueDate }) => dueDate.slice(0, 10))).toEqual(
         dueDates,
       );
+      confirmPersistence(page, 'create-receivable-and-installments');
 
       const receivableRow = page.getByRole('row').filter({ hasText: reference });
       await receivableRow.scrollIntoViewIfNeeded();
@@ -1040,13 +1505,13 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         await paymentForm.getByLabel('Referência do pagamento').fill(paymentReference);
         await paymentForm.getByLabel('Valor recebido').fill(amount);
         await paymentForm.getByLabel('Data do pagamento').fill(paidAt);
-        const responsePromise = page.waitForResponse(
-          (response) =>
-            new URL(response.url()).pathname === '/v1/finance/payments' &&
-            response.request().method() === 'POST',
-        );
-        await paymentForm.getByRole('button', { name: 'Confirmar pagamento' }).click();
-        return responsePromise;
+        return clickUiOperation(page, {
+          operation: `post-payment-${paymentReference}`,
+          pathname: '/v1/finance/payments',
+          form: paymentForm,
+          button: paymentForm.getByRole('button', { name: 'Confirmar pagamento' }),
+          bodyField: { name: 'reference', value: paymentReference },
+        });
       }
 
       const firstInstallment = createdReceivable.installments[0]!;
@@ -1151,12 +1616,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         `QA-PG-1-${suffix}`,
       );
       expect(firstInstallmentPaid.status()).toBe(201);
+      await expectOperationFeedback(page, 'Pagamento confirmado e alocado à parcela.');
       const secondInstallment = createdReceivable.installments[1]!;
       const secondPaid = await submitPayment(secondInstallment.id, '33,33', `QA-PG-2-${suffix}`);
       expect(secondPaid.status()).toBe(201);
+      await expectOperationFeedback(page, 'Pagamento confirmado e alocado à parcela.');
       const thirdInstallment = createdReceivable.installments[2]!;
       const thirdPaid = await submitPayment(thirdInstallment.id, '33,33', `QA-PG-3-${suffix}`);
       expect(thirdPaid.status()).toBe(201);
+      await expectOperationFeedback(page, 'Pagamento confirmado e alocado à parcela.');
 
       const finalReceivables = await browserApi(
         page,
@@ -1178,6 +1646,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
           0n,
         ),
       ).toBe(amountUnits('100.00'));
+      confirmPersistence(page, `post-payment-QA-PG-3-${suffix}`);
 
       await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(page, /Receb/);
@@ -1222,12 +1691,27 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await expenseForm.getByLabel('Valor').fill('42,25');
       await expenseForm.getByLabel('Data da despesa').fill(dateInput());
       await expenseForm.getByLabel('Vencimento').fill(dateInput(10));
-      await expenseForm.getByRole('button', { name: 'Cadastrar despesa' }).click();
+      markWorkflowStage(financePage, 'journey-3-expense-approval-payment', 'expense-form-ready');
+      await screenshotEvidence(financePage, `journey-3-expense-form-ready-${viewport.width}`);
+      const createExpenseResponse = await clickUiOperation(financePage, {
+        operation: 'create-expense',
+        pathname: '/v1/finance/expenses',
+        form: expenseForm,
+        button: expenseForm.getByRole('button', { name: 'Cadastrar despesa' }),
+        bodyField: { name: 'description', value: description },
+      });
+      expect(createExpenseResponse.status()).toBe(201);
+      const expenseId = ((await createExpenseResponse.json()) as { id: string }).id;
       await expectOperationFeedback(financePage, 'Despesa cadastrada.');
       await pageExpenseSection(financePage);
       let expenseRow = financePage.getByRole('row').filter({ hasText: description });
       await expect(expenseRow).toContainText('Rascunho');
-      await expenseRow.getByRole('button', { name: 'Enviar para aprovação' }).click();
+      const submitExpenseResponse = await clickUiOperation(financePage, {
+        operation: 'submit-expense-for-approval',
+        pathname: `/v1/finance/expenses/${expenseId}/submit`,
+        button: expenseRow.getByRole('button', { name: 'Enviar para aprovação' }),
+      });
+      expect(submitExpenseResponse.status()).toBe(201);
       await expectOperationFeedback(financePage, 'Despesa enviada para aprovação.');
       await expect(expenseRow).toContainText('Aguardando aprovação');
 
@@ -1236,7 +1720,12 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await pageExpenseSection(adminPage);
       expenseRow = adminPage.getByRole('row').filter({ hasText: description });
       await expect(expenseRow).toContainText('Aguardando aprovação');
-      await expenseRow.getByRole('button', { name: 'Aprovar' }).click();
+      const approveExpenseResponse = await clickUiOperation(adminPage, {
+        operation: 'approve-expense-as-another-user',
+        pathname: `/v1/finance/expenses/${expenseId}/approve`,
+        button: expenseRow.getByRole('button', { name: 'Aprovar' }),
+      });
+      expect(approveExpenseResponse.status()).toBe(201);
       await expectOperationFeedback(adminPage, 'Despesa aprovada.');
       await expect(expenseRow).toContainText('Aguardando pagamento');
       await expenseRow.getByRole('button', { name: 'Registrar pagamento' }).click();
@@ -1244,7 +1733,17 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await adminPage.getByLabel('Data do pagamento').fill(dateInput());
       await adminPage.getByLabel('Forma de pagamento').fill('PIX');
       await adminPage.getByLabel('Referência').fill(`QA-${suffix}`);
-      await adminPage.getByRole('button', { name: 'Confirmar quitação integral' }).click();
+      const paymentForm = adminPage.locator('form').filter({
+        has: adminPage.getByRole('button', { name: 'Confirmar quitação integral' }),
+      });
+      const payExpenseResponse = await clickUiOperation(adminPage, {
+        operation: 'pay-approved-expense',
+        pathname: `/v1/finance/expenses/${expenseId}/payment`,
+        form: paymentForm,
+        button: paymentForm.getByRole('button', { name: 'Confirmar quitação integral' }),
+        bodyField: { name: 'reference', value: `QA-${suffix}` },
+      });
+      expect(payExpenseResponse.status()).toBe(201);
       await expectOperationFeedback(adminPage, 'Pagamento integral registrado no caixa.');
       await expect(expenseRow).toContainText('Paga');
 
@@ -1261,6 +1760,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
         status: 'PAID',
         amount: '42.25',
       });
+      confirmPersistence(adminPage, 'pay-approved-expense');
 
       const cashFlow = await browserApi(adminPage, `/reports/cash-flow?${reportRange()}`);
       assertStatus(cashFlow, 200, 'read cash flow');
@@ -1319,13 +1819,15 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         mimeType: 'application/pdf',
         buffer: Buffer.from(pdfBytes()),
       });
-      const uploadResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/documents' &&
-          response.request().method() === 'POST',
-      );
-      await uploadForm.getByRole('button', { name: 'Enviar documento' }).click();
-      const uploaded = await uploadResponse;
+      markWorkflowStage(page, 'journey-4-document-upload-download-signature', 'upload-form-ready');
+      await screenshotEvidence(page, `journey-4-upload-form-ready-${viewport.width}`);
+      const uploaded = await clickUiOperation(page, {
+        operation: 'upload-client-document',
+        pathname: '/v1/documents',
+        form: uploadForm,
+        button: uploadForm.getByRole('button', { name: 'Enviar documento' }),
+        bodyField: { name: 'title', value: title },
+      });
       expect(uploaded.status()).toBe(201);
       const uploadFields = uploaded.request().postDataBuffer()?.toString('latin1') ?? '';
       expect(uploadFields).toContain(title);
@@ -1348,13 +1850,13 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         mimeType: 'application/pdf',
         buffer: Buffer.concat([Buffer.from(pdfBytes()), Buffer.from(eicarTestFile, 'ascii')]),
       });
-      const infectedUpload = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/documents' &&
-          response.request().method() === 'POST',
-      );
-      await infectedForm.getByRole('button', { name: 'Enviar documento' }).click();
-      const infectedResponse = await infectedUpload;
+      const infectedResponse = await clickUiOperation(page, {
+        operation: 'reject-infected-document-upload',
+        pathname: '/v1/documents',
+        form: infectedForm,
+        button: infectedForm.getByRole('button', { name: 'Enviar documento' }),
+        bodyField: { name: 'title', value: infectedTitle },
+      });
       expect(infectedResponse.status()).toBe(422);
       expect(await infectedResponse.json()).toMatchObject({
         code: 'unprocessable_entity',
@@ -1373,19 +1875,21 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           items: Array<{ id: string; title: string; clientId: string; visibility: string }>;
         }>(persistedDocuments).items.find((item) => item.id === documentId),
       ).toMatchObject({ id: documentId, title, clientId: clientA, visibility: 'CLIENT' });
+      confirmPersistence(page, 'upload-client-document');
 
-      const signedUrlResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === `/v1/documents/${documentId}/download-url`,
-      );
       const storageResponsePromise = page
         .context()
         .waitForEvent('response', (response) =>
           new URL(response.url()).pathname.startsWith('/storage/v1/object/sign/legal-documents/'),
         );
       const popupPromise = page.waitForEvent('popup');
-      await documentRow.getByRole('button', { name: 'Abrir' }).click();
-      const [signedUrl, documentPage] = await Promise.all([signedUrlResponse, popupPromise]);
+      const signedUrl = await clickUiOperation(page, {
+        operation: 'request-protected-document-download',
+        pathname: `/v1/documents/${documentId}/download-url`,
+        method: 'GET',
+        button: documentRow.getByRole('button', { name: 'Abrir' }),
+      });
+      const documentPage = await popupPromise;
       expect(signedUrl.status()).toBe(200);
       const downloadUrl = ((await signedUrl.json()) as { url: string }).url;
       expect(new URL(downloadUrl).hostname).toBe('127.0.0.1');
@@ -1393,20 +1897,22 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       expect(new URL(downloadResponse.url()).pathname).toBe(new URL(downloadUrl).pathname);
       expect(downloadResponse.status()).toBe(200);
       expect(downloadResponse.headers()['content-type']).toContain('application/pdf');
-      expect(downloadResponse.body()).resolves.toHaveLength(pdfBytes().length);
+      const downloadedBytes = await downloadResponse.body();
+      expect(downloadedBytes).toHaveLength(pdfBytes().length);
+      recordOperationStage(page, 'request-protected-document-download', 'DOWNLOAD_BYTES_CONFIRMED');
       await documentPage.close();
 
       await documentRow.getByRole('button', { name: 'Solicitar assinatura' }).click();
       const requestDialog = page.getByRole('dialog', { name: 'Enviar para assinatura' });
       await requestDialog.getByLabel('Nome de quem assinará').fill('Cliente Ficticio Alfa');
       await requestDialog.getByLabel('Validade do link').selectOption('3');
-      const signingResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === `/v1/documents/${documentId}/signature-requests` &&
-          response.request().method() === 'POST',
-      );
-      await requestDialog.getByRole('button', { name: 'Criar link de assinatura' }).click();
-      const requested = await signingResponse;
+      const requested = await clickUiOperation(page, {
+        operation: 'request-document-signature',
+        pathname: `/v1/documents/${documentId}/signature-requests`,
+        form: requestDialog.locator('form'),
+        button: requestDialog.getByRole('button', { name: 'Criar link de assinatura' }),
+        bodyField: { name: 'signerName', value: 'Cliente Ficticio Alfa' },
+      });
       expect(requested.status()).toBe(201);
       expect(requested.request().postDataJSON()).toMatchObject({
         signerName: 'Cliente Ficticio Alfa',
@@ -1418,6 +1924,21 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       expect(signingPath.startsWith('/assinar/')).toBe(true);
       expect(signingPath.split('/').at(-1)?.length).toBe(64);
       await expect(documentRow).toContainText('Aguardando Cliente Ficticio Alfa');
+      recordOperationStage(page, 'request-document-signature', 'SIGNATURE_LINK_VISIBLE');
+      const persistedSignatureDocuments = await browserApi(page, '/documents?page=1&pageSize=100');
+      assertStatus(persistedSignatureDocuments, 200, 'read persisted signature request');
+      const persistedSignature = bodyAs<{
+        items: Array<{
+          id: string;
+          signingRequests?: Array<{ signerName: string; status: string }>;
+        }>;
+      }>(persistedSignatureDocuments).items.find((item) => item.id === documentId)
+        ?.signingRequests?.[0];
+      expect(persistedSignature).toMatchObject({
+        signerName: 'Cliente Ficticio Alfa',
+        status: 'PENDING',
+      });
+      confirmPersistence(page, 'request-document-signature');
       await shareDialog.getByRole('button', { name: 'Fechar' }).click();
 
       const invalidTitle = `Arquivo inválido QA ${suffix}`;
@@ -1432,13 +1953,13 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         mimeType: 'application/pdf',
         buffer: Buffer.from('not a PDF document'),
       });
-      const invalidUpload = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/documents' &&
-          response.request().method() === 'POST',
-      );
-      await invalidForm.getByRole('button', { name: 'Enviar documento' }).click();
-      const invalidResponse = await invalidUpload;
+      const invalidResponse = await clickUiOperation(page, {
+        operation: 'reject-invalid-document-upload',
+        pathname: '/v1/documents',
+        form: invalidForm,
+        button: invalidForm.getByRole('button', { name: 'Enviar documento' }),
+        bodyField: { name: 'title', value: invalidTitle },
+      });
       expect(invalidResponse.status()).toBe(400);
       expect(await invalidResponse.json()).toMatchObject({
         code: 'bad_request',
@@ -1462,13 +1983,13 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         mimeType: 'application/pdf',
         buffer: Buffer.alloc(4 * 1024 * 1024 + 1, 0x41),
       });
-      const oversizedUpload = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/documents' &&
-          response.request().method() === 'POST',
-      );
-      await oversizedForm.getByRole('button', { name: 'Enviar documento' }).click();
-      const oversizedResponse = await oversizedUpload;
+      const oversizedResponse = await clickUiOperation(page, {
+        operation: 'reject-oversized-document-upload',
+        pathname: '/v1/documents',
+        form: oversizedForm,
+        button: oversizedForm.getByRole('button', { name: 'Enviar documento' }),
+        bodyField: { name: 'title', value: oversizedTitle },
+      });
       expect(oversizedResponse.status()).toBe(413);
       expect(await oversizedResponse.json()).toMatchObject({
         code: 'payload_too_large',
@@ -1501,13 +2022,13 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
       await taskForm.locator('select[name="priority"]').selectOption('HIGH');
       await expect(taskForm.locator('select[name="assigneeId"]')).toBeEnabled();
       await taskForm.locator('select[name="assigneeId"]').selectOption(lawyerUserA);
-      const taskResponse = page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/v1/tasks' &&
-          response.request().method() === 'POST',
-      );
-      await page.getByRole('button', { name: 'Criar tarefa', exact: true }).click();
-      const created = await taskResponse;
+      const created = await clickUiOperation(page, {
+        operation: 'create-task',
+        pathname: '/v1/tasks',
+        form: taskForm,
+        button: taskForm.getByRole('button', { name: 'Criar tarefa', exact: true }),
+        bodyField: { name: 'title', value: title },
+      });
       expect(created.status()).toBe(201);
       expect(created.request().postDataJSON()).toMatchObject({
         title,
@@ -1516,7 +2037,14 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
       });
       const taskId = ((await created.json()) as { id: string }).id;
       await expectOperationFeedback(page, 'Tarefa criada.');
-      await page.getByLabel('Status de ' + title).selectOption('COMPLETED');
+      const completeTaskResponse = await clickUiOperation(page, {
+        operation: 'complete-assigned-task',
+        pathname: `/v1/tasks/${taskId}`,
+        method: 'PATCH',
+        action: () => page.getByLabel(`Status de ${title}`).selectOption('COMPLETED'),
+        bodyField: { name: 'status', value: 'COMPLETED' },
+      });
+      expect(completeTaskResponse.status()).toBe(200);
       await expectOperationFeedback(page, 'Tarefa atualizada.');
       const persisted = await browserApi(page, '/tasks');
       assertStatus(persisted, 200, 'read persisted tasks');
@@ -1529,6 +2057,7 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
       await navigateTo(page, 'Tarefas');
       await expect(page.getByText(title, { exact: true })).toBeVisible();
       await expect(page.getByLabel(`Status de ${title}`)).toHaveValue('COMPLETED');
+      confirmPersistence(page, 'complete-assigned-task');
       await screenshotEvidence(page, `journey-task-completed-${viewport.width}`);
     } finally {
       await context.close();
