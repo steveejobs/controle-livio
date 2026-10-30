@@ -573,7 +573,16 @@ const defaultObjectCategories = {
   n: 'SCHEMAS',
 };
 const defaultCategoryPrivileges = {
-  r: new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']),
+  r: new Set([
+    'SELECT',
+    'INSERT',
+    'UPDATE',
+    'DELETE',
+    'TRUNCATE',
+    'REFERENCES',
+    'TRIGGER',
+    'MAINTAIN',
+  ]),
   S: new Set(['USAGE', 'SELECT', 'UPDATE']),
   f: new Set(['EXECUTE']),
   T: new Set(['USAGE']),

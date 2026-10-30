@@ -921,7 +921,7 @@ test('seletor de cliente: carregamento sob demanda, erro, nova tentativa e lista
     const page = await context.newPage();
     let releaseClientResponse: (() => void) | undefined;
     try {
-      await login(page, 'admin.aurora@example.test');
+      await login(page, 'qa-selector.aurora@example.test');
       await navigateTo(page, 'Processos');
       const clientsPath = `${new URL(apiBase).pathname.replace(/\/$/, '')}/clients`;
       const isClientListRequest = (route: Route) =>
@@ -1309,7 +1309,7 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
     const externalHosts = await enableLocalNetworkOnly(page.context());
     traffic.setPhase('setup');
     try {
-      await login(page, 'admin.aurora@example.test', () => {
+      await login(page, 'qa-navigation.aurora@example.test', () => {
         traffic.setPhase('dashboard');
         dashboardStartedAt = performance.now();
       });
@@ -1479,7 +1479,7 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
 test('navegação repetida em duas sessões e organizações distintas', async ({ browser }) => {
   test.setTimeout(180_000);
   const sessions = [
-    { name: 'aurora', email: 'admin.aurora@example.test' },
+    { name: 'aurora', email: 'qa-sessions.aurora@example.test' },
     { name: 'horizonte', email: 'admin.horizonte@example.test' },
   ] as const;
   const metricsByViewport: Record<string, unknown> = {};
@@ -1576,7 +1576,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
     try {
-      await login(page, 'admin.aurora@example.test');
+      await login(page, 'qa-client-process.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const clientName = `Cliente QA ${suffix}`;
       await navigateTo(page, 'Clientes');
@@ -1776,7 +1776,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
     try {
-      await login(page, 'admin.aurora@example.test');
+      await login(page, 'qa-finance.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const contractNumber = `QA-CT-${suffix}`;
       const contractTitle = `Contrato QA ${suffix}`;
@@ -2233,7 +2233,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await expectOperationFeedback(financePage, 'Despesa enviada para aprovação.');
       await expect(expenseRow).toContainText('Aguardando aprovação');
 
-      await login(adminPage, 'admin.aurora@example.test');
+      await login(adminPage, 'qa-expense-approver.aurora@example.test');
       await navigateTo(adminPage, /Receb/);
       await pageExpenseSection(adminPage);
       expenseRow = adminPage.getByRole('row').filter({ hasText: description });
@@ -2492,7 +2492,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
     try {
-      await login(page, 'admin.aurora@example.test');
+      await login(page, 'qa-documents.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const title = `PDF de assinatura QA ${suffix}`;
       const cleanPdf = await pdfBytes();
@@ -2830,7 +2830,7 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
     const context = await browser.newContext({ viewport });
     const page = await context.newPage();
     try {
-      await login(page, 'admin.aurora@example.test');
+      await login(page, 'qa-tasks.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const title = `Tarefa QA ${suffix}`;
       await navigateTo(page, 'Tarefas');
@@ -2899,7 +2899,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
     const otherOrganizationPage = await otherOrganizationContext.newPage();
     const otherOrganizationClientPage = await otherOrganizationClientContext.newPage();
     try {
-      await login(adminPage, 'admin.aurora@example.test');
+      await login(adminPage, 'qa-portal.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const visibleTitle = `Documento do portal QA ${suffix}`;
       const internalTitle = `Documento interno QA ${suffix}`;

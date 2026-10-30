@@ -459,6 +459,9 @@ async function resetDisposableStackBetweenSuites() {
         productionLimitOverridden: false,
         syntheticDatabaseResetBetweenSuites: true,
         apiProcessRestartedBetweenSuites: true,
+        rateLimitKeyScope:
+          'organization_id plus SHA-256 of authenticated user and read/write class',
+        distinctSyntheticIdentityForEachRateLimitedJourney: true,
         identityAndOrganizationScope: 'synthetic seed recreated in disposable local stack',
       },
       null,

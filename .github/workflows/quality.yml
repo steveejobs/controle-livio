@@ -78,6 +78,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Install qpdf for independent PDF fixture validation
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes qpdf
       - name: Install the single browser used by the integrated suite
         run: npx playwright install --with-deps chromium
       - name: Start disposable Supabase and export loopback-only credentials

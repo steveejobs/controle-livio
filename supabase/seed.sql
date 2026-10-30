@@ -156,6 +156,96 @@ SELECT omr.organization_id, om.user_id, omr.role_id
 FROM public.organization_member_roles omr JOIN public.organization_members om ON om.id = omr.membership_id
 ON CONFLICT DO NOTHING;
 
+-- Each integrated browser journey gets its own administrator identity so the real
+-- per-user rate limit remains enabled without one synthetic account exhausting it.
+WITH qa_admins(auth_id, email, full_name) AS (
+  VALUES
+    ('a0000000-0000-4000-8000-000000000011'::uuid, 'qa-selector.aurora@example.test', 'QA Seletor Aurora'),
+    ('a0000000-0000-4000-8000-000000000012'::uuid, 'qa-navigation.aurora@example.test', 'QA Navegacao Aurora'),
+    ('a0000000-0000-4000-8000-000000000013'::uuid, 'qa-sessions.aurora@example.test', 'QA Sessoes Aurora'),
+    ('a0000000-0000-4000-8000-000000000014'::uuid, 'qa-client-process.aurora@example.test', 'QA Cliente Processo Aurora'),
+    ('a0000000-0000-4000-8000-000000000015'::uuid, 'qa-finance.aurora@example.test', 'QA Financeiro Aurora'),
+    ('a0000000-0000-4000-8000-000000000016'::uuid, 'qa-expense-approver.aurora@example.test', 'QA Aprovacao Aurora'),
+    ('a0000000-0000-4000-8000-000000000017'::uuid, 'qa-documents.aurora@example.test', 'QA Documentos Aurora'),
+    ('a0000000-0000-4000-8000-000000000018'::uuid, 'qa-tasks.aurora@example.test', 'QA Tarefas Aurora'),
+    ('a0000000-0000-4000-8000-000000000019'::uuid, 'qa-portal.aurora@example.test', 'QA Portal Aurora')
+)
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+  confirmation_token, recovery_token, email_change, email_change_token_new
+)
+SELECT
+  '00000000-0000-0000-0000-000000000000', auth_id, 'authenticated', 'authenticated',
+  email, admin_auth.encrypted_password, now(),
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  jsonb_build_object('full_name', full_name), now(), now(), '', '', '', ''
+FROM qa_admins
+CROSS JOIN (
+  SELECT encrypted_password FROM auth.users WHERE email = 'admin.aurora@example.test'
+) AS admin_auth
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+SELECT u.id::text, u.id, jsonb_build_object('sub', u.id::text, 'email', u.email), 'email', now(), now(), now()
+FROM auth.users u
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (provider_id, provider) DO NOTHING;
+
+INSERT INTO public.profiles (id, email, full_name)
+SELECT id, email, raw_user_meta_data->>'full_name'
+FROM auth.users WHERE email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, full_name = EXCLUDED.full_name;
+
+INSERT INTO public.users (
+  id, auth_user_id, organization_id, client_id, email, password_hash, full_name, status, updated_at
+)
+SELECT
+  ('a1000000-0000-4000-8000-' || right(u.id::text, 12))::uuid,
+  u.id,
+  '10000000-0000-4000-8000-000000000001',
+  NULL,
+  u.email,
+  NULL,
+  u.raw_user_meta_data->>'full_name',
+  'ACTIVE',
+  now()
+FROM auth.users u
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.organization_members (id, organization_id, profile_id, user_id, client_id, status)
+SELECT
+  ('a2000000-0000-4000-8000-' || right(u.id::text, 12))::uuid,
+  '10000000-0000-4000-8000-000000000001',
+  u.id,
+  ('a1000000-0000-4000-8000-' || right(u.id::text, 12))::uuid,
+  NULL,
+  'ACTIVE'
+FROM auth.users u
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.organization_member_roles (organization_id, membership_id, role_id)
+SELECT
+  om.organization_id,
+  om.id,
+  'a3000000-0000-4000-8000-000000000001'
+FROM public.organization_members om
+JOIN auth.users u ON u.id = om.profile_id
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.user_roles (organization_id, user_id, role_id)
+SELECT
+  om.organization_id,
+  om.user_id,
+  'a3000000-0000-4000-8000-000000000001'
+FROM public.organization_members om
+JOIN auth.users u ON u.id = om.profile_id
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT DO NOTHING;
+
 INSERT INTO public.pipelines (id, organization_id, name, kind, updated_at)
 VALUES
   ('12000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','Juridico Local','LEGAL',now()),

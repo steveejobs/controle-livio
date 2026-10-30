@@ -211,29 +211,71 @@ async function runPdfEicarMatrix() {
     ['embedded-clean-parser-verified.pdf', await pdfBytes({ embeddedFile: benignAttachment })],
   ];
   const results = [];
+  const persistMatrixProgress = (status = 'IN_PROGRESS') => {
+    report.results['clamav-pdf-matrix'] = {
+      status,
+      qpdfAvailable,
+      qpdfVersion: qpdfAvailable ? qpdfVersion.stdout.trim() : null,
+      fixtures: results,
+    };
+    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  };
   for (const [name, bytes] of fixtureBytes) {
     const { hostPath, containerPath } = saveFixture(name, bytes);
-    const targets = await extractPdfScanTargets(bytes);
+    const isPdf = name.endsWith('.pdf');
+    let targets = { pageContents: [], embeddedFiles: [] };
+    let parserError;
+    if (isPdf) {
+      try {
+        targets = await extractPdfScanTargets(bytes);
+      } catch (error) {
+        parserError = error instanceof Error ? error.message.slice(0, 240) : 'PDF parse failed';
+      }
+    }
     const expectedContents = Buffer.from(
       name.includes('clean') ? benignAttachment : eicar,
       'ascii',
     );
     const parserVerified =
-      name === 'raw-eicar.bin'
+      !parserError &&
+      (name === 'raw-eicar.bin'
         ? bytes.equals(expectedContents)
         : name === 'clean.pdf'
           ? targets.pageContents.length === 0 && targets.embeddedFiles.length === 0
           : name === 'page-content-eicar.pdf'
             ? targets.pageContents.some((stream) => stream.includes(expectedContents))
-            : targets.embeddedFiles.some((stream) => stream.equals(expectedContents));
-    if (!parserVerified)
-      fail(`the fixture parser did not recover the expected content structure for ${name}.`);
-    if (qpdfAvailable && name.endsWith('.pdf')) {
+            : targets.embeddedFiles.some((stream) => stream.equals(expectedContents)));
+    if (!parserVerified) {
+      results.push({
+        fixture: name,
+        bytes: bytes.length,
+        parserValidated: false,
+        parserError: parserError ?? 'expected content was not recovered from the fixture structure',
+        pageStreamsDecoded: targets.pageContents.length,
+        embeddedFilesExtracted: targets.embeddedFiles.length,
+        fixtureContentsVerifiedByParser: false,
+      });
+      persistMatrixProgress();
+      continue;
+    }
+    if (qpdfAvailable && isPdf) {
       const qpdfCheck = spawnSync('qpdf', ['--check', hostPath], {
         encoding: 'utf8',
         maxBuffer: 1024 * 1024,
       });
-      if (qpdfCheck.status !== 0) fail(`qpdf rejected PDF fixture ${name}.`);
+      if (qpdfCheck.status !== 0) {
+        results.push({
+          fixture: name,
+          bytes: bytes.length,
+          parserValidated: false,
+          externalValidator: 'qpdf --check FAIL',
+          pageStreamsDecoded: targets.pageContents.length,
+          embeddedFilesExtracted: targets.embeddedFiles.length,
+          fixtureContentsVerifiedByParser: parserVerified,
+        });
+        persistMatrixProgress();
+        continue;
+      }
     }
     const clamscan = directScan('clamscan', name, hostPath, containerPath);
     const clamdscan = directScan('clamdscan', name, hostPath, containerPath);
@@ -241,21 +283,28 @@ async function runPdfEicarMatrix() {
       fixture: name,
       bytes: bytes.length,
       parserValidated: true,
-      externalValidator: name.endsWith('.pdf') && qpdfAvailable ? 'qpdf --check PASS' : null,
+      externalValidator: isPdf && qpdfAvailable ? 'qpdf --check PASS' : null,
       pageStreamsDecoded: targets.pageContents.length,
       embeddedFilesExtracted: targets.embeddedFiles.length,
       fixtureContentsVerifiedByParser: parserVerified,
       clamscan,
       clamdscan,
     });
+    persistMatrixProgress();
   }
 
   const raw = results.find(({ fixture }) => fixture === 'raw-eicar.bin');
   const clean = results.find(({ fixture }) => fixture === 'clean.pdf');
-  if (raw?.clamscan.verdict !== 'INFECTED' || raw.clamdscan.verdict !== 'INFECTED')
-    fail('the EICAR signature was not loaded by both the clamscan engine and clamd daemon.');
-  if (clean?.clamscan.verdict !== 'CLEAN' || clean.clamdscan.verdict !== 'CLEAN')
-    fail('the clean PDF fixture was not accepted by both ClamAV interfaces.');
+  const cleanAttachment = results.find(
+    ({ fixture }) => fixture === 'embedded-clean-parser-verified.pdf',
+  );
+  const baseScannerCasesPass =
+    raw?.clamscan?.verdict === 'INFECTED' &&
+    raw.clamdscan.verdict === 'INFECTED' &&
+    clean?.clamscan?.verdict === 'CLEAN' &&
+    clean.clamdscan.verdict === 'CLEAN' &&
+    cleanAttachment?.clamscan?.verdict === 'CLEAN' &&
+    cleanAttachment.clamdscan.verdict === 'CLEAN';
 
   const extractedInfectedPdf = service();
   let applicationExtractionPass = true;
@@ -274,13 +323,41 @@ async function runPdfEicarMatrix() {
         { verdict: 'pdf-content-rejected-after-application-extraction' },
       )) && applicationExtractionPass;
   }
+  const cleanAttachmentBytes = fixtureBytes.find(
+    ([fixture]) => fixture === 'embedded-clean-parser-verified.pdf',
+  )?.[1];
+  if (!cleanAttachmentBytes) fail('the clean embedded attachment fixture is missing.');
+  let cleanAttachmentApplicationPass = true;
+  try {
+    await extractedInfectedPdf.assertClean(cleanAttachmentBytes, 'application/pdf');
+  } catch (error) {
+    cleanAttachmentApplicationPass = false;
+    record('application-clean-embedded-attachment', 'FAIL', {
+      verdict: 'clean-attachment-rejected',
+      actualStatus: statusOf(error) ?? null,
+    });
+  }
+  if (cleanAttachmentApplicationPass)
+    record('application-clean-embedded-attachment', 'PASS', { verdict: 'clean' });
+  const fixtureParserPass =
+    results.length === fixtureBytes.length &&
+    results.every(({ parserValidated }) => parserValidated === true);
   report.results['clamav-pdf-matrix'] = {
-    status: applicationExtractionPass ? 'PASS' : 'FAIL',
+    status:
+      baseScannerCasesPass &&
+      fixtureParserPass &&
+      applicationExtractionPass &&
+      cleanAttachmentApplicationPass
+        ? 'PASS'
+        : 'FAIL',
+    baseScannerCasesPass,
+    fixtureParserPass,
     qpdfAvailable,
     qpdfVersion: qpdfAvailable ? qpdfVersion.stdout.trim() : null,
     note: 'Direct PDF verdicts are recorded per scanner; decoded page and embedded streams are separately scanned by the application.',
     fixtures: results,
   };
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
   const logs = execFileSync('docker', ['logs', '--tail', '100', container], { encoding: 'utf8' });
   report.daemonLogHighlights = logs
     .split(/\r?\n/)
@@ -325,6 +402,8 @@ async function verifyReady() {
     'infected-rejected',
   );
   await runPdfEicarMatrix();
+  report.readyStatus = 'PASS';
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
 async function verifyFailureModes() {
@@ -396,22 +475,48 @@ async function verifyFailureModes() {
 }
 
 const mode = process.argv[2];
-if (mode === '--ready') await verifyReady();
-else if (mode === '--failure-modes') await verifyFailureModes();
+if (mode === '--ready') {
+  try {
+    await verifyReady();
+  } catch (error) {
+    report.readyStatus = 'FAIL';
+    report.readyError =
+      error instanceof Error ? error.message.slice(0, 300) : 'scanner readiness failed';
+    writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+    throw error;
+  }
+} else if (mode === '--failure-modes') await verifyFailureModes();
 else fail('expected --ready or --failure-modes.');
 
 const results = Object.values(report.results);
 if (mode === '--ready') {
-  report.status = results.every((result) => result.status === 'PASS') ? 'READY' : 'FAIL';
+  report.readyStatus = results.every((result) => result.status === 'PASS') ? 'PASS' : 'FAIL';
+  report.status = report.readyStatus;
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  if (report.status !== 'READY')
+  if (report.readyStatus !== 'PASS')
     fail('one or more clean/EICAR scanner checks failed; see sanitized report.');
 }
 if (mode === '--failure-modes') {
-  report.status = Object.values(report.results).every((result) => result.status === 'PASS')
-    ? 'PASS'
-    : 'FAIL';
+  const failureModeNames = new Set([
+    'paused-daemon-timeout',
+    'clamav-resumed-after-timeout',
+    'post-timeout-recovery',
+    'stopped-daemon-unavailable',
+  ]);
+  const failureModeResults = Object.entries(report.results).filter(([name]) =>
+    failureModeNames.has(name),
+  );
+  report.failureModesStatus =
+    failureModeResults.length === failureModeNames.size &&
+    failureModeResults.every(([, result]) => result.status === 'PASS')
+      ? 'PASS'
+      : 'FAIL';
+  // Failure-mode checks run independently, but cannot convert an incomplete or failed scanner
+  // readiness/PDF matrix into an overall PASS.
+  report.status =
+    report.readyStatus === 'PASS' && report.failureModesStatus === 'PASS' ? 'PASS' : 'FAIL';
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
-  if (report.status !== 'PASS') fail('final scanner report is not clean.');
+  if (report.failureModesStatus !== 'PASS') fail('scanner timeout/unavailable checks failed.');
+  if (report.readyStatus !== 'PASS') fail('scanner readiness/PDF matrix did not pass in this run.');
   console.log('Real ClamAV clean, EICAR, timeout and unavailable checks passed.');
 }
