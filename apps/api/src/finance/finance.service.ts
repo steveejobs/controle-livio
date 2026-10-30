@@ -361,6 +361,11 @@ export class FinanceService {
               },
             });
           }
+          const affectedReceivableIds = new Set(
+            input.allocations.map(({ installmentId }) => byId.get(installmentId)!.receivable.id),
+          );
+          for (const receivableId of affectedReceivableIds)
+            await this.refreshReceivableStatus(transaction, actor.organizationId, receivableId);
           await this.audit.record(transaction, {
             organizationId: actor.organizationId,
             actorUserId: actor.userId,
@@ -1693,6 +1698,13 @@ export class FinanceService {
         },
       });
     }
+    const affectedReceivableIds = new Set(
+      input.allocations.map(
+        ({ installmentId }) => installmentById.get(installmentId)!.receivable.id,
+      ),
+    );
+    for (const receivableId of affectedReceivableIds)
+      await this.refreshReceivableStatus(transaction, actor.organizationId, receivableId);
     await this.audit.record(transaction, {
       organizationId: actor.organizationId,
       actorUserId: actor.userId,
@@ -1938,6 +1950,41 @@ export class FinanceService {
         version: { increment: 1 },
       },
     });
+    await this.refreshReceivableStatus(transaction, organizationId, installment.receivableId);
+  }
+
+  private async refreshReceivableStatus(
+    transaction: Transaction,
+    organizationId: string,
+    receivableId: string,
+  ): Promise<void> {
+    const receivable = await transaction.receivable.findFirst({
+      where: { id: receivableId, organizationId },
+      select: { status: true },
+    });
+    if (!receivable || ['DRAFT', 'CANCELLED', 'WRITTEN_OFF'].includes(receivable.status)) return;
+
+    const installments = await transaction.receivableInstallment.findMany({
+      where: { receivableId, organizationId },
+      select: { status: true },
+    });
+    const activeInstallments = installments.filter(
+      ({ status }) => !['CANCELLED', 'RENEGOTIATED'].includes(status),
+    );
+    if (activeInstallments.length === 0) return;
+
+    const nextStatus = activeInstallments.every(({ status }) => status === 'PAID')
+      ? 'PAID'
+      : activeInstallments.some(({ status }) => ['PAID', 'PARTIALLY_PAID'].includes(status))
+        ? 'PARTIALLY_PAID'
+        : activeInstallments.some(({ status }) => status === 'OVERDUE')
+          ? 'OVERDUE'
+          : 'OPEN';
+    if (receivable.status !== nextStatus)
+      await transaction.receivable.updateMany({
+        where: { id: receivableId, organizationId },
+        data: { status: nextStatus },
+      });
   }
 
   private statusForBalance(

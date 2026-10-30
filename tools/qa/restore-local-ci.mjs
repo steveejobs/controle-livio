@@ -4,6 +4,79 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
 
+const excludedSchedulerSchemas = new Set(['cron', 'net']);
+const tocReferencesExcludedSchema = (line) => {
+  const entry = line.match(/^\s*\d+;\s+\d+\s+\d+\s+(.+)$/)?.[1];
+  if (!entry) return false;
+  if (/\b(?:cron|net)\./i.test(entry)) return true;
+
+  const object = entry.match(
+    /^(?:(?:ACL|COMMENT|SECURITY LABEL)\s+-\s+)?(?:SCHEMA(?:\s+-)?|TABLE DATA|TABLE|SEQUENCE SET|SEQUENCE|VIEW|MATERIALIZED VIEW|FOREIGN TABLE|FUNCTION|PROCEDURE|AGGREGATE|TYPE|DOMAIN|POLICY|TRIGGER|RULE|DEFAULT ACL(?:\s+-\s+SCHEMA)?)\s+(\S+)/,
+  );
+  return object ? excludedSchedulerSchemas.has(object[1].toLowerCase()) : false;
+};
+const isExcludedSchedulerTocEntry = (line) =>
+  !line.trimStart().startsWith(';') &&
+  (/\b(?:pg_cron|pg_net)\b/.test(line) || tocReferencesExcludedSchema(line));
+const filterRestoreToc = (entries) => entries.filter((line) => !isExcludedSchedulerTocEntry(line));
+
+// Exercise the TOC parser without Docker; this does not perform a restore.
+assert.equal(
+  tocReferencesExcludedSchema('1233; 2615 2200 SCHEMA - cron postgres'),
+  true,
+  'Scheduler schema entries must be excluded from the restore list',
+);
+assert.equal(
+  tocReferencesExcludedSchema('1233; 0 0 ACL - SCHEMA cron postgres'),
+  true,
+  'Scheduler schema ACL entries must be excluded from the restore list',
+);
+assert.equal(
+  tocReferencesExcludedSchema('1234; 0 0 ACL - FUNCTION cron alter_job(bigint) postgres'),
+  true,
+  'Scheduler function ACL entries must be excluded from the restore list',
+);
+assert.equal(
+  tocReferencesExcludedSchema('1234; 0 0 ACL - FUNCTION net some_job() postgres'),
+  true,
+  'Network extension function ACL entries must be excluded from the restore list',
+);
+assert.equal(
+  tocReferencesExcludedSchema('1234; 0 0 DEFAULT ACL - SCHEMA cron postgres'),
+  true,
+  'Scheduler default privilege entries must be excluded from the restore list',
+);
+assert.equal(
+  tocReferencesExcludedSchema('1235; 0 0 ACL - FUNCTION public unrelated() postgres'),
+  false,
+  'Public function ACL entries must remain in the restore list',
+);
+const tocFixture = [
+  '1233; 2615 2200 SCHEMA - cron postgres',
+  '1234; 0 0 ACL - FUNCTION cron alter_job(bigint) postgres',
+  '1235; 0 0 ACL - SCHEMA net postgres',
+  '1236; 0 0 COMMENT - EXTENSION pg_cron postgres',
+  '1237; 2615 2200 SCHEMA - public supabase_admin',
+  '1238; 0 0 ACL - TABLE public clients supabase_admin',
+  '1239; 0 0 ACL - FUNCTION public unrelated() postgres',
+];
+const filteredTocFixture = filterRestoreToc(tocFixture);
+assert.deepEqual(
+  filteredTocFixture,
+  tocFixture.slice(4),
+  'Public schemas and ACLs must be retained',
+);
+const residualFixtureEntries = filteredTocFixture.filter(isExcludedSchedulerTocEntry);
+assert.deepEqual(
+  residualFixtureEntries,
+  [],
+  'Filtered TOC must contain no excluded scheduler entries',
+);
+if (process.argv.includes('--check-toc-filter')) {
+  console.log('Restore TOC filter fixtures passed; no database or backup was accessed.');
+  process.exit(0);
+}
+
 // No connection string is accepted: this tool can address only the disposable CI container.
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.RUNNER_OS !== 'Linux') {
   throw new Error('Restore rehearsal requires the disposable Linux GitHub runner');
@@ -22,18 +95,16 @@ const run = (...args) =>
 const sql = (database, query) =>
   run('psql', '-U', 'supabase_admin', '-d', database, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query);
 const started = Date.now();
-run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
-const toc = run('pg_restore', '-l', archive)
-  .split('\n')
-  .filter(
-    (line) =>
-      !/\b(pg_cron|pg_net)\b/.test(line) &&
-      !/\b(?:SCHEMA - |(?:TABLE DATA|TABLE|SEQUENCE SET|SEQUENCE|VIEW|MATERIALIZED VIEW|FOREIGN TABLE|FUNCTION|PROCEDURE|AGGREGATE|TYPE|DOMAIN|POLICY|TRIGGER|RULE) |(?:ACL|COMMENT|SECURITY LABEL|DEFAULT ACL) - (?:SCHEMA|TABLE DATA|TABLE|SEQUENCE SET|SEQUENCE|VIEW|MATERIALIZED VIEW|FOREIGN TABLE|FUNCTION|PROCEDURE|AGGREGATE|TYPE|DOMAIN|POLICY|TRIGGER|RULE) )(?:cron|net)\b/.test(
-        line,
-      ),
-  )
-  .join('\n');
+run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
+const sourceToc = run('pg_restore', '-l', archive).split('\n');
+const excludedTocEntries = sourceToc.filter(isExcludedSchedulerTocEntry);
+const toc = filterRestoreToc(sourceToc).join('\n');
+const residualSchedulerEntries = toc.split('\n').filter(isExcludedSchedulerTocEntry);
+if (residualSchedulerEntries.length > 0)
+  throw new Error(
+    `Restore list still contains excluded scheduler schemas/extensions:\n${residualSchedulerEntries.join('\n')}`,
+  );
 execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
   input: toc,
   stdio: ['pipe', 'ignore', 'pipe'],
@@ -51,10 +122,14 @@ run(
   '-d',
   target,
   '--exit-on-error',
-  '--no-owner',
   '--use-list',
   restoreList,
   archive,
+);
+assert.equal(
+  sql(target, "SELECT count(*)::text FROM pg_namespace WHERE nspname IN ('cron', 'net')"),
+  '0',
+  'Scheduler schemas must not be present in the isolated restore target',
 );
 const tables = sql(
   'postgres',
@@ -62,6 +137,13 @@ const tables = sql(
 )
   .split('\n')
   .filter(Boolean);
+assert.deepEqual(
+  sql(target, "SELECT tablename FROM pg_tables WHERE schemaname='public' ORDER BY tablename")
+    .split('\n')
+    .filter(Boolean),
+  tables,
+  'Recovered public table set differs',
+);
 for (const table of tables) {
   const quoted = '"' + table.replaceAll('"', '""') + '"';
   const query = `SELECT count(*)::text || ':' || md5(COALESCE(string_agg(row_to_json(t)::text, E'\\n' ORDER BY row_to_json(t)::text), '')) FROM public.${quoted} t`;
@@ -105,37 +187,93 @@ const grantSnapshot = (database) =>
     `SELECT COALESCE(string_agg(entry, E'\\n' ORDER BY entry), '') FROM (
       SELECT 'SCHEMA:' || n.nspname || ':' || x.privilege_type || ':' ||
         CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text AS entry
-      FROM pg_namespace n CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl, '{}'::aclitem[])) x
+      FROM pg_namespace n CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) x
       WHERE n.nspname = 'public'
       UNION ALL
       SELECT 'RELATION:' || n.nspname || '.' || c.relname || ':' || x.privilege_type || ':' ||
         CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        CROSS JOIN LATERAL aclexplode(COALESCE(c.relacl, '{}'::aclitem[])) x
+        CROSS JOIN LATERAL aclexplode(COALESCE(
+          c.relacl,
+          acldefault(CASE WHEN c.relkind = 'S' THEN 'S' ELSE 'r' END, c.relowner)
+        )) x
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
+      UNION ALL
+      SELECT 'COLUMN:' || n.nspname || '.' || c.relname || '.' || a.attname || ':' || x.privilege_type || ':' ||
+        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
+      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        CROSS JOIN LATERAL aclexplode(COALESCE(a.attacl, '{}'::aclitem[])) x
+      WHERE n.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped
+      UNION ALL
+      SELECT 'ROUTINE:' || n.nspname || '.' || p.oid::regprocedure::text || ':' || x.privilege_type || ':' ||
+        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+        CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x
+      WHERE n.nspname = 'public'
+      UNION ALL
+      SELECT 'TYPE:' || n.nspname || '.' || t.typname || ':' || x.privilege_type || ':' ||
+        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
+      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+        CROSS JOIN LATERAL aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) x
+      WHERE n.nspname = 'public'
+      UNION ALL
+      SELECT 'DEFAULT:' || n.nspname || ':' || pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype || ':' ||
+        x.privilege_type || ':' || CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
+      FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
+        CROSS JOIN LATERAL aclexplode(d.defaclacl) x
+      WHERE n.nspname = 'public'
     ) grants`,
   );
 assert.equal(grantSnapshot(target), grantSnapshot('postgres'), 'Recovered public grants differ');
 
-const wrongOwnerCount = sql(
-  target,
-  `SELECT (
-    (SELECT count(*) FROM pg_namespace WHERE nspname = 'public' AND pg_get_userbyid(nspowner) <> 'supabase_admin') +
-    (SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
-        AND pg_get_userbyid(c.relowner) <> 'supabase_admin')
-  )::text`,
-);
-assert.equal(
-  wrongOwnerCount,
-  '0',
-  'Recovered public objects do not follow the supabase_admin owner policy',
-);
+const ownerSnapshot = (database) =>
+  sql(
+    database,
+    `SELECT COALESCE(string_agg(entry, E'\\n' ORDER BY entry), '') FROM (
+      SELECT 'SCHEMA:' || n.nspname || ':' || pg_get_userbyid(n.nspowner) AS entry
+      FROM pg_namespace n WHERE n.nspname = 'public'
+      UNION ALL
+      SELECT 'RELATION:' || n.nspname || '.' || c.relname || ':' || pg_get_userbyid(c.relowner)
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f', 'i', 'I')
+      UNION ALL
+      SELECT 'ROUTINE:' || n.nspname || '.' || p.oid::regprocedure::text || ':' || pg_get_userbyid(p.proowner)
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'public'
+      UNION ALL
+      SELECT 'TYPE:' || n.nspname || '.' || t.typname || ':' || pg_get_userbyid(t.typowner)
+      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+      WHERE n.nspname = 'public'
+    ) owners`,
+  );
+assert.equal(ownerSnapshot(target), ownerSnapshot('postgres'), 'Recovered public owners differ');
 const requiredRoles = sql(
   target,
   "SELECT count(*)::text FROM pg_roles WHERE rolname IN ('supabase_admin', 'anon', 'authenticated', 'service_role')",
 );
 assert.equal(requiredRoles, '4', 'Required Supabase roles are missing from the restore target');
+
+const foreignKeySnapshot = (database) =>
+  sql(
+    database,
+    `SELECT COALESCE(string_agg(
+      format('%I.%I:%I:%s:%s', n.nspname, c.relname, k.conname,
+        pg_get_constraintdef(k.oid, true), k.convalidated), E'\\n' ORDER BY n.nspname, c.relname, k.conname), '')
+    FROM pg_constraint k
+    JOIN pg_class c ON c.oid = k.conrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public' AND k.contype = 'f'`,
+  );
+assert.equal(foreignKeySnapshot(target), foreignKeySnapshot('postgres'), 'Recovered FKs differ');
+assert.equal(
+  sql(
+    target,
+    "SELECT count(*)::text FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND k.contype = 'f' AND NOT k.convalidated",
+  ),
+  '0',
+  'Restore target has unvalidated foreign keys',
+);
 
 const structureSnapshot = (database) =>
   sql(
@@ -200,19 +338,22 @@ writeFileSync(
     {
       status: 'PASS',
       scope:
-        'Synthetic disposable database; public data, financial totals, sequences, grants, structure and target owner policy verified',
+        'Synthetic disposable database; public table set and data, financial totals, sequences, owners, grants, structure and foreign keys compared',
       tables: tables.length,
       sequences: sequenceSnapshot('postgres').split('\n').filter(Boolean).length,
       requiredSupabaseRoles: Number(requiredRoles),
-      publicObjectsUsingOwnerPolicy: 'supabase_admin',
+      publicOwnersCompared: true,
       publicGrantsCompared: true,
+      foreignKeysComparedAndValidated: true,
       financialTotalsCompared: recoveredFinancials,
+      excludedSchedulerTocEntries: excludedTocEntries.length,
+      excludedSchedulerSchemasAbsent: true,
       elapsedMs: Date.now() - started,
       limitations: [
         'Not the historical shared public backup',
         'Storage objects not restored',
         'Hosted Auth configuration and external secrets not restored',
-        'Original ownership is mapped to supabase_admin; global roles are not recreated',
+        'Global roles are not created by pg_dump; required runner roles are checked',
         'Scheduler extensions and jobs are deliberately excluded',
       ],
     },

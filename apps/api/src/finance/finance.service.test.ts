@@ -241,6 +241,175 @@ describe('FinanceService transacional', () => {
     });
   });
 
+  it('mantém o recebível parcial até quitar a última parcela e bloqueia repetição e excesso', async () => {
+    const receivableId = '00000000-0000-4000-8000-000000000020';
+    const firstId = '00000000-0000-4000-8000-000000000021';
+    const secondId = '00000000-0000-4000-8000-000000000022';
+    const thirdId = '00000000-0000-4000-8000-000000000023';
+    const installments = new Map([
+      [
+        firstId,
+        {
+          id: firstId,
+          receivableId,
+          amount: new Prisma.Decimal('33.34'),
+          currency: 'BRL',
+          dueDate: new Date('2030-09-01'),
+          status: 'OPEN',
+        },
+      ],
+      [
+        secondId,
+        {
+          id: secondId,
+          receivableId,
+          amount: new Prisma.Decimal('33.33'),
+          currency: 'BRL',
+          dueDate: new Date('2030-10-01'),
+          status: 'OPEN',
+        },
+      ],
+      [
+        thirdId,
+        {
+          id: thirdId,
+          receivableId,
+          amount: new Prisma.Decimal('33.33'),
+          currency: 'BRL',
+          dueDate: new Date('2030-11-01'),
+          status: 'OPEN',
+        },
+      ],
+    ]);
+    const payments = new Map<
+      string,
+      {
+        id: string;
+        idempotencyKey: string;
+        idempotencyHash: string;
+        amount: Prisma.Decimal;
+        allocations: { installmentId: string; amount: Prisma.Decimal }[];
+      }
+    >();
+    const receivable: { status: string } = { status: 'OPEN' };
+    const findUnique = vi.fn(
+      async ({ where }: { where: { organizationId_idempotencyKey: { idempotencyKey: string } } }) =>
+        payments.get(where.organizationId_idempotencyKey.idempotencyKey) ?? null,
+    );
+    const createPayment = vi.fn(
+      async (args: {
+        data: {
+          idempotencyKey: string;
+          idempotencyHash: string;
+          amount: Prisma.Decimal;
+          allocations: { create: { installmentId: string; amount: Prisma.Decimal }[] };
+        };
+      }) => {
+        const payment = {
+          id: `payment-${payments.size + 1}`,
+          idempotencyKey: args.data.idempotencyKey,
+          idempotencyHash: args.data.idempotencyHash,
+          amount: args.data.amount,
+          allocations: args.data.allocations.create,
+        };
+        payments.set(payment.idempotencyKey, payment);
+        return payment;
+      },
+    );
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      payment: { findUnique, create: createPayment },
+      receivable: {
+        findFirst: vi.fn(async () => ({ status: receivable.status })),
+        updateMany: vi.fn(async ({ data }: { data: { status: string } }) => {
+          receivable.status = data.status;
+          return { count: 1 };
+        }),
+      },
+      receivableInstallment: {
+        findMany: vi.fn(
+          async ({ where }: { where: { id?: { in: string[] }; receivableId?: string } }) => {
+            if (where.receivableId) {
+              return [...installments.values()].map(({ status }) => ({ status }));
+            }
+            return (where.id?.in ?? []).map((id) => {
+              const installment = installments.get(id)!;
+              const allocations = [...payments.values()].flatMap((payment) =>
+                payment.allocations
+                  .filter((allocation) => allocation.installmentId === id)
+                  .map(({ amount }) => ({ amount })),
+              );
+              return {
+                ...installment,
+                receivable: { id: receivableId, clientId: 'client-a' },
+                allocations,
+                adjustments: [],
+              };
+            });
+          },
+        ),
+        update: vi.fn(
+          async ({ where, data }: { where: { id: string }; data: { status: string } }) => {
+            const installment = installments.get(where.id)!;
+            installment.status = data.status;
+            return installment;
+          },
+        ),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(transaction)),
+    };
+    const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+    const submit = (idempotencyKey: string, installmentId: string, amount: string) =>
+      service.createPayment(actor, idempotencyKey, {
+        clientId: 'client-a',
+        reference: `QA-${idempotencyKey}`,
+        amount,
+        currency: 'BRL',
+        paidAt: new Date('2026-10-30T12:00:00.000Z'),
+        method: 'PIX',
+        allocations: [{ installmentId, amount }],
+      });
+    const outstanding = () =>
+      [...installments.values()].reduce((total, installment) => {
+        const paid = [...payments.values()]
+          .flatMap((payment) => payment.allocations)
+          .filter(({ installmentId }) => installmentId === installment.id)
+          .reduce((sum, allocation) => sum.plus(allocation.amount), new Prisma.Decimal(0));
+        return total.plus(installment.amount.minus(paid));
+      }, new Prisma.Decimal(0));
+
+    expect(receivable.status).toBe('OPEN');
+    await submit('partial-first', firstId, '10.00');
+    expect(installments.get(firstId)?.status).toBe('PARTIALLY_PAID');
+    expect(receivable.status).toBe('PARTIALLY_PAID');
+    expect(outstanding().toFixed(2)).toBe('90.00');
+
+    await expect(submit('partial-first', firstId, '11.00')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    await expect(submit('excess-first', firstId, '23.35')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(outstanding().toFixed(2)).toBe('90.00');
+
+    await submit('complete-first', firstId, '23.34');
+    expect(installments.get(firstId)?.status).toBe('PAID');
+    expect(installments.get(secondId)?.status).toBe('OPEN');
+    expect(installments.get(thirdId)?.status).toBe('OPEN');
+    expect(receivable.status).toBe('PARTIALLY_PAID');
+    expect(outstanding().toFixed(2)).toBe('66.66');
+
+    await submit('complete-second', secondId, '33.33');
+    expect(receivable.status).toBe('PARTIALLY_PAID');
+    await submit('complete-third', thirdId, '33.33');
+    expect(installments.get(secondId)?.status).toBe('PAID');
+    expect(installments.get(thirdId)?.status).toBe('PAID');
+    expect(receivable.status).toBe('PAID');
+    expect(outstanding().toFixed(2)).toBe('0.00');
+  });
+
   it.each([
     { firstAmount: '70.00', secondAmount: '40.00' },
     { firstAmount: '40.00', secondAmount: '70.00' },
@@ -286,23 +455,47 @@ describe('FinanceService transacional', () => {
           return payment;
         },
       );
+      const receivable = { status: 'OPEN' };
+      const installment = { status: 'OPEN' };
+      const updateReceivable = vi.fn(
+        async ({
+          data,
+        }: {
+          where: { id: string; organizationId: string };
+          data: { status: string };
+        }) => {
+          receivable.status = data.status;
+          return { count: 1 };
+        },
+      );
       const transaction = {
         $queryRaw: vi.fn().mockResolvedValue([]),
         payment: { findUnique, create: createPayment },
+        receivable: {
+          findFirst: vi.fn(async () => ({ status: receivable.status })),
+          updateMany: updateReceivable,
+        },
         receivableInstallment: {
-          findMany: vi.fn(async () => [
-            {
-              id: installmentId,
-              amount: new Prisma.Decimal('100.00'),
-              currency: 'BRL',
-              status: 'OPEN',
-              dueDate: new Date('2030-01-01T00:00:00.000Z'),
-              receivable: { clientId: 'client-a' },
-              allocations: storedPayments.flatMap(({ allocations }) => allocations),
-              adjustments: [],
-            },
-          ]),
-          update: vi.fn().mockResolvedValue({}),
+          findMany: vi.fn(async ({ where }: { where: { receivableId?: string } }) =>
+            where.receivableId
+              ? [{ status: installment.status }]
+              : [
+                  {
+                    id: installmentId,
+                    amount: new Prisma.Decimal('100.00'),
+                    currency: 'BRL',
+                    status: installment.status,
+                    dueDate: new Date('2030-01-01T00:00:00.000Z'),
+                    receivable: { id: 'receivable-a', clientId: 'client-a' },
+                    allocations: storedPayments.flatMap(({ allocations }) => allocations),
+                    adjustments: [],
+                  },
+                ],
+          ),
+          update: vi.fn(async ({ data }: { data: { status: string } }) => {
+            installment.status = data.status;
+            return installment;
+          }),
         },
       };
       let transactionQueue: Promise<unknown> = Promise.resolve();
@@ -350,8 +543,18 @@ describe('FinanceService transacional', () => {
         .flatMap(({ allocations }) => allocations)
         .reduce((sum, { amount }) => sum.plus(amount), new Prisma.Decimal(0));
       expect(allocated.lessThanOrEqualTo('100.00')).toBe(true);
+      expect(allocated.toFixed(2)).toBe(new Prisma.Decimal(firstAmount).toFixed(2));
+      expect(installment.status).toBe('PARTIALLY_PAID');
+      expect(receivable.status).toBe('PARTIALLY_PAID');
+      expect(new Prisma.Decimal('100.00').minus(allocated).toFixed(2)).toBe(
+        new Prisma.Decimal('100.00').minus(firstAmount).toFixed(2),
+      );
       expect(findUnique).toHaveBeenCalledTimes(2);
       expect(createPayment).toHaveBeenCalledTimes(1);
+      expect(updateReceivable).toHaveBeenCalledWith({
+        where: { id: 'receivable-a', organizationId: actor.organizationId },
+        data: { status: 'PARTIALLY_PAID' },
+      });
       const requestedKeys = findUnique.mock.calls.map(
         ([{ where }]) => where.organizationId_idempotencyKey.idempotencyKey,
       );
@@ -404,19 +607,27 @@ describe('FinanceService transacional', () => {
         findUnique: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({ id: 'payment-c', allocations: [] }),
       },
+      receivable: {
+        findFirst: vi.fn().mockResolvedValue({ status: 'OPEN' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       receivableInstallment: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: installmentId,
-            amount: new Prisma.Decimal('50.00'),
-            currency: 'BRL',
-            dueDate: new Date('2026-08-01'),
-            status: 'OPEN',
-            allocations: [],
-            adjustments: [],
-            receivable: { clientId: 'client-a' },
-          },
-        ]),
+        findMany: vi.fn(async ({ where }: { where: { receivableId?: string } }) =>
+          where.receivableId
+            ? [{ status: 'PAID' }]
+            : [
+                {
+                  id: installmentId,
+                  amount: new Prisma.Decimal('50.00'),
+                  currency: 'BRL',
+                  dueDate: new Date('2026-08-01'),
+                  status: 'OPEN',
+                  allocations: [],
+                  adjustments: [],
+                  receivable: { id: 'receivable-c', clientId: 'client-a' },
+                },
+              ],
+        ),
         update: vi.fn(),
       },
     };
@@ -437,6 +648,10 @@ describe('FinanceService transacional', () => {
 
     expect(queryRaw.mock.calls[0]![0].sql).toContain('id IN (?::uuid)');
     expect(queryRaw.mock.calls[0]![0].values).toContain(installmentId);
+    expect(transaction.receivable.updateMany).toHaveBeenCalledWith({
+      where: { id: 'receivable-c', organizationId: actor.organizationId },
+      data: { status: 'PAID' },
+    });
   });
 
   it('estorna sem apagar o pagamento, com controle otimista e auditoria', async () => {
@@ -581,6 +796,10 @@ describe('FinanceService transacional', () => {
         findFirst: vi.fn().mockResolvedValue(request),
         update: vi.fn().mockResolvedValue(reviewedRequest),
       },
+      receivable: {
+        findFirst: vi.fn().mockResolvedValue({ status: 'OPEN' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       payment: {
         findFirst: vi.fn().mockResolvedValue(payment),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -590,18 +809,22 @@ describe('FinanceService transacional', () => {
       paymentAllocation: { updateMany: vi.fn() },
       paymentReversal: { create: vi.fn().mockResolvedValue({ id: 'reversal-b' }) },
       receivableInstallment: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: installmentId,
-            amount: new Prisma.Decimal('200.00'),
-            currency: 'BRL',
-            dueDate: new Date('2027-01-01'),
-            status: 'OPEN',
-            receivable: { clientId: 'client-a' },
-            allocations: [],
-            adjustments: [],
-          },
-        ]),
+        findMany: vi.fn(async ({ where }: { where: { receivableId?: string } }) =>
+          where.receivableId
+            ? [{ status: 'PARTIALLY_PAID' }]
+            : [
+                {
+                  id: installmentId,
+                  amount: new Prisma.Decimal('200.00'),
+                  currency: 'BRL',
+                  dueDate: new Date('2027-01-01'),
+                  status: 'OPEN',
+                  receivable: { id: 'receivable-b', clientId: 'client-a' },
+                  allocations: [],
+                  adjustments: [],
+                },
+              ],
+        ),
         update: vi.fn(),
       },
       notification: { upsert: vi.fn() },
@@ -628,6 +851,10 @@ describe('FinanceService transacional', () => {
       }),
     );
     expect(transaction.paymentReversal.create).toHaveBeenCalledOnce();
+    expect(transaction.receivable.updateMany).toHaveBeenCalledWith({
+      where: { id: 'receivable-b', organizationId: actor.organizationId },
+      data: { status: 'PARTIALLY_PAID' },
+    });
     expect(transaction.payment.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({

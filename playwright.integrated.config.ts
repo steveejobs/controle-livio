@@ -9,6 +9,7 @@ export default defineConfig({
   workers: 1,
   timeout: 90_000,
   expect: { timeout: 15_000 },
+  actionTimeout: 15_000,
   outputDir: process.env.LIVIO_QA_OUTPUT
     ? `${process.env.LIVIO_QA_OUTPUT}/integrated-test-results`
     : 'integrated-test-results',

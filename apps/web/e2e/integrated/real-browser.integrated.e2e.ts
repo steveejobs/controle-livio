@@ -239,6 +239,12 @@ async function screenshotEvidence(page: Page, name: string) {
   });
 }
 
+async function expectOperationFeedback(page: Page, message: string) {
+  const feedback = page.getByRole('status').filter({ hasText: message });
+  await expect(feedback).toHaveCount(1);
+  await expect(feedback).toHaveText(message);
+}
+
 async function login(page: Page, email: string, onSubmit?: () => void) {
   await enableLocalNetworkOnly(page.context());
   await page.goto('/');
@@ -251,19 +257,23 @@ async function login(page: Page, email: string, onSubmit?: () => void) {
 
 async function navigateTo(page: Page, name: string | RegExp) {
   const menu = page.getByRole('main').getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
-  if (await menu.isVisible()) {
+  const isMobile = (page.viewportSize()?.width ?? 1440) <= 900;
+  if (isMobile) {
     await expect(menu).toBeVisible();
     await expect(menu).toHaveAttribute('aria-controls', 'primary-navigation');
     await expect(menu).toHaveAttribute('aria-expanded', 'false');
     await menu.click();
     await expect(menu).toHaveAttribute('aria-expanded', 'true');
+  } else {
+    await expect(menu).toBeHidden();
   }
 
   const item = page.locator('#primary-navigation').getByRole('button', { name });
   await expect(item).toBeVisible();
+  await expect(item).toBeEnabled();
   await item.click();
 
-  if (await menu.isVisible()) await expect(menu).toHaveAttribute('aria-expanded', 'false');
+  if (isMobile) await expect(menu).toHaveAttribute('aria-expanded', 'false');
 }
 
 async function browserAccessToken(page: Page): Promise<string | undefined> {
@@ -494,15 +504,20 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
       const menuToggle = page
         .getByRole('main')
         .getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
-      if (await menuToggle.isVisible()) {
+      if (viewport.width <= 900) {
         await expect(menuToggle).toBeVisible();
         await expect(menuToggle).toHaveAttribute('aria-controls', 'primary-navigation');
         await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
         await menuToggle.click();
         await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
-        await menuToggle.click();
+        const dashboardItem = page
+          .locator('#primary-navigation')
+          .getByRole('button', { name: 'Visão geral', exact: true });
+        await expect(dashboardItem).toBeVisible();
+        await expect(dashboardItem).toBeEnabled();
+        await dashboardItem.click();
         await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
-      }
+      } else await expect(menuToggle).toBeHidden();
       await expect(page.getByRole('heading', { name: /Vis.o geral/ })).toBeVisible();
       await traffic.waitForQuiet();
       await screenshotEvidence(page, `navigation-dashboard-${viewport.width}`);
@@ -763,7 +778,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const matterForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
       });
-      await matterForm.getByLabel('Cliente').selectOption(createdClient.id);
+      await matterForm.getByLabel('Cliente', { exact: true }).selectOption(createdClient.id);
       await matterForm
         .getByLabel('Fluxo de atendimento')
         .selectOption('12000000-0000-4000-8000-000000000001');
@@ -789,7 +804,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
         title: matterTitle,
       });
       const createdMatter = (await matter.json()) as { id: string };
-      await expect(page.getByRole('status')).toContainText('Processo cadastrado.');
+      await expectOperationFeedback(page, 'Processo cadastrado.');
 
       const persisted = await browserApi(page, `/matters/${createdMatter.id}`);
       assertStatus(persisted, 200, 'read persisted matter');
@@ -811,7 +826,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
         title: matterTitle,
       });
 
-      await page.reload();
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(page, 'Clientes');
       await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
       await navigateTo(page, 'Processos');
@@ -822,15 +837,29 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const duplicateForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
       });
-      await duplicateForm.getByLabel('Cliente').selectOption(createdClient.id);
+      await duplicateForm.getByLabel('Cliente', { exact: true }).selectOption(createdClient.id);
       await duplicateForm
         .getByLabel('Fluxo de atendimento')
         .selectOption('12000000-0000-4000-8000-000000000001');
       await duplicateForm.getByLabel('Referência interna do processo').fill(reference);
       await duplicateForm.getByLabel('Nome do processo').fill(`Duplicado ${matterTitle}`);
       await duplicateForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
+      const duplicateMatterResponse = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/matters' &&
+          response.request().method() === 'POST',
+      );
       await duplicateForm.getByRole('button', { name: 'Cadastrar processo' }).click();
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      const duplicateMatter = await duplicateMatterResponse;
+      expect(duplicateMatter.status()).toBe(409);
+      expect(await duplicateMatter.json()).toMatchObject({
+        code: 'conflict',
+        message: 'Já existe um registro com esses dados. Confira as informações e tente novamente.',
+      });
+      await expectOperationFeedback(
+        page,
+        'Erro: Já existe um registro com esses dados. Confira as informações e tente novamente.',
+      );
       await screenshotEvidence(page, `journey-client-matter-${viewport.width}`);
     } finally {
       await context.close();
@@ -856,7 +885,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const contractForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar contrato', exact: true }),
       });
-      await contractForm.getByLabel('Cliente').selectOption(clientA);
+      await contractForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
       await contractForm.getByLabel('Número do contrato').fill(contractNumber);
       await contractForm.getByLabel('Nome do contrato').fill(contractTitle);
       await contractForm.getByLabel('Modelo de honorários').selectOption('FIXED');
@@ -878,7 +907,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       });
       const contract = (await contractCreated.json()) as { id: string; fixedAmount: string };
       expect(amountUnits(contract.fixedAmount)).toBe(amountUnits('100.00'));
-      await expect(page.getByRole('status')).toContainText('Contrato cadastrado.');
+      await expectOperationFeedback(page, 'Contrato cadastrado.');
       await expect(page.getByRole('row').filter({ hasText: contractNumber })).toBeVisible();
 
       const persistedContracts = await browserApi(page, '/finance/contracts?page=1&pageSize=100');
@@ -900,7 +929,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const receivableForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Criar cobrança e parcelas' }),
       });
-      await receivableForm.getByLabel('Cliente').selectOption(clientA);
+      await receivableForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
       await receivableForm.getByLabel('Contrato associado (opcional)').selectOption(contract.id);
       await receivableForm.getByLabel('Código da cobrança').fill(reference);
       await receivableForm.getByLabel('Serviço ou motivo da cobrança').fill(`Honorários ${suffix}`);
@@ -953,7 +982,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         amountUnits('33.33'),
         amountUnits('33.33'),
       ]);
-      await expect(page.getByRole('status')).toContainText('Recebível e parcelas cadastrados.');
+      await expectOperationFeedback(page, 'Recebível e parcelas cadastrados.');
 
       const persistedReceivables = await browserApi(
         page,
@@ -1047,7 +1076,10 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       await paymentForm.getByLabel('Valor recebido').fill('10,00');
       await paymentForm.getByLabel('Data do pagamento').fill(retryPaidAt);
       await paymentForm.getByRole('button', { name: 'Confirmar pagamento' }).click();
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      await expectOperationFeedback(
+        page,
+        'Erro: Falha de rede. Verifique sua conexão e tente novamente.',
+      );
       const retriedPayment = await submitPayment(
         firstInstallment.id,
         '10,00',
@@ -1059,7 +1091,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       expect(retriedKeys).toHaveLength(2);
       expect(retriedKeys[0]).toBeTruthy();
       expect(retriedKeys[1]).toBe(retriedKeys[0]);
-      await expect(page.getByRole('status')).toContainText('Pagamento confirmado');
+      await expectOperationFeedback(page, 'Pagamento confirmado e alocado à parcela.');
       await expect(
         page
           .getByLabel('Parcela')
@@ -1068,10 +1100,24 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
             hasText: `${reference} · parcela 1`,
           }),
       ).toContainText('R$ 23,34 em aberto');
+      const partialReceivables = await browserApi(
+        page,
+        `/finance/receivables?page=1&pageSize=100&clientId=${clientA}&contractId=${contract.id}`,
+      );
+      assertStatus(partialReceivables, 200, 'read partially paid receivable');
+      expect(
+        bodyAs<{ items: Array<{ id: string; status: string }> }>(partialReceivables).items.find(
+          ({ id }) => id === createdReceivable.id,
+        )?.status,
+      ).toBe('PARTIALLY_PAID');
 
       const duplicatePayment = await submitPayment(firstInstallment.id, '10,00', retryReference);
       expect(duplicatePayment.status()).toBe(409);
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      expect(await duplicatePayment.json()).toMatchObject({
+        code: 'conflict',
+        message: 'Chave idempotente já usada com outro conteúdo',
+      });
+      await expectOperationFeedback(page, 'Erro: Chave idempotente já usada com outro conteúdo');
       await expect(
         page
           .getByLabel('Parcela')
@@ -1085,7 +1131,11 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         `QA-PG-INV-${suffix}`,
       );
       expect(invalidOverpayment.status()).toBe(400);
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      expect(await invalidOverpayment.json()).toMatchObject({
+        code: 'bad_request',
+        message: 'Alocação excede o saldo disponível da parcela',
+      });
+      await expectOperationFeedback(page, 'Erro: Alocação excede o saldo disponível da parcela');
       await expect(
         page
           .getByLabel('Parcela')
@@ -1129,7 +1179,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
         ),
       ).toBe(amountUnits('100.00'));
 
-      await page.reload();
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(page, /Receb/);
       const completedRow = page.getByRole('row').filter({ hasText: reference });
       await completedRow.scrollIntoViewIfNeeded();
@@ -1164,7 +1214,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       const expenseForm = financePage.locator('form').filter({
         has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
       });
-      await expenseForm.getByLabel('Cliente').selectOption(clientA);
+      await expenseForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
       await expenseForm.getByLabel('Processo').selectOption(matterA);
       await expenseForm.getByLabel('Responsável').selectOption(financeUserA);
       await expenseForm.getByLabel('Categoria').fill('QA sintético');
@@ -1173,16 +1223,12 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await expenseForm.getByLabel('Data da despesa').fill(dateInput());
       await expenseForm.getByLabel('Vencimento').fill(dateInput(10));
       await expenseForm.getByRole('button', { name: 'Cadastrar despesa' }).click();
-      await expect(
-        financePage.getByRole('status').filter({ hasText: 'Despesa cadastrada.' }),
-      ).toBeVisible();
+      await expectOperationFeedback(financePage, 'Despesa cadastrada.');
       await pageExpenseSection(financePage);
       let expenseRow = financePage.getByRole('row').filter({ hasText: description });
       await expect(expenseRow).toContainText('Rascunho');
       await expenseRow.getByRole('button', { name: 'Enviar para aprovação' }).click();
-      await expect(
-        financePage.getByRole('status').filter({ hasText: 'Despesa enviada para aprovação.' }),
-      ).toBeVisible();
+      await expectOperationFeedback(financePage, 'Despesa enviada para aprovação.');
       await expect(expenseRow).toContainText('Aguardando aprovação');
 
       await login(adminPage, 'admin.aurora@example.test');
@@ -1191,9 +1237,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       expenseRow = adminPage.getByRole('row').filter({ hasText: description });
       await expect(expenseRow).toContainText('Aguardando aprovação');
       await expenseRow.getByRole('button', { name: 'Aprovar' }).click();
-      await expect(
-        adminPage.getByRole('status').filter({ hasText: 'Despesa aprovada.' }),
-      ).toBeVisible();
+      await expectOperationFeedback(adminPage, 'Despesa aprovada.');
       await expect(expenseRow).toContainText('Aguardando pagamento');
       await expenseRow.getByRole('button', { name: 'Registrar pagamento' }).click();
       await adminPage.getByLabel('Valor integral').fill('42,25');
@@ -1201,11 +1245,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await adminPage.getByLabel('Forma de pagamento').fill('PIX');
       await adminPage.getByLabel('Referência').fill(`QA-${suffix}`);
       await adminPage.getByRole('button', { name: 'Confirmar quitação integral' }).click();
-      await expect(
-        adminPage
-          .getByRole('status')
-          .filter({ hasText: 'Pagamento integral registrado no caixa.' }),
-      ).toBeVisible();
+      await expectOperationFeedback(adminPage, 'Pagamento integral registrado no caixa.');
       await expect(expenseRow).toContainText('Paga');
 
       const persistedExpenses = await browserApi(
@@ -1227,7 +1267,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       const rows = bodyAs<{ rows: Array<{ paid_expenses: string }> }>(cashFlow).rows;
       expect(rows.some((row) => Number(row.paid_expenses) >= 42.25)).toBe(true);
 
-      await adminPage.reload();
+      await adminPage.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(adminPage, /Receb/);
       await pageExpenseSection(adminPage);
       const paidExpenseRow = adminPage.getByRole('row').filter({ hasText: description });
@@ -1273,7 +1313,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await uploadForm.getByLabel('Nome do documento').fill(title);
       await uploadForm.getByLabel('Tipo de documento (opcional)').fill('QA');
       await uploadForm.getByLabel('Visibilidade').selectOption('CLIENT');
-      await uploadForm.getByLabel('Cliente').selectOption(clientA);
+      await uploadForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
       await uploadForm.getByLabel('Arquivo').setInputFiles({
         name: `qa-${suffix}.pdf`,
         mimeType: 'application/pdf',
@@ -1290,7 +1330,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const uploadFields = uploaded.request().postDataBuffer()?.toString('latin1') ?? '';
       expect(uploadFields).toContain(title);
       expect(uploadFields).toContain('visibility');
-      await expect(page.getByRole('status')).toContainText('Documento enviado com segurança.');
+      await expectOperationFeedback(page, 'Documento enviado com segurança.');
       const documentId = ((await uploaded.json()) as { id: string }).id;
       const documentRow = page.getByRole('row').filter({ hasText: title });
       await expect(documentRow).toBeVisible();
@@ -1314,8 +1354,16 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           response.request().method() === 'POST',
       );
       await infectedForm.getByRole('button', { name: 'Enviar documento' }).click();
-      expect((await infectedUpload).status()).toBe(422);
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      const infectedResponse = await infectedUpload;
+      expect(infectedResponse.status()).toBe(422);
+      expect(await infectedResponse.json()).toMatchObject({
+        code: 'unprocessable_entity',
+        message: 'O arquivo foi bloqueado pela verificação de segurança.',
+      });
+      await expectOperationFeedback(
+        page,
+        'Erro: O arquivo foi bloqueado pela verificação de segurança.',
+      );
       await expect(page.getByRole('row').filter({ hasText: infectedTitle })).toHaveCount(0);
 
       const persistedDocuments = await browserApi(page, '/documents?page=1&pageSize=100');
@@ -1390,8 +1438,16 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           response.request().method() === 'POST',
       );
       await invalidForm.getByRole('button', { name: 'Enviar documento' }).click();
-      expect((await invalidUpload).status()).toBe(400);
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      const invalidResponse = await invalidUpload;
+      expect(invalidResponse.status()).toBe(400);
+      expect(await invalidResponse.json()).toMatchObject({
+        code: 'bad_request',
+        message: 'Tipo de arquivo não permitido ou conteúdo incompatível',
+      });
+      await expectOperationFeedback(
+        page,
+        'Erro: Tipo de arquivo não permitido ou conteúdo incompatível',
+      );
       await expect(page.getByRole('row').filter({ hasText: invalidTitle })).toHaveCount(0);
 
       const oversizedTitle = `Arquivo grande QA ${suffix}`;
@@ -1412,8 +1468,13 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           response.request().method() === 'POST',
       );
       await oversizedForm.getByRole('button', { name: 'Enviar documento' }).click();
-      expect((await oversizedUpload).status()).toBe(413);
-      await expect(page.getByRole('status')).toContainText('Erro:');
+      const oversizedResponse = await oversizedUpload;
+      expect(oversizedResponse.status()).toBe(413);
+      expect(await oversizedResponse.json()).toMatchObject({
+        code: 'payload_too_large',
+        message: 'A requisição excede o limite de upload.',
+      });
+      await expectOperationFeedback(page, 'Erro: A requisição excede o limite de upload.');
       await expect(page.getByRole('row').filter({ hasText: oversizedTitle })).toHaveCount(0);
       await screenshotEvidence(page, `journey-document-signed-${viewport.width}`);
     } finally {
@@ -1454,9 +1515,9 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
         priority: 'HIGH',
       });
       const taskId = ((await created.json()) as { id: string }).id;
-      await expect(page.getByRole('status')).toContainText('Tarefa criada.');
+      await expectOperationFeedback(page, 'Tarefa criada.');
       await page.getByLabel('Status de ' + title).selectOption('COMPLETED');
-      await expect(page.getByRole('status')).toContainText('Tarefa atualizada.');
+      await expectOperationFeedback(page, 'Tarefa atualizada.');
       const persisted = await browserApi(page, '/tasks');
       assertStatus(persisted, 200, 'read persisted tasks');
       expect(
@@ -1464,7 +1525,7 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
           ?.status,
       ).toBe('COMPLETED');
 
-      await page.reload();
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 });
       await navigateTo(page, 'Tarefas');
       await expect(page.getByText(title, { exact: true })).toBeVisible();
       await expect(page.getByLabel(`Status de ${title}`)).toHaveValue('COMPLETED');
@@ -1625,7 +1686,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       const message = `Mensagem sintética QA ${suffix}`;
       await clientPage.getByLabel(/Responder ao escrit/).fill(message);
       await clientPage.getByRole('button', { name: 'Enviar mensagem' }).click();
-      await expect(clientPage.getByRole('status')).toContainText('Mensagem enviada');
+      await expectOperationFeedback(clientPage, 'Mensagem enviada à equipe.');
       await expect(clientPage.getByText(message, { exact: true })).toBeVisible();
       const persistedMessages = await browserApi(
         clientPage,
