@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,6 +35,8 @@ const require = createRequire(import.meta.url);
 const {
   DocumentScannerService,
 } = require('../../apps/api/dist/documents/document-scanner.service.js');
+const { extractPdfScanTargets } = require('../../apps/api/dist/documents/pdf-embedded-files.js');
+const { PDFDocument } = require('pdf-lib');
 const { ServiceUnavailableException } = require('@nestjs/common');
 const outputDirectory = join(runnerTemp, 'livio-integrated-artifacts');
 const reportPath = join(outputDirectory, 'clamav-rehearsal.json');
@@ -44,11 +46,11 @@ const previousReport =
     : undefined;
 const report = previousReport ?? {
   status: 'IN_PROGRESS',
-  scannerImage: 'clamav/clamav:stable',
+  scannerImage: containerMetadata.image,
   scannerImageDigest: containerMetadata.imageDigest,
   scannerVersion: containerMetadata.scannerVersion,
-  scannerHost: '127.0.0.1',
-  scannerPort: port,
+  effectiveScannerConfig: containerMetadata.effectiveScannerConfig,
+  scannerEndpoint: '127.0.0.1:13310 (runner loopback only)',
   results: {},
 };
 
@@ -124,38 +126,168 @@ async function recordVerdict(name, operation, expectedStatus, verdict) {
   }
 }
 
-function pdfBytes(embeddedFile) {
-  const content = 'BT /F1 12 Tf 20 70 Td (Synthetic scanner probe) Tj ET';
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    `<< /Length ${Buffer.byteLength(content, 'ascii')} >>\nstream\n${content}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+async function pdfBytes({ embeddedFile, compress = true, pageContentEicar = false } = {}) {
+  const document = await PDFDocument.create();
+  const page = document.addPage([300, 144]);
+  if (pageContentEicar) {
+    const commentStream = document.context.flateStream(Buffer.from(`% ${eicar}\n`, 'ascii'));
+    page.node.addContentStream(document.context.register(commentStream));
+  }
+  if (embeddedFile !== undefined)
+    await document.attach(Buffer.from(embeddedFile, 'ascii'), 'eicar.com', {
+      mimeType: 'application/octet-stream',
+      description: 'Synthetic ClamAV scanner test',
+      afRelationship: 'Data',
+    });
+
+  const context = document.context;
+  const originalFlateStream = context.flateStream;
+  if (!compress)
+    context.flateStream = function (contents, dictionary) {
+      return this.stream(contents, dictionary);
+    };
+  try {
+    const bytes = Buffer.from(await document.save({ useObjectStreams: false }));
+    const parsed = await PDFDocument.load(bytes, { throwOnInvalidObject: true });
+    if (parsed.getPageCount() !== 1) fail('a generated PDF fixture failed parser validation.');
+    return bytes;
+  } finally {
+    context.flateStream = originalFlateStream;
+  }
+}
+
+const eicar = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
+const benignAttachment = 'LIVIO-SYNTHETIC-CLEAN-ATTACHMENT';
+
+function directScan(binary, fixtureName, hostPath, containerPath) {
+  const result = spawnSync(
+    'docker',
+    [
+      'exec',
+      container,
+      binary,
+      ...(binary === 'clamscan' ? ['--debug', '--no-summary', '--scan-pdf=yes'] : ['--verbose']),
+      containerPath,
+    ],
+    { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 },
+  );
+  if (result.error) throw result.error;
+  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+  const detected = /(?:Eicar|FOUND)/i.test(output);
+  const clean = result.status === 0 && /(?:OK|Infected files:\s*0)/i.test(output);
+  const verdict = detected ? 'INFECTED' : clean ? 'CLEAN' : 'ERROR';
+  const debugHighlights = output
+    .split(/\r?\n/)
+    .filter((line) => /pdf|embed|eicar|signature|stream|scan result|known viruses/i.test(line))
+    .slice(0, 80)
+    .map((line) => line.replaceAll(containerPath, '[fixture]').slice(0, 400));
+  return {
+    fixture: fixtureName,
+    scanner: binary,
+    exitCode: result.status,
+    verdict,
+    debugHighlights,
+    fixtureBytes: readFileSync(hostPath).length,
+  };
+}
+
+function saveFixture(name, bytes) {
+  const hostPath = join(runnerTemp, `livio-${name}`);
+  const containerPath = `/tmp/livio-${name}`;
+  writeFileSync(hostPath, bytes, { flag: 'w' });
+  execFileSync('docker', ['cp', hostPath, `${container}:${containerPath}`]);
+  return { hostPath, containerPath };
+}
+
+async function runPdfEicarMatrix() {
+  const qpdfVersion = spawnSync('qpdf', ['--version'], { encoding: 'utf8' });
+  const qpdfAvailable = qpdfVersion.status === 0;
+  const fixtureBytes = [
+    ['raw-eicar.bin', Buffer.from(eicar, 'ascii')],
+    ['clean.pdf', await pdfBytes()],
+    ['page-content-eicar.pdf', await pdfBytes({ pageContentEicar: true })],
+    ['embedded-eicar-uncompressed.pdf', await pdfBytes({ embeddedFile: eicar, compress: false })],
+    ['embedded-eicar-compressed.pdf', await pdfBytes({ embeddedFile: eicar })],
+    ['embedded-clean-parser-verified.pdf', await pdfBytes({ embeddedFile: benignAttachment })],
   ];
-  if (embeddedFile !== undefined) {
-    const fileSpecObjectNumber = objects.length + 1;
-    const embeddedFileObjectNumber = objects.length + 2;
-    const embeddedFileSize = Buffer.byteLength(embeddedFile, 'ascii');
-    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> /AF [${fileSpecObjectNumber} 0 R] >>`;
-    objects.push(
-      `<< /Type /Filespec /F (eicar.com) /UF (eicar.com) /Desc (ClamAV EICAR scanner test) /AFRelationship /Data /EF << /F ${embeddedFileObjectNumber} 0 R /UF ${embeddedFileObjectNumber} 0 R >> >>`,
-      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Params << /Size ${embeddedFileSize} >> /Length ${embeddedFileSize} >>\nstream\n${embeddedFile}\nendstream`,
+  const results = [];
+  for (const [name, bytes] of fixtureBytes) {
+    const { hostPath, containerPath } = saveFixture(name, bytes);
+    const targets = await extractPdfScanTargets(bytes);
+    const expectedContents = Buffer.from(
+      name.includes('clean') ? benignAttachment : eicar,
+      'ascii',
     );
+    const parserVerified =
+      name === 'raw-eicar.bin'
+        ? bytes.equals(expectedContents)
+        : name === 'clean.pdf'
+          ? targets.pageContents.length === 0 && targets.embeddedFiles.length === 0
+          : name === 'page-content-eicar.pdf'
+            ? targets.pageContents.some((stream) => stream.includes(expectedContents))
+            : targets.embeddedFiles.some((stream) => stream.equals(expectedContents));
+    if (!parserVerified)
+      fail(`the fixture parser did not recover the expected content structure for ${name}.`);
+    if (qpdfAvailable && name.endsWith('.pdf')) {
+      const qpdfCheck = spawnSync('qpdf', ['--check', hostPath], {
+        encoding: 'utf8',
+        maxBuffer: 1024 * 1024,
+      });
+      if (qpdfCheck.status !== 0) fail(`qpdf rejected PDF fixture ${name}.`);
+    }
+    const clamscan = directScan('clamscan', name, hostPath, containerPath);
+    const clamdscan = directScan('clamdscan', name, hostPath, containerPath);
+    results.push({
+      fixture: name,
+      bytes: bytes.length,
+      parserValidated: true,
+      externalValidator: name.endsWith('.pdf') && qpdfAvailable ? 'qpdf --check PASS' : null,
+      pageStreamsDecoded: targets.pageContents.length,
+      embeddedFilesExtracted: targets.embeddedFiles.length,
+      fixtureContentsVerifiedByParser: parserVerified,
+      clamscan,
+      clamdscan,
+    });
   }
 
-  let document = '%PDF-1.4\n';
-  const offsets = [0];
-  for (const [index, object] of objects.entries()) {
-    offsets.push(Buffer.byteLength(document, 'ascii'));
-    document += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  const raw = results.find(({ fixture }) => fixture === 'raw-eicar.bin');
+  const clean = results.find(({ fixture }) => fixture === 'clean.pdf');
+  if (raw?.clamscan.verdict !== 'INFECTED' || raw.clamdscan.verdict !== 'INFECTED')
+    fail('the EICAR signature was not loaded by both the clamscan engine and clamd daemon.');
+  if (clean?.clamscan.verdict !== 'CLEAN' || clean.clamdscan.verdict !== 'CLEAN')
+    fail('the clean PDF fixture was not accepted by both ClamAV interfaces.');
+
+  const extractedInfectedPdf = service();
+  let applicationExtractionPass = true;
+  for (const name of [
+    'page-content-eicar.pdf',
+    'embedded-eicar-uncompressed.pdf',
+    'embedded-eicar-compressed.pdf',
+  ]) {
+    const bytes = fixtureBytes.find(([fixture]) => fixture === name)?.[1];
+    if (!bytes) fail(`the generated scanner matrix is missing ${name}.`);
+    applicationExtractionPass =
+      (await recordExpectedStatus(
+        `application-extracted-${name}`,
+        () => extractedInfectedPdf.assertClean(bytes, 'application/pdf'),
+        422,
+        { verdict: 'pdf-content-rejected-after-application-extraction' },
+      )) && applicationExtractionPass;
   }
-  const xrefOffset = Buffer.byteLength(document, 'ascii');
-  document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets.slice(1))
-    document += `${String(offset).padStart(10, '0')} 00000 n \n`;
-  document += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-  return Buffer.from(document, 'ascii');
+  report.results['clamav-pdf-matrix'] = {
+    status: applicationExtractionPass ? 'PASS' : 'FAIL',
+    qpdfAvailable,
+    qpdfVersion: qpdfAvailable ? qpdfVersion.stdout.trim() : null,
+    note: 'Direct PDF verdicts are recorded per scanner; decoded page and embedded streams are separately scanned by the application.',
+    fixtures: results,
+  };
+  const logs = execFileSync('docker', ['logs', '--tail', '100', container], { encoding: 'utf8' });
+  report.daemonLogHighlights = logs
+    .split(/\r?\n/)
+    .filter((line) => /database|signature|clamd|ready|loaded/i.test(line))
+    .slice(-60)
+    .map((line) => line.replaceAll(eicar, '[EICAR TEST SIGNATURE]').slice(0, 400));
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
 }
 
 async function verifyReady() {
@@ -180,21 +312,19 @@ async function verifyReady() {
     fail('official clamd did not become ready within three minutes.');
   }
   record('clean-file', 'PASS', { verdict: 'clean' });
-  await recordVerdict('clean-pdf', () => cleanService.assertClean(pdfBytes()), undefined, 'clean');
-
-  const eicar = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
+  await recordVerdict(
+    'clean-pdf',
+    async () => cleanService.assertClean(await pdfBytes(), 'application/pdf'),
+    undefined,
+    'clean',
+  );
   await recordVerdict(
     'eicar-detection',
     () => cleanService.assertClean(Buffer.from(eicar, 'ascii')),
     422,
     'infected-rejected',
   );
-  await recordVerdict(
-    'eicar-pdf-detection',
-    () => cleanService.assertClean(pdfBytes(eicar)),
-    422,
-    'infected-rejected',
-  );
+  await runPdfEicarMatrix();
 }
 
 async function verifyFailureModes() {

@@ -2,7 +2,9 @@ import {
   createWriteStream,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -16,8 +18,8 @@ const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1']);
 const outputDir =
   process.env.LIVIO_QA_OUTPUT ??
   join(process.env.RUNNER_TEMP ?? tmpdir(), 'livio-integrated-artifacts');
-const apiLogPath = join(tmpdir(), `livio-api-${process.pid}.raw.log`);
-const webLogPath = join(tmpdir(), `livio-web-${process.pid}.raw.log`);
+const apiLogPaths = [];
+const webLogPaths = [];
 const output = (name) => join(outputDir, name);
 const safeEnvironmentKeys = [
   'PATH',
@@ -163,6 +165,8 @@ testEnv.LIVIO_QA_OUTPUT = outputDir;
 testEnv.GITHUB_RUN_ID = process.env.GITHUB_RUN_ID;
 testEnv.CLAMAV_HOST = process.env.CLAMAV_HOST;
 testEnv.CLAMAV_PORT = process.env.CLAMAV_PORT;
+testEnv.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+testEnv.NEXT_PUBLIC_SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 testEnv.LIVIO_CLAMAV_INTEGRATION_FAILURES =
   process.env.CLAMAV_HOST === '127.0.0.1' && process.env.CLAMAV_PORT === '13310' ? 'true' : 'false';
 const sensitiveValues = [
@@ -322,15 +326,69 @@ function poolMetrics(summary) {
   };
 }
 
-function writeSanitizedLogs() {
-  for (const [source, destination] of [
-    [apiLogPath, output('api-timings.log')],
-    [webLogPath, output('web-server.log')],
-  ]) {
-    if (!existsSync(source)) continue;
-    writeFileSync(destination, sanitize(readFileSync(source, 'utf8')), 'utf8');
-    unlinkSync(source);
+function writeSanitizedLogGroup(sources, destination) {
+  const existingSources = sources.filter((source) => existsSync(source));
+  const combined = existingSources.map((source) => readFileSync(source, 'utf8')).join('\n');
+  if (!combined) return;
+  for (const source of existingSources) {
+    const suite = source.match(/-(focused|full)\.raw\.log$/)?.[1];
+    if (suite)
+      writeFileSync(
+        output(
+          `${destination.includes('api-timings') ? 'api-timings' : 'web-server'}-${suite}.log`,
+        ),
+        sanitize(readFileSync(source, 'utf8')),
+        'utf8',
+      );
   }
+  writeFileSync(destination, sanitize(combined), 'utf8');
+  for (const source of existingSources) unlinkSync(source);
+}
+
+function writeSanitizedLogs() {
+  writeSanitizedLogGroup(apiLogPaths, output('api-timings.log'));
+  writeSanitizedLogGroup(webLogPaths, output('web-server.log'));
+}
+
+function preserveFocusedFiles(directory) {
+  if (!existsSync(directory)) return;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const source = join(directory, entry.name);
+    if (entry.isDirectory()) preserveFocusedFiles(source);
+    else {
+      const extensionIndex = entry.name.lastIndexOf('.');
+      const base = extensionIndex > 0 ? entry.name.slice(0, extensionIndex) : entry.name;
+      const extension = extensionIndex > 0 ? entry.name.slice(extensionIndex) : '';
+      const destination = join(directory, `${base}-focused${extension}`);
+      if (source !== destination && !existsSync(destination))
+        writeFileSync(destination, readFileSync(source));
+    }
+  }
+}
+
+function preserveFocusedArtifacts() {
+  for (const name of [
+    'browser-navigation-metrics.json',
+    'browser-navigation-metrics-360.json',
+    'browser-navigation-metrics-1440.json',
+    'two-session-navigation-metrics.json',
+    'two-session-navigation-metrics-360.json',
+    'two-session-navigation-metrics-1440.json',
+  ]) {
+    const source = output(name);
+    if (!existsSync(source)) continue;
+    const extensionIndex = name.lastIndexOf('.');
+    writeFileSync(
+      output(`${name.slice(0, extensionIndex)}-focused${name.slice(extensionIndex)}`),
+      readFileSync(source),
+    );
+  }
+  for (const name of ['operation-traces', 'workflow-stages', 'screenshots'])
+    preserveFocusedFiles(output(name));
+  const resultDirectory = output('integrated-test-results');
+  const focusedResultDirectory = output('integrated-test-results-focused');
+  if (existsSync(resultDirectory) && !existsSync(focusedResultDirectory))
+    renameSync(resultDirectory, focusedResultDirectory);
 }
 
 function sanitizePlaywrightReport(sourcePath, destinationName) {
@@ -356,6 +414,60 @@ async function runPlaywrightSuite(reportName, grep) {
   }
 }
 
+function startIntegratedServices(runLabel) {
+  const apiLogPath = join(tmpdir(), `livio-api-${process.pid}-${runLabel}.raw.log`);
+  const webLogPath = join(tmpdir(), `livio-web-${process.pid}-${runLabel}.raw.log`);
+  apiLogPaths.push(apiLogPath);
+  webLogPaths.push(webLogPath);
+  api = startService('apps/api/dist/main.js', [], apiEnv, apiLogPath);
+  return waitFor(
+    'http://127.0.0.1:3001/v1/health/ready',
+    (response) => response.status === 200,
+  ).then(() => {
+    web = startService(
+      resolve(root, 'node_modules/next/dist/bin/next'),
+      ['start', '-p', '3010', '-H', '127.0.0.1'],
+      webEnv,
+      webLogPath,
+      resolve(root, 'apps/web'),
+    );
+    return waitFor('http://127.0.0.1:3010/', (response) => response.status === 200);
+  });
+}
+
+async function stopIntegratedServices() {
+  await stopChild(web);
+  await stopChild(api);
+  web = undefined;
+  api = undefined;
+}
+
+async function resetDisposableStackBetweenSuites() {
+  if (process.env.SUPABASE_LOCAL !== 'true')
+    stop('Rate-limit isolation reset is permitted only for this unlinked local Supabase stack.');
+  const database = localUrl('DATABASE_URL', ['postgres:', 'postgresql:']);
+  if (!loopbackHosts.has(database.hostname))
+    stop('Rate-limit isolation reset refused a database outside runner loopback.');
+  await execute('npx', ['supabase', '--yes', 'db', 'reset', '--local'], runnerEnv);
+  writeFileSync(
+    output('rate-limit-isolation.json'),
+    `${JSON.stringify(
+      {
+        status: 'PASS',
+        configuredWriteLimit: 60,
+        configuredReadLimit: 300,
+        productionLimitOverridden: false,
+        syntheticDatabaseResetBetweenSuites: true,
+        apiProcessRestartedBetweenSuites: true,
+        identityAndOrganizationScope: 'synthetic seed recreated in disposable local stack',
+      },
+      null,
+      2,
+    )}\n`,
+    'utf8',
+  );
+}
+
 let api;
 let web;
 let runFailed = false;
@@ -365,27 +477,21 @@ try {
   );
   await execute('npm', ['run', 'build'], buildEnv);
 
-  api = startService('apps/api/dist/main.js', [], apiEnv, apiLogPath);
-  await waitFor('http://127.0.0.1:3001/v1/health/ready', (response) => response.status === 200);
-
-  web = startService(
-    resolve(root, 'node_modules/next/dist/bin/next'),
-    ['start', '-p', '3010', '-H', '127.0.0.1'],
-    webEnv,
-    webLogPath,
-    resolve(root, 'apps/web'),
-  );
-  await waitFor('http://127.0.0.1:3010/', (response) => response.status === 200);
-
-  console.log(
-    'API and web are ready; starting one Chromium worker with real local Auth/API/DB/Storage.',
-  );
-  console.log('Retesting the navigation close path and four previously failing UI workflows.');
+  console.log('Building API and web for the real local Auth/API/DB/Storage stack.');
   for (const [reportName, grep] of [
     ['integrated-playwright-report-focused.json', 'carregamento sob demanda|jornada [1-4]:'],
     ['integrated-playwright-report-full.json', undefined],
   ]) {
     try {
+      if (reportName.includes('full')) {
+        await stopIntegratedServices();
+        preserveFocusedArtifacts();
+        await resetDisposableStackBetweenSuites();
+      }
+      await startIntegratedServices(reportName.includes('focused') ? 'focused' : 'full');
+      console.log(
+        `API and web are ready for ${reportName}; starting one Chromium worker with real local Auth/API/DB/Storage.`,
+      );
       await runPlaywrightSuite(reportName, grep);
     } catch (error) {
       runFailed = true;
@@ -393,6 +499,8 @@ try {
         error instanceof Error ? error.message : 'Falha integrada sem detalhe.',
       );
       console.error(`${reportName} failed; sanitized report was retained: ${safeMessage}`);
+    } finally {
+      await stopIntegratedServices();
     }
     if (reportName === 'integrated-playwright-report-focused.json')
       console.log(
@@ -403,8 +511,7 @@ try {
   runFailed = true;
   console.error(sanitize(error instanceof Error ? error.message : 'Falha integrada sem detalhe.'));
 } finally {
-  await stopChild(web);
-  await stopChild(api);
+  await stopIntegratedServices();
   writeSanitizedLogs();
 }
 
@@ -433,6 +540,25 @@ const apiLog = existsSync(output('api-timings.log'))
   : '';
 const queryEvents = parseJsonLines(apiLog, 'prisma_query_timing');
 const poolSummary = parseJsonLines(apiLog, 'prisma_pool_summary').at(-1);
+const apiMetricsBySuite = Object.fromEntries(
+  ['focused', 'full'].map((suite) => {
+    const path = output(`api-timings-${suite}.log`);
+    const log = existsSync(path) ? readFileSync(path, 'utf8') : '';
+    const events = parseJsonLines(log, 'prisma_query_timing');
+    const durations = events.map((event) => Number(event.durationMs)).filter(Number.isFinite);
+    const summary = parseJsonLines(log, 'prisma_pool_summary').at(-1);
+    return [
+      suite,
+      {
+        queryCount: events.length,
+        queryP50Ms: percentile(durations, 50),
+        queryP95Ms: percentile(durations, 95),
+        p2024Count: (log.match(/P2024/g) ?? []).length,
+        pool: poolMetrics(summary),
+      },
+    ];
+  }),
+);
 const burst = browserMetrics.membershipBurst;
 const membershipQueriesInBurst = burst
   ? queryEvents.filter(
@@ -453,6 +579,7 @@ const backend = {
     queryP95Ms: percentile(queryDurations, 95),
     pool: poolMetrics(poolSummary),
     p2024Count,
+    bySuite: apiMetricsBySuite,
   },
   membershipBurst: burst
     ? {

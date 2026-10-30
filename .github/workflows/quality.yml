@@ -117,9 +117,15 @@ jobs:
             ${{ runner.temp }}/livio-integrated-artifacts/operation-traces/*.json
             ${{ runner.temp }}/livio-integrated-artifacts/workflow-stages/*.json
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results/**
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results-focused/**
             ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/rate-limit-isolation.json
             ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log
+            ${{ runner.temp }}/livio-integrated-artifacts/api-timings-focused.log
+            ${{ runner.temp }}/livio-integrated-artifacts/api-timings-full.log
             ${{ runner.temp }}/livio-integrated-artifacts/web-server.log
+            ${{ runner.temp }}/livio-integrated-artifacts/web-server-focused.log
+            ${{ runner.temp }}/livio-integrated-artifacts/web-server-full.log
             ${{ runner.temp }}/livio-integrated-artifacts/screenshots/*.png
           if-no-files-found: ignore
       - name: Stop only this disposable Supabase project

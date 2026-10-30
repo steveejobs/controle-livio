@@ -477,47 +477,63 @@ assert.equal(
 const grantSnapshot = (database) =>
   sql(
     database,
-    `SELECT COALESCE(string_agg(entry, E'\\n' ORDER BY entry), '') FROM (
-      SELECT 'SCHEMA:' || n.nspname || ':' || x.privilege_type || ':' ||
-        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text AS entry
-      FROM pg_namespace n CROSS JOIN LATERAL aclexplode(COALESCE(n.nspacl, acldefault('n', n.nspowner))) x
-      WHERE n.nspname = 'public'
+    `WITH acl_sources AS (
+      SELECT 'SCHEMA'::text AS object_type, n.nspname AS schema_name,
+        n.nspname AS object_name, pg_get_userbyid(n.nspowner) AS owner_name,
+        COALESCE(n.nspacl, acldefault('n', n.nspowner)) AS privileges
+      FROM pg_namespace n WHERE n.nspname = 'public'
       UNION ALL
-      SELECT 'RELATION:' || n.nspname || '.' || c.relname || ':' || x.privilege_type || ':' ||
-        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
+      SELECT CASE WHEN c.relkind = 'S' THEN 'SEQUENCE' ELSE 'RELATION' END,
+        n.nspname, c.relname, pg_get_userbyid(c.relowner),
+        COALESCE(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 'S'::"char" ELSE 'r'::"char" END, c.relowner))
       FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-        CROSS JOIN LATERAL aclexplode(COALESCE(
-          c.relacl,
-          acldefault(CASE WHEN c.relkind = 'S' THEN 'S'::"char" ELSE 'r'::"char" END, c.relowner)
-        )) x
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S', 'v', 'm', 'f')
       UNION ALL
-      SELECT 'COLUMN:' || n.nspname || '.' || c.relname || '.' || a.attname || ':' || x.privilege_type || ':' ||
-        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
+      SELECT 'COLUMN', n.nspname, c.relname || '.' || a.attname,
+        pg_get_userbyid(c.relowner), a.attacl
       FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = c.relnamespace
-        CROSS JOIN LATERAL aclexplode(COALESCE(a.attacl, '{}'::aclitem[])) x
-      WHERE n.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped
+      WHERE n.nspname = 'public' AND a.attnum > 0 AND NOT a.attisdropped AND a.attacl IS NOT NULL
       UNION ALL
-      SELECT 'ROUTINE:' || n.nspname || '.' || p.oid::regprocedure::text || ':' || x.privilege_type || ':' ||
-        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
-      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-        CROSS JOIN LATERAL aclexplode(COALESCE(p.proacl, acldefault('f', p.proowner))) x
-      WHERE n.nspname = 'public'
+      SELECT 'ROUTINE', n.nspname, p.oid::regprocedure::text,
+        pg_get_userbyid(p.proowner), COALESCE(p.proacl, acldefault('f', p.proowner))
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public'
       UNION ALL
-      SELECT 'TYPE:' || n.nspname || '.' || t.typname || ':' || x.privilege_type || ':' ||
-        CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
-      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-        CROSS JOIN LATERAL aclexplode(COALESCE(t.typacl, acldefault('T', t.typowner))) x
-      WHERE n.nspname = 'public'
+      SELECT 'TYPE', n.nspname, t.typname, pg_get_userbyid(t.typowner),
+        COALESCE(t.typacl, acldefault('T', t.typowner))
+      FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'public'
       UNION ALL
-      SELECT 'DEFAULT:' || n.nspname || ':' || pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype::text || ':' ||
-        x.privilege_type || ':' || CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE x.grantee::regrole::text END || ':' || x.is_grantable::text
-      FROM pg_default_acl d JOIN pg_namespace n ON n.oid = d.defaclnamespace
-        CROSS JOIN LATERAL aclexplode(d.defaclacl) x
-      WHERE n.nspname = 'public'
-    ) grants`,
+      SELECT 'DEFAULT ACL', COALESCE(n.nspname, ''),
+        pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype::text,
+        pg_get_userbyid(d.defaclrole), d.defaclacl
+      FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
+      WHERE d.defaclnamespace = 0 OR n.nspname = 'public'
+    ), normalized_grants AS (
+      SELECT source.object_type, source.schema_name, source.object_name, source.owner_name,
+        pg_get_userbyid(expanded.grantor) AS grantor_name,
+        CASE WHEN expanded.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(expanded.grantee) END AS grantee_name,
+        expanded.privilege_type, expanded.is_grantable
+      FROM acl_sources source
+        CROSS JOIN LATERAL aclexplode(source.privileges) AS expanded
+    )
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'objectType', object_type, 'schema', schema_name, 'object', object_name,
+      'owner', owner_name, 'grantor', grantor_name, 'grantee', grantee_name,
+      'privilege', privilege_type, 'grantOption', is_grantable
+    ) ORDER BY object_type, schema_name, object_name, grantor_name, grantee_name,
+      privilege_type, is_grantable), '[]'::jsonb)::text
+    FROM normalized_grants`,
   );
+
+const parsedGrantSnapshot = (database) => JSON.parse(grantSnapshot(database));
+const summarizeGrants = (grants) => ({
+  total: grants.length,
+  defaultAcl: grants.filter((grant) => grant.objectType === 'DEFAULT ACL').length,
+  applicationSchema: grants.filter((grant) => grant.schema === 'public').length,
+  roles: [...new Set(grants.flatMap(({ grantor, grantee, owner }) => [grantor, grantee, owner]))]
+    .filter(Boolean)
+    .sort(),
+});
 const ownerSnapshot = (database) =>
   sql(
     database,
@@ -538,6 +554,87 @@ const ownerSnapshot = (database) =>
       WHERE n.nspname = 'public'
     ) owners`,
   );
+const sourceGrantRecords = parsedGrantSnapshot('postgres');
+const sourceOwnerRecords = ownerSnapshot('postgres').split('\n').filter(Boolean);
+const sourceApplicationDefaultGrants = sourceGrantRecords.filter(
+  ({ objectType, grantee }) =>
+    objectType === 'DEFAULT ACL' && ['anon', 'authenticated', 'service_role'].includes(grantee),
+);
+const destinationDefaultGrantsBeforePolicy = parsedGrantSnapshot(target).filter(
+  ({ objectType, grantee }) =>
+    objectType === 'DEFAULT ACL' && ['anon', 'authenticated', 'service_role'].includes(grantee),
+);
+const applicationRoles = new Set(['anon', 'authenticated', 'service_role']);
+const defaultObjectCategories = {
+  r: 'TABLES',
+  S: 'SEQUENCES',
+  f: 'FUNCTIONS',
+  T: 'TYPES',
+  n: 'SCHEMAS',
+};
+const defaultCategoryPrivileges = {
+  r: new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER']),
+  S: new Set(['USAGE', 'SELECT', 'UPDATE']),
+  f: new Set(['EXECUTE']),
+  T: new Set(['USAGE']),
+  n: new Set(['USAGE', 'CREATE']),
+};
+const sqlIdentifier = (value) => `"${value.replaceAll('"', '""')}"`;
+function applyApplicationDefaultGrants(sourceGrants, destinationGrants) {
+  const grouped = new Map();
+  for (const grant of [...sourceGrants, ...destinationGrants]) {
+    if (grant.objectType !== 'DEFAULT ACL' || !applicationRoles.has(grant.grantee)) continue;
+    const objectType = grant.object.split(':').at(-1);
+    const category = defaultObjectCategories[objectType];
+    if (!category) throw new Error(`Unsupported default ACL object type: ${objectType}`);
+    const key = JSON.stringify([grant.schema, grant.owner, objectType, grant.grantee]);
+    const group = grouped.get(key) ?? {
+      schema: grant.schema,
+      owner: grant.owner,
+      objectType,
+      category,
+      grantee: grant.grantee,
+      grants: new Map(),
+    };
+    if (sourceGrants.includes(grant))
+      group.grants.set(
+        grant.privilege,
+        (group.grants.get(grant.privilege) ?? false) || grant.grantOption === true,
+      );
+    grouped.set(key, group);
+  }
+  const statements = [];
+  for (const group of grouped.values()) {
+    const { schema, owner, objectType, category, grantee, grants } = group;
+    const schemaClause = schema && objectType !== 'n' ? ` IN SCHEMA ${sqlIdentifier(schema)}` : '';
+    const roleClause = sqlIdentifier(owner);
+    const granteeClause = sqlIdentifier(grantee);
+    statements.push(
+      `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleClause}${schemaClause} REVOKE ALL PRIVILEGES ON ${category} FROM ${granteeClause}`,
+    );
+    for (const [privilege, grantOption] of grants) {
+      if (!defaultCategoryPrivileges[objectType].has(privilege))
+        throw new Error(`Unsupported ${objectType} default ACL privilege: ${privilege}`);
+      statements.push(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleClause}${schemaClause} GRANT ${privilege} ON ${category} TO ${granteeClause}${grantOption ? ' WITH GRANT OPTION' : ''}`,
+      );
+    }
+  }
+  if (statements.length > 0) sql(target, `BEGIN;\n${statements.join(';\n')};\nCOMMIT;`);
+  return statements.length;
+}
+const normalizeDefaultGrantSemantics = (grants) => {
+  const normalized = new Map();
+  for (const { objectType, schema, object, owner, grantee, privilege, grantOption } of grants) {
+    const record = { objectType, schema, object, owner, grantee, privilege, grantOption };
+    const key = JSON.stringify({ ...record, grantOption: undefined });
+    const previous = normalized.get(key);
+    if (!previous || grantOption === true) normalized.set(key, record);
+  }
+  return [...normalized.values()].sort((left, right) =>
+    JSON.stringify(left).localeCompare(JSON.stringify(right)),
+  );
+};
 const requiredRoles = sql(
   target,
   "SELECT count(*)::text FROM pg_roles WHERE rolname IN ('supabase_admin', 'anon', 'authenticated', 'service_role')",
@@ -563,6 +660,10 @@ sql(
    GRANT EXECUTE ON FUNCTION public.storage_object_organization_id(text) TO authenticated;
    GRANT EXECUTE ON FUNCTION public.can_download_storage_object(text) TO authenticated;
    COMMIT;`,
+);
+const applicationDefaultGrantStatements = applyApplicationDefaultGrants(
+  sourceApplicationDefaultGrants,
+  destinationDefaultGrantsBeforePolicy,
 );
 
 assert.equal(
@@ -604,8 +705,25 @@ assert.equal(
   '0',
   'Security function grants do not match the checked-in authenticated-only policy',
 );
+const destinationGrantRecords = parsedGrantSnapshot(target);
+const destinationApplicationDefaultGrants = destinationGrantRecords.filter(
+  ({ objectType, grantee }) =>
+    objectType === 'DEFAULT ACL' && ['anon', 'authenticated', 'service_role'].includes(grantee),
+);
+assert.deepEqual(
+  normalizeDefaultGrantSemantics(destinationApplicationDefaultGrants),
+  normalizeDefaultGrantSemantics(sourceApplicationDefaultGrants),
+  'Application roles lost source default privileges or gained unexpected default privileges',
+);
 assert(
-  grantSnapshot(target).includes('SCHEMA:public:USAGE:authenticated:false'),
+  destinationGrantRecords.some(
+    ({ objectType, schema, privilege, grantee, grantOption }) =>
+      objectType === 'SCHEMA' &&
+      schema === 'public' &&
+      privilege === 'USAGE' &&
+      grantee === 'authenticated' &&
+      !grantOption,
+  ),
   'Application schema usage grant was not restored',
 );
 const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
@@ -614,6 +732,36 @@ assert(
   restoredOwners.every((entry) => entry.endsWith(':supabase_admin')),
   'Restore target objects must be owned by the disposable runner role because --no-owner is used',
 );
+const grantSnapshotEvidence = {
+  source: {
+    summary: summarizeGrants(sourceGrantRecords),
+    applicationDefaultGrants: sourceApplicationDefaultGrants,
+    ownerObjectCount: sourceOwnerRecords.length,
+    ownerRoles: [
+      ...new Set(sourceOwnerRecords.map((entry) => entry.slice(entry.lastIndexOf(':') + 1))),
+    ].sort(),
+  },
+  destinationBeforeApplicationPolicy: {
+    summary: summarizeGrants(parsedGrantSnapshot(target)),
+    applicationDefaultGrants: destinationDefaultGrantsBeforePolicy,
+  },
+  destinationAfterApplicationPolicy: {
+    summary: summarizeGrants(destinationGrantRecords),
+    applicationDefaultGrants: destinationApplicationDefaultGrants,
+    ownerObjectCount: restoredOwners.length,
+    ownerRoles: [
+      ...new Set(restoredOwners.map((entry) => entry.slice(entry.lastIndexOf(':') + 1))),
+    ].sort(),
+  },
+  ownerDifferencePolicy:
+    '--no-owner remaps restored public objects to the disposable supabase_admin role',
+  aclDifferencePolicy:
+    '--no-acl suppresses source ACL replay; checked-in application grants are applied explicitly',
+  applicationDefaultGrantsComparedByRoleName: true,
+  applicationDefaultGrantStatementsApplied: applicationDefaultGrantStatements,
+  defaultAclGrantorsRecordedAndNormalizedSeparately: true,
+};
+writeCheckpoint({ targetDatabase: target, restoreStage, grantSnapshotEvidence });
 
 const foreignKeySnapshot = (database) =>
   sql(
@@ -723,6 +871,7 @@ writeFileSync(
       ...filteredTocEvidence,
       publicObjectsOwnedBy: 'supabase_admin',
       applicationGrantsAppliedAndVerified: true,
+      grantSnapshotEvidence,
       foreignKeysComparedAndValidated: true,
       financialTotalsCompared: recoveredFinancials,
       effectiveRestoreArguments: effectiveRestoreArgs,

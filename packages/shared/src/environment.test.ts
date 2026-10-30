@@ -23,6 +23,12 @@ describe('Supabase environment boundary', () => {
     expect(() => parseApiEnvironment({ ...base, MAX_DOCUMENT_SIZE_MB: '5' })).toThrow();
   });
 
+  it('keeps the production write and read rate limits at their normal defaults', () => {
+    const parsed = parseApiEnvironment(base);
+    expect(parsed.API_RATE_LIMIT_WRITE).toBe(60);
+    expect(parsed.API_RATE_LIMIT_READ).toBe(300);
+  });
+
   it('accepts a coherent Supabase project configuration', () => {
     expect(parseApiEnvironment(base).SUPABASE_PROJECT_REF).toBe('projectref123');
   });

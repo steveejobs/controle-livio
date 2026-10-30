@@ -12,11 +12,15 @@ import {
   type Route,
   type Response,
 } from '@playwright/test';
+import { createClient } from '@supabase/supabase-js';
+import { AFRelationship, PDFDocument } from 'pdf-lib';
 import { addMonths, formatDate } from '../../features/shared/format';
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001/v1';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321';
 const supabaseAuthCookieName = `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`;
+const storageBucket = 'legal-documents';
+const storageAdminKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const localPassword = 'LocalOnly-ChangeMe-2026!';
 const eicarTestFile = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 const organizationA = '10000000-0000-4000-8000-000000000001';
@@ -1005,9 +1009,11 @@ test('seletor de cliente: carregamento sob demanda, erro, nova tentativa e lista
       await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
       const emptyForm = await formWithSubmitButton(page, 'Cadastrar processo');
       const emptyClientSelect = emptyForm.getByRole('combobox', { name: 'Cliente', exact: true });
-      await expect(emptyForm.getByRole('status')).toContainText(
-        'Nenhum cliente acessível está cadastrado neste escritório.',
-      );
+      const emptyClientMessage = emptyForm
+        .getByRole('status')
+        .filter({ hasText: 'Nenhum cliente acessível está cadastrado neste escritório.' });
+      await expect(emptyClientMessage).toHaveCount(1);
+      await expect(emptyClientMessage).toBeVisible();
       await expect(emptyClientSelect.locator('option')).toHaveCount(1);
       await expect(emptyClientSelect.locator('option').first()).toHaveText(
         'Nenhum cliente disponível',
@@ -1169,37 +1175,27 @@ async function browserUpload(
   );
 }
 
-function pdfBytes(embeddedFile?: string): number[] {
-  const stream = 'BT /F1 12 Tf 20 70 Td (Synthetic local QA document) Tj ET';
-  const objects = [
-    '<< /Type /Catalog /Pages 2 0 R >>',
-    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
-    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
-    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
-    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-  ];
-  if (embeddedFile !== undefined) {
-    const fileSpecObjectNumber = objects.length + 1;
-    const embeddedFileObjectNumber = objects.length + 2;
-    const embeddedFileSize = Buffer.byteLength(embeddedFile, 'ascii');
-    objects[0] = `<< /Type /Catalog /Pages 2 0 R /Names << /EmbeddedFiles << /Names [(eicar.com) ${fileSpecObjectNumber} 0 R] >> >> /AF [${fileSpecObjectNumber} 0 R] >>`;
-    objects.push(
-      `<< /Type /Filespec /F (eicar.com) /UF (eicar.com) /Desc (ClamAV EICAR scanner test) /AFRelationship /Data /EF << /F ${embeddedFileObjectNumber} 0 R /UF ${embeddedFileObjectNumber} 0 R >> >>`,
-      `<< /Type /EmbeddedFile /Subtype /application#2Foctet-stream /Params << /Size ${embeddedFileSize} >> /Length ${embeddedFileSize} >>\nstream\n${embeddedFile}\nendstream`,
-    );
+async function pdfBytes(embeddedFile?: string): Promise<Buffer> {
+  const document = await PDFDocument.create();
+  document.addPage([300, 144]);
+  if (embeddedFile !== undefined)
+    await document.attach(Buffer.from(embeddedFile, 'ascii'), 'eicar.com', {
+      mimeType: 'application/octet-stream',
+      description: 'ClamAV EICAR scanner test',
+      afRelationship: AFRelationship.Data,
+    });
+
+  // Keep the embedded test file uncompressed so clamd scans its exact bytes.
+  const context = document.context;
+  const originalFlateStream = context.flateStream;
+  context.flateStream = function (contents, dictionary) {
+    return this.stream(contents, dictionary);
+  };
+  try {
+    return Buffer.from(await document.save({ useObjectStreams: false }));
+  } finally {
+    context.flateStream = originalFlateStream;
   }
-  let document = '%PDF-1.4\n';
-  const offsets = [0];
-  for (const [index, object] of objects.entries()) {
-    offsets.push(Buffer.byteLength(document));
-    document += `${index + 1} 0 obj\n${object}\nendobj\n`;
-  }
-  const xrefOffset = Buffer.byteLength(document);
-  document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
-  for (const offset of offsets.slice(1))
-    document += `${String(offset).padStart(10, '0')} 00000 n \n`;
-  document += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
-  return [...Buffer.from(document, 'ascii')];
 }
 
 function ownedClamavContainer(): string {
@@ -2409,7 +2405,7 @@ async function submitScannerProbe(page: Page, title: string, operation: string) 
   await form.getByLabel('Arquivo').setInputFiles({
     name: `${operation}.pdf`,
     mimeType: 'application/pdf',
-    buffer: Buffer.from(pdfBytes()),
+    buffer: await pdfBytes(),
   });
   return clickUiOperation(page, {
     operation,
@@ -2428,6 +2424,66 @@ async function expectNoPersistedDocument(page: Page, title: string) {
   expect(items.some((document) => document.title === title)).toBe(false);
 }
 
+async function storageObjectInventory(organizationId: string): Promise<string[]> {
+  if (!storageAdminKey) throw new Error('Local Storage verification key is missing.');
+  const storageAdmin = createClient(supabaseUrl, storageAdminKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+  const objects: string[] = [];
+  const visit = async (prefix: string, depth: number): Promise<void> => {
+    if (depth > 4) throw new Error('Storage folder depth exceeds the synthetic test bound.');
+    let offset = 0;
+    while (true) {
+      const { data, error } = await storageAdmin.storage.from(storageBucket).list(prefix, {
+        limit: 1000,
+        offset,
+        sortBy: { column: 'name', order: 'asc' },
+      });
+      if (error) throw new Error(`Local Storage inventory failed: ${error.name}`);
+      for (const item of data) {
+        const path = prefix ? `${prefix}/${item.name}` : item.name;
+        if (item.id === null) await visit(path, depth + 1);
+        else objects.push(path);
+      }
+      if (data.length < 1000) break;
+      offset += data.length;
+    }
+  };
+  await visit(`organizations/${organizationId}/documents`, 0);
+  return objects.sort();
+}
+
+async function expectStorageUnchanged(
+  organizationId: string,
+  previousObjects: string[],
+  label: string,
+  page?: Page,
+) {
+  const currentObjects = await storageObjectInventory(organizationId);
+  expect(currentObjects, `${label}: rejected upload must not promote an object to Storage`).toEqual(
+    previousObjects,
+  );
+  if (page)
+    markWorkflowStage(page, label, 'STORAGE_PROMOTION_BLOCKED', {
+      storageObjectCount: currentObjects.length,
+    });
+}
+
+async function expectStorageAddedOne(
+  organizationId: string,
+  previousObjects: string[],
+  page: Page,
+  operation: string,
+) {
+  const currentObjects = await storageObjectInventory(organizationId);
+  expect(currentObjects).toHaveLength(previousObjects.length + 1);
+  expect(currentObjects.filter((object) => !previousObjects.includes(object))).toHaveLength(1);
+  markWorkflowStage(page, operation, 'STORAGE_OBJECT_CONFIRMED', {
+    storageObjectCount: currentObjects.length,
+  });
+  return currentObjects;
+}
+
 test('jornada 4: upload, download protegido e assinatura eletrônica no navegador', async ({
   browser,
 }) => {
@@ -2439,7 +2495,8 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await login(page, 'admin.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const title = `PDF de assinatura QA ${suffix}`;
-      const cleanPdf = Buffer.from(pdfBytes());
+      const cleanPdf = await pdfBytes();
+      const storageBeforeCleanUpload = await storageObjectInventory(organizationA);
       await navigateTo(page, 'Documentos');
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
       const uploadForm = await formWithSubmitButton(page, 'Enviar documento');
@@ -2476,11 +2533,18 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       expect(uploadFields).toContain('visibility');
       await expectOperationFeedback(page, 'Documento enviado com segurança.');
       const documentId = ((await uploaded.json()) as { id: string }).id;
+      const storageAfterCleanUpload = await expectStorageAddedOne(
+        organizationA,
+        storageBeforeCleanUpload,
+        page,
+        'upload-client-document',
+      );
       const documentRow = page.getByRole('row').filter({ hasText: title });
       await expect(documentRow).toBeVisible();
       await expect(documentRow).toContainText('Cliente');
 
       const infectedTitle = `Arquivo de teste bloqueado QA ${suffix}`;
+      const storageBeforeInfectedUpload = storageAfterCleanUpload;
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
       const infectedForm = await formWithSubmitButton(page, 'Enviar documento');
       await infectedForm.getByLabel('Nome do documento').fill(infectedTitle);
@@ -2488,7 +2552,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await infectedForm.getByLabel('Arquivo').setInputFiles({
         name: `eicar-${suffix}.pdf`,
         mimeType: 'application/pdf',
-        buffer: Buffer.from(pdfBytes(eicarTestFile)),
+        buffer: await pdfBytes(eicarTestFile),
       });
       const infectedResponse = await clickUiOperation(page, {
         operation: 'reject-infected-document-upload',
@@ -2507,6 +2571,12 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         'Erro: O arquivo foi bloqueado pela verificação de segurança.',
       );
       await expect(page.getByRole('row').filter({ hasText: infectedTitle })).toHaveCount(0);
+      await expectStorageUnchanged(
+        organizationA,
+        storageBeforeInfectedUpload,
+        'infected-upload',
+        page,
+      );
 
       const persistedDocuments = await browserApi(page, '/documents?page=1&pageSize=100');
       assertStatus(persistedDocuments, 200, 'read uploaded document metadata');
@@ -2643,6 +2713,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       ) {
         const container = ownedClamavContainer();
         const timeoutTitle = `Upload bloqueado por timeout QA ${suffix}`;
+        const storageBeforeTimeout = await storageObjectInventory(organizationA);
         controlClamavContainer('pause', container);
         try {
           const timeoutStartedAt = Date.now();
@@ -2662,6 +2733,12 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           });
           await expectOperationFeedback(page, 'Erro: Ocorreu um erro interno');
           await expectNoPersistedDocument(page, timeoutTitle);
+          await expectStorageUnchanged(
+            organizationA,
+            storageBeforeTimeout,
+            'scanner-timeout',
+            page,
+          );
           markWorkflowStage(page, 'document-upload-clamav-timeout', 'TIMEOUT_BLOCKED', {
             status: timeoutResponse.status(),
             code: timeoutBody.code,
@@ -2675,6 +2752,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         }
 
         const unavailableTitle = `Upload bloqueado sem scanner QA ${suffix}`;
+        const storageBeforeUnavailable = await storageObjectInventory(organizationA);
         controlClamavContainer('stop', container);
         try {
           const unavailableResponse = await submitScannerProbe(
@@ -2691,6 +2769,12 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           });
           await expectOperationFeedback(page, 'Erro: Ocorreu um erro interno');
           await expectNoPersistedDocument(page, unavailableTitle);
+          await expectStorageUnchanged(
+            organizationA,
+            storageBeforeUnavailable,
+            'scanner-unavailable',
+            page,
+          );
           markWorkflowStage(page, 'document-upload-clamav-unavailable', 'UNAVAILABLE_BLOCKED', {
             status: unavailableResponse.status(),
             code: unavailableBody.code,

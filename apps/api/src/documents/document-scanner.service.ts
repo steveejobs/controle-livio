@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { ApiEnvironment } from '@livio/shared';
+import { extractPdfScanTargets } from './pdf-embedded-files';
 
 const chunkSize = 64 * 1024;
 const maxScannerResponseBytes = 1024;
@@ -14,20 +15,38 @@ const maxScannerResponseBytes = 1024;
 export class DocumentScannerService {
   constructor(private readonly config: ConfigService<ApiEnvironment, true>) {}
 
-  async assertClean(file: Buffer): Promise<void> {
+  async assertClean(file: Buffer, mimeType?: string): Promise<void> {
     const environment = this.config.get('SUPABASE_ENVIRONMENT', { infer: true });
     const isLocalTest =
       environment === 'test' && this.config.get('SUPABASE_LOCAL', { infer: true });
-    if (isLocalTest) return;
-
     const host = this.config.get('CLAMAV_HOST', { infer: true });
+    if (isLocalTest && !host) return;
     if (!host) throw new ServiceUnavailableException('A varredura de segurança está indisponível.');
 
+    await this.scanBuffer(file, host);
+    if (mimeType !== 'application/pdf') return;
+
+    const { pageContents, embeddedFiles } = await extractPdfScanTargets(file);
+    if (pageContents.length > 0) {
+      const totalBytes = pageContents.reduce((sum, content) => sum + content.length + 1, 0);
+      const combinedPageContents = Buffer.allocUnsafe(totalBytes);
+      let offset = 0;
+      for (const pageContent of pageContents) {
+        pageContent.copy(combinedPageContents, offset);
+        offset += pageContent.length;
+        combinedPageContents[offset] = 0;
+        offset += 1;
+      }
+      await this.scanBuffer(combinedPageContents, host);
+    }
+    for (const embeddedFile of embeddedFiles) await this.scanBuffer(embeddedFile, host);
+  }
+
+  private async scanBuffer(file: Buffer, host: string): Promise<void> {
+    const port = this.config.get('CLAMAV_PORT', { infer: true });
+    const timeoutMs = this.config.get('CLAMAV_TIMEOUT_MS', { infer: true });
     await new Promise<void>((resolve, reject) => {
-      const socket = createConnection({
-        host,
-        port: this.config.get('CLAMAV_PORT', { infer: true }),
-      });
+      const socket = createConnection({ host, port });
       let response = '';
       let settled = false;
       const failUnavailable = () => {
@@ -55,7 +74,7 @@ export class DocumentScannerService {
         }
       };
 
-      socket.setTimeout(this.config.get('CLAMAV_TIMEOUT_MS', { infer: true }), failUnavailable);
+      socket.setTimeout(timeoutMs, failUnavailable);
       socket.once('error', failUnavailable);
       socket.once('connect', () => {
         socket.write(Buffer.from('zINSTREAM\0', 'ascii'));

@@ -22,10 +22,14 @@ describe('documentos privados', () => {
     ['scanner indisponível', new ServiceUnavailableException('Scanner de teste indisponível')],
   ])('%s não chega ao Storage nem cria metadados', async (_scenario, scannerError) => {
     const documentCreate = vi.fn();
-    const transaction = vi.fn();
+    const transactionClient = {};
+    const transaction = vi.fn(async (operation: (tx: unknown) => unknown) =>
+      operation(transactionClient),
+    );
     const prisma = { document: { create: documentCreate }, $transaction: transaction };
     const storage = { upload: vi.fn(), remove: vi.fn() };
-    const audit = { record: vi.fn() };
+    const auditRecord = vi.fn().mockResolvedValue(undefined);
+    const audit = { record: auditRecord };
     const scanner = { assertClean: vi.fn().mockRejectedValue(scannerError) };
     const service = new DocumentsService(
       prisma as never,
@@ -47,12 +51,24 @@ describe('documentos privados', () => {
       } as Express.Multer.File),
     ).rejects.toBe(scannerError);
 
-    expect(scanner.assertClean).toHaveBeenCalledWith(bytes);
+    expect(scanner.assertClean).toHaveBeenCalledWith(bytes, 'application/pdf');
     expect(storage.upload).not.toHaveBeenCalled();
     expect(storage.remove).not.toHaveBeenCalled();
-    expect(transaction).not.toHaveBeenCalled();
+    expect(transaction).toHaveBeenCalledOnce();
     expect(documentCreate).not.toHaveBeenCalled();
-    expect(audit.record).not.toHaveBeenCalled();
+    expect(auditRecord).toHaveBeenCalledWith(
+      transactionClient,
+      expect.objectContaining({
+        action: 'CREATE',
+        resource: 'document_upload',
+        after: expect.objectContaining({
+          outcome: 'blocked',
+          mimeType: 'application/pdf',
+          sizeBytes: bytes.length,
+        }),
+      }),
+    );
+    expect(auditRecord.mock.calls[0]?.[1]).not.toHaveProperty('after.fileName');
   });
 
   it('não permite que o filtro da listagem substitua o cliente autenticado do portal', async () => {

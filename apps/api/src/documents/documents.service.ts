@@ -4,6 +4,8 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
+  UnprocessableEntityException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import sanitizeFilename from 'sanitize-filename';
@@ -209,7 +211,7 @@ export class DocumentsService {
   ) {
     this.validateFile(file);
     await this.assertLinks(actor.organizationId, metadata);
-    await this.scanner.assertClean(file.buffer);
+    await this.assertUploadScannable(actor, file);
     const documentId = randomUUID();
     const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
     await this.storage.upload(storageKey, file.buffer, file.mimetype);
@@ -267,7 +269,7 @@ export class DocumentsService {
   async addVersion(actor: AuthenticatedActor, documentId: string, file: Express.Multer.File) {
     this.validateFile(file);
     await this.getDocument(actor, documentId);
-    await this.scanner.assertClean(file.buffer);
+    await this.assertUploadScannable(actor, file, documentId);
     const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
     await this.storage.upload(storageKey, file.buffer, file.mimetype);
     try {
@@ -321,6 +323,42 @@ export class DocumentsService {
       return this.serializeVersion(version);
     } catch (error) {
       await this.storage.remove(storageKey);
+      throw error;
+    }
+  }
+
+  private async assertUploadScannable(
+    actor: AuthenticatedActor,
+    file: Express.Multer.File,
+    documentId?: string,
+  ): Promise<void> {
+    try {
+      await this.scanner.assertClean(file.buffer, file.mimetype);
+    } catch (error) {
+      const reason =
+        error instanceof UnprocessableEntityException ? 'content_rejected' : 'scanner_unavailable';
+      try {
+        await this.prisma.$transaction((transaction) =>
+          this.audit.record(transaction, {
+            organizationId: actor.organizationId,
+            actorUserId: actor.userId,
+            actorSessionId: actor.sessionId,
+            action: 'CREATE',
+            resource: 'document_upload',
+            ...(documentId ? { resourceId: documentId } : {}),
+            after: {
+              outcome: 'blocked',
+              reason,
+              mimeType: file.mimetype,
+              sizeBytes: file.size,
+            },
+          }),
+        );
+      } catch {
+        throw new ServiceUnavailableException(
+          'A tentativa bloqueada não pôde ser registrada com segurança.',
+        );
+      }
       throw error;
     }
   }
