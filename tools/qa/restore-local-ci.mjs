@@ -112,6 +112,7 @@ const restoreArguments = (target, restoreList, archive) => [
   restoreList,
   archive,
 ];
+const dockerExecArguments = (container, args) => ['exec', container, ...args];
 
 const tocFixture = [
   '1233; 2615 2200 SCHEMA - cron postgres',
@@ -154,6 +155,11 @@ assert(
     restorePlanFixture.includes('net'),
   'Restore must exclude both scheduler schemas using pg_restore schema filters',
 );
+assert.deepEqual(
+  dockerExecArguments('supabase_db_livio-legal-crm', restorePlanFixture),
+  ['exec', 'supabase_db_livio-legal-crm', ...restorePlanFixture],
+  'Docker must execute pg_restore inside the disposable database container',
+);
 if (process.argv.includes('--check-toc-filter')) {
   console.log('Restore plan fixtures passed; no database or backup was accessed.');
   process.exit(0);
@@ -169,7 +175,7 @@ const target = `livio_restore_${suffix}`;
 const archive = `/tmp/${target}.dump`;
 const restoreList = `/tmp/${target}.list`;
 const run = (...args) =>
-  execFileSync('docker', ['exec', container, ...args], {
+  execFileSync('docker', dockerExecArguments(container, args), {
     encoding: 'utf8',
     timeout: 120_000,
     maxBuffer: 8 * 1024 * 1024,
@@ -267,7 +273,7 @@ assert(
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
-  effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+  effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
   aclRowsSuppressedByNoAcl: aclEntries.length,
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
@@ -295,19 +301,19 @@ restoreStage = 'pg_restore';
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
-  effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+  effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
   aclRowsSuppressedByNoAcl: aclEntries.length,
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
   excludedSchedulerSchemas,
 });
-run(...effectiveRestoreArgs.slice(1));
+run(...effectiveRestoreArgs);
 restoreStage = 'validate_recovery';
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
   pgRestoreCompleted: true,
-  effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+  effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
   aclRowsSuppressedByNoAcl: aclEntries.length,
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
@@ -618,7 +624,7 @@ writeFileSync(
       applicationGrantsAppliedAndVerified: true,
       foreignKeysComparedAndValidated: true,
       financialTotalsCompared: recoveredFinancials,
-      effectiveRestoreArguments: effectiveRestoreArgs.slice(1),
+      effectiveRestoreArguments: effectiveRestoreArgs,
       schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
       aclRowsSuppressedByNoAcl: aclEntries.length,
       cronAlterJobAclTocRows: cronAlterJobTocEntries,
