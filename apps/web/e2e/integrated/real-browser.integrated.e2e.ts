@@ -250,7 +250,7 @@ async function login(page: Page, email: string, onSubmit?: () => void) {
 }
 
 async function navigateTo(page: Page, name: string | RegExp) {
-  const menu = page.getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
+  const menu = page.getByRole('main').getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
   if (await menu.isVisible()) {
     await expect(menu).toBeVisible();
     await expect(menu).toHaveAttribute('aria-controls', 'primary-navigation');
@@ -449,14 +449,14 @@ function assertStatus(result: BrowserResult, expected: number, label: string) {
 
 function assertAuthorizationDenial(
   result: BrowserResult,
-  expected: { status: 401 | 404; error: string; message: string; label: string },
+  expected: { status: 401 | 404; code: string; message: string; label: string },
 ) {
   assertStatus(result, expected.status, expected.label);
-  const payload = bodyAs<{ statusCode?: number; error?: string; message?: string | string[] }>(
+  const payload = bodyAs<{ statusCode?: number; code?: string; message?: string | string[] }>(
     result,
   );
   expect(payload.statusCode, `${expected.label} response status`).toBe(expected.status);
-  expect(payload.error, `${expected.label} response type`).toBe(expected.error);
+  expect(payload.code, `${expected.label} response type`).toBe(expected.code);
   const messages = Array.isArray(payload.message) ? payload.message : [payload.message ?? ''];
   expect(messages.join(' '), `${expected.label} authorization reason`).toContain(expected.message);
 }
@@ -491,7 +491,9 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
         traffic.setPhase('dashboard');
         dashboardStartedAt = performance.now();
       });
-      const menuToggle = page.getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
+      const menuToggle = page
+        .getByRole('main')
+        .getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
       if (await menuToggle.isVisible()) {
         await expect(menuToggle).toBeVisible();
         await expect(menuToggle).toHaveAttribute('aria-controls', 'primary-navigation');
@@ -557,6 +559,17 @@ test('autenticação real, navegação, carregamento sob demanda e compartilhame
           (performance.now() - began).toFixed(2),
         );
       }
+
+      traffic.setPhase('dashboardReturn');
+      const dashboardReturnStartedAt = performance.now();
+      await navigateTo(page, /Vis.o geral/);
+      await expect(page.getByRole('heading', { name: /Vis.o geral/ })).toBeVisible();
+      await traffic.waitForQuiet();
+      await screenshotEvidence(page, `navigation-dashboard-return-${viewport.width}`);
+      traffic.phase('dashboardReturn').perceivedLoadMs = Number(
+        (performance.now() - dashboardReturnStartedAt).toFixed(2),
+      );
+      expect(traffic.phase('dashboardReturn').httpErrors).toEqual([]);
 
       traffic.setPhase('membershipBurst');
       const membershipStartedAt = Date.now();
@@ -1557,7 +1570,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       );
       assertAuthorizationDenial(crossOrganizationDocument, {
         status: 404,
-        error: 'Not Found',
+        code: 'not_found',
         message: 'Documento não encontrado',
         label: 'client cannot read a document from another organization',
       });
@@ -1568,7 +1581,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       );
       assertAuthorizationDenial(crossOrganizationClientList, {
         status: 401,
-        error: 'Unauthorized',
+        code: 'unauthorized',
         message: 'Usuário sem vínculo ativo com esta organização',
         label: 'client cannot select another organization',
       });
@@ -1585,7 +1598,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       const forbiddenInternal = await browserApi(clientPage, `/documents/${internalId}`);
       assertAuthorizationDenial(forbiddenInternal, {
         status: 404,
-        error: 'Not Found',
+        code: 'not_found',
         message: 'Documento não encontrado',
         label: 'client cannot read internal document',
       });
@@ -1595,7 +1608,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       );
       assertAuthorizationDenial(forbiddenSameOrganization, {
         status: 404,
-        error: 'Not Found',
+        code: 'not_found',
         message: 'Documento não encontrado',
         label: 'client cannot read another client document',
       });
@@ -1604,7 +1617,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       });
       assertAuthorizationDenial(crossOrganization, {
         status: 401,
-        error: 'Unauthorized',
+        code: 'unauthorized',
         message: 'Usuário sem vínculo ativo com esta organização',
         label: 'client cannot select another organization',
       });
@@ -1635,7 +1648,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       );
       assertAuthorizationDenial(secondClientCannotReadFirst, {
         status: 404,
-        error: 'Not Found',
+        code: 'not_found',
         message: 'Documento não encontrado',
         label: 'second same-organization client cannot read first client document',
       });
@@ -1646,7 +1659,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       );
       assertAuthorizationDenial(firstOrganizationCannotReadSecond, {
         status: 404,
-        error: 'Not Found',
+        code: 'not_found',
         message: 'Documento não encontrado',
         label: 'first organization cannot read second organization document',
       });
@@ -1657,7 +1670,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       );
       assertAuthorizationDenial(secondOrganizationCannotReadFirst, {
         status: 404,
-        error: 'Not Found',
+        code: 'not_found',
         message: 'Documento não encontrado',
         label: 'second organization cannot read first organization document',
       });
