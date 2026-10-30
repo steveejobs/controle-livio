@@ -64,6 +64,10 @@ jobs:
     if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    env:
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '13310'
+      CLAMAV_TIMEOUT_MS: '10000'
 
     steps:
       - uses: actions/checkout@v4
@@ -78,12 +82,21 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Start disposable Supabase and export loopback-only credentials
         run: node tools/qa/prepare-local-supabase-ci.mjs
+      - name: Start official ClamAV bound to runner loopback
+        id: clamav-start
+        run: node tools/qa/start-clamav-ci.mjs
+      - name: Build API for scanner validation
+        run: npm run build:api
+      - name: Verify clean and EICAR verdicts with the real scanner
+        id: clamav-ready
+        run: node tools/qa/validate-clamav-ci.mjs --ready
       - name: Test real Auth, PostgreSQL RLS and Storage isolation
         run: npm run test:supabase
       - name: Run authenticated browser and workflow journeys
         run: node tools/qa/run-integrated-browser-ci.mjs
-      - name: Restore synthetic backup into a new disposable database
-        run: node tools/qa/restore-local-ci.mjs
+      - name: Verify scanner timeout and unavailable fail-closed behavior
+        if: ${{ always() && steps.clamav-start.outcome == 'success' && steps.clamav-ready.outcome == 'success' }}
+        run: node tools/qa/validate-clamav-ci.mjs --failure-modes
       - name: Upload sanitized integrated evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -91,13 +104,48 @@ jobs:
           name: integrated-supabase-browser-evidence
           path: |
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-metrics.json
-            ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
             ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics-*.json
             ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics-*.json
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report.json
+            ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
             ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log
             ${{ runner.temp }}/livio-integrated-artifacts/web-server.log
             ${{ runner.temp }}/livio-integrated-artifacts/screenshots/*.png
+          if-no-files-found: ignore
+      - name: Stop only this disposable Supabase project
+        if: always()
+        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || true
+      - name: Stop only this ClamAV test container
+        if: always()
+        run: node tools/qa/stop-clamav-ci.mjs
+
+  synthetic-restore:
+    # The restore rehearsal has its own ephemeral Supabase/PostgreSQL stack and cannot be skipped by browser failures.
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Start a restore-only disposable Supabase and PostgreSQL stack
+        run: node tools/qa/prepare-local-supabase-ci.mjs
+      - name: Restore synthetic archive to a new database and verify recovery invariants
+        run: node tools/qa/restore-local-ci.mjs
+      - name: Upload sanitized restore evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-restore-evidence
+          path: ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
           if-no-files-found: ignore
       - name: Stop only this disposable Supabase project
         if: always()

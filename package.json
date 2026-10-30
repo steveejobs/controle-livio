@@ -21,7 +21,7 @@
     "dev:api": "npm run build:packages && npm run dev -w @livio/api",
     "dev:web": "npm run build -w @livio/ui && npm run dev -w @livio/web",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "node tools/qa/prettier-check.mjs",
     "lint": "eslint . --max-warnings=0",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run build:packages && npm run typecheck -w @livio/api && npm run typecheck -w @livio/web",

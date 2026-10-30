@@ -8,6 +8,7 @@ const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001/v1';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321';
 const supabaseAuthCookieName = `sb-${new URL(supabaseUrl).hostname.split('.')[0]}-auth-token`;
 const localPassword = 'LocalOnly-ChangeMe-2026!';
+const eicarTestFile = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
 const organizationA = '10000000-0000-4000-8000-000000000001';
 const organizationB = '20000000-0000-4000-8000-000000000001';
 const clientA = '11000000-0000-4000-8000-000000000001';
@@ -199,6 +200,14 @@ function createTrafficRecorder(page: Page) {
   };
 }
 
+function writeQaArtifact(fileName: string, value: unknown) {
+  const directory = process.env.LIVIO_QA_OUTPUT;
+  if (!directory) return;
+  const path = join(directory, fileName);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+}
+
 function percentile(values: number[], fraction: number): number | null {
   if (!values.length) return null;
   const sorted = [...values].sort((left, right) => left - right);
@@ -238,6 +247,23 @@ async function login(page: Page, email: string, onSubmit?: () => void) {
   await page.getByRole('button', { name: 'Entrar no sistema' }).click();
   onSubmit?.();
   await page.locator('#primary-navigation').waitFor({ state: 'visible' });
+}
+
+async function navigateTo(page: Page, name: string | RegExp) {
+  const menu = page.getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
+  if (await menu.isVisible()) {
+    await expect(menu).toBeVisible();
+    await expect(menu).toHaveAttribute('aria-controls', 'primary-navigation');
+    await expect(menu).toHaveAttribute('aria-expanded', 'false');
+    await menu.click();
+    await expect(menu).toHaveAttribute('aria-expanded', 'true');
+  }
+
+  const item = page.locator('#primary-navigation').getByRole('button', { name });
+  await expect(item).toBeVisible();
+  await item.click();
+
+  if (await menu.isVisible()) await expect(menu).toHaveAttribute('aria-expanded', 'false');
 }
 
 async function browserAccessToken(page: Page): Promise<string | undefined> {
@@ -421,6 +447,20 @@ function assertStatus(result: BrowserResult, expected: number, label: string) {
   expect(result.status, `${label} returned HTTP ${result.status}`).toBe(expected);
 }
 
+function assertAuthorizationDenial(
+  result: BrowserResult,
+  expected: { status: 401 | 404; error: string; message: string; label: string },
+) {
+  assertStatus(result, expected.status, expected.label);
+  const payload = bodyAs<{ statusCode?: number; error?: string; message?: string | string[] }>(
+    result,
+  );
+  expect(payload.statusCode, `${expected.label} response status`).toBe(expected.status);
+  expect(payload.error, `${expected.label} response type`).toBe(expected.error);
+  const messages = Array.isArray(payload.message) ? payload.message : [payload.message ?? ''];
+  expect(messages.join(' '), `${expected.label} authorization reason`).toContain(expected.message);
+}
+
 function bodyAs<T>(result: BrowserResult): T {
   return result.body as T;
 }
@@ -433,212 +473,245 @@ function amountUnits(value: string): bigint {
 }
 
 test('autenticação real, navegação, carregamento sob demanda e compartilhamento de membership', async ({
-  page,
+  browser,
 }) => {
-  const traffic = createTrafficRecorder(page);
-  let dashboardStartedAt = performance.now();
-  let metricsSaved = false;
-  const externalHosts = await enableLocalNetworkOnly(page.context());
-  traffic.setPhase('setup');
-  try {
-    await login(page, 'admin.aurora@example.test', () => {
-      traffic.setPhase('dashboard');
-      dashboardStartedAt = performance.now();
-    });
-    await expect(page.getByRole('heading', { name: /Vis.o geral/ })).toBeVisible();
-    await traffic.waitForQuiet();
-    await screenshotEvidence(page, 'navigation-dashboard');
-    traffic.phase('dashboard').perceivedLoadMs = Number(
-      (performance.now() - dashboardStartedAt).toFixed(2),
-    );
-
-    const navigations = [
-      { phase: 'clients', nav: 'Clientes', heading: 'Clientes' },
-      { phase: 'matters', nav: 'Processos', heading: 'Processos' },
-      { phase: 'finance', nav: /Receb/, heading: 'Entradas, parcelas e pagamentos' },
-    ];
-    for (const destination of navigations) {
-      traffic.setPhase(destination.phase);
-      const began = performance.now();
-      await page
-        .locator('#primary-navigation')
-        .getByRole('button', { name: destination.nav })
-        .click();
-      await expect(
-        page.getByRole('heading', { name: destination.heading, exact: true }),
-      ).toBeVisible();
-      await traffic.waitForQuiet();
-      await screenshotEvidence(page, `navigation-${destination.phase}`);
-      traffic.phase(destination.phase).perceivedLoadMs = Number(
-        (performance.now() - began).toFixed(2),
-      );
-    }
-
-    expect(traffic.phase('finance').httpErrors).toEqual([]);
-    expect(traffic.countPaths('finance', '/v1/finance/expenses')).toBe(0);
-    traffic.setPhase('expenses');
-    const expenseBegan = performance.now();
-    await page.getByRole('heading', { name: 'Despesas', exact: true }).scrollIntoViewIfNeeded();
-    await expect
-      .poll(() => traffic.countPaths('expenses', '/v1/finance/expenses'))
-      .toBeGreaterThan(0);
-    await traffic.waitForQuiet();
-    await screenshotEvidence(page, 'navigation-expenses');
-    traffic.phase('expenses').perceivedLoadMs = Number(
-      (performance.now() - expenseBegan).toFixed(2),
-    );
-
-    for (const destination of [
-      { phase: 'documents', nav: 'Documentos', heading: 'Documentos' },
-      { phase: 'tasks', nav: 'Tarefas', heading: 'Tarefas' },
-    ]) {
-      traffic.setPhase(destination.phase);
-      const began = performance.now();
-      await page
-        .locator('#primary-navigation')
-        .getByRole('button', { name: destination.nav })
-        .click();
-      await expect(
-        page.getByRole('heading', { name: destination.heading, exact: true }),
-      ).toBeVisible();
-      await traffic.waitForQuiet();
-      await screenshotEvidence(page, `navigation-${destination.phase}`);
-      traffic.phase(destination.phase).perceivedLoadMs = Number(
-        (performance.now() - began).toFixed(2),
-      );
-    }
-
-    traffic.setPhase('membershipBurst');
-    const membershipStartedAt = Date.now();
-    const burst = await Promise.all([
-      browserApi(page, '/dashboard/summary'),
-      browserApi(page, '/clients?page=1&pageSize=5'),
-      browserApi(page, '/matters?page=1&pageSize=5'),
-      browserApi(page, '/finance/receivables?page=1&pageSize=5'),
-      browserApi(page, '/documents?page=1&pageSize=5'),
-      browserApi(page, '/tasks'),
-    ]);
-    const membershipFinishedAt = Date.now();
-    for (const [index, result] of burst.entries())
-      assertStatus(result, 200, `membership burst ${index + 1}`);
-    await traffic.waitForQuiet();
-
-    const metrics = {
-      environment: 'GitHub-hosted Linux; local Supabase Auth/PostgreSQL/Storage; no API mocks',
-      generatedAt: new Date().toISOString(),
-      navigation: traffic.toJSON(),
-      financialLazyLoad: {
-        expensesRequestedBeforeScroll: false,
-        expenseRequestsAfterViewport: traffic.countPaths('expenses', '/v1/finance/expenses'),
-      },
-      membershipBurst: {
-        startedAt: membershipStartedAt,
-        finishedAt: membershipFinishedAt,
-        requests: burst.length,
-        statuses: burst.map(({ status }) => status),
-      },
-    };
-    traffic.save(metrics);
-    metricsSaved = true;
-    expect(traffic.phase('clients').httpErrors).toEqual([]);
-    expect(traffic.phase('matters').httpErrors).toEqual([]);
-    expect(traffic.phase('finance').httpErrors).toEqual([]);
-    expect(traffic.phase('expenses').httpErrors).toEqual([]);
-    expect(traffic.phase('documents').httpErrors).toEqual([]);
-    expect(traffic.phase('tasks').httpErrors).toEqual([]);
-    expect(traffic.pending()).toBe(0);
-    expect([...externalHosts]).toEqual([]);
-  } finally {
-    if (!metricsSaved)
-      traffic.save({
-        environment: 'GitHub-hosted Linux; local Supabase; no API mocks',
-        partial: true,
-        navigation: traffic.toJSON(),
+  test.setTimeout(180_000);
+  const metricsByViewport: Record<string, unknown> = {};
+  let mobileMembershipBurst: unknown;
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    const traffic = createTrafficRecorder(page);
+    let dashboardStartedAt = performance.now();
+    let metricsSaved = false;
+    const externalHosts = await enableLocalNetworkOnly(page.context());
+    traffic.setPhase('setup');
+    try {
+      await login(page, 'admin.aurora@example.test', () => {
+        traffic.setPhase('dashboard');
+        dashboardStartedAt = performance.now();
       });
+      const menuToggle = page.getByRole('button', { name: /^(Abrir|Fechar) navegação$/ });
+      if (await menuToggle.isVisible()) {
+        await expect(menuToggle).toBeVisible();
+        await expect(menuToggle).toHaveAttribute('aria-controls', 'primary-navigation');
+        await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
+        await menuToggle.click();
+        await expect(menuToggle).toHaveAttribute('aria-expanded', 'true');
+        await menuToggle.click();
+        await expect(menuToggle).toHaveAttribute('aria-expanded', 'false');
+      }
+      await expect(page.getByRole('heading', { name: /Vis.o geral/ })).toBeVisible();
+      await traffic.waitForQuiet();
+      await screenshotEvidence(page, `navigation-dashboard-${viewport.width}`);
+      traffic.phase('dashboard').perceivedLoadMs = Number(
+        (performance.now() - dashboardStartedAt).toFixed(2),
+      );
+
+      const navigations = [
+        { phase: 'clients', nav: 'Clientes', heading: 'Clientes' },
+        { phase: 'matters', nav: 'Processos', heading: 'Processos' },
+        { phase: 'finance', nav: /Receb/, heading: 'Entradas, parcelas e pagamentos' },
+      ];
+      for (const destination of navigations) {
+        traffic.setPhase(destination.phase);
+        const began = performance.now();
+        await navigateTo(page, destination.nav);
+        await expect(
+          page.getByRole('heading', { name: destination.heading, exact: true }),
+        ).toBeVisible();
+        await traffic.waitForQuiet();
+        await screenshotEvidence(page, `navigation-${destination.phase}-${viewport.width}`);
+        traffic.phase(destination.phase).perceivedLoadMs = Number(
+          (performance.now() - began).toFixed(2),
+        );
+      }
+
+      expect(traffic.phase('finance').httpErrors).toEqual([]);
+      expect(traffic.countPaths('finance', '/v1/finance/expenses')).toBe(0);
+      traffic.setPhase('expenses');
+      const expenseBegan = performance.now();
+      await page.getByRole('heading', { name: 'Despesas', exact: true }).scrollIntoViewIfNeeded();
+      await expect
+        .poll(() => traffic.countPaths('expenses', '/v1/finance/expenses'))
+        .toBeGreaterThan(0);
+      await traffic.waitForQuiet();
+      await screenshotEvidence(page, `navigation-expenses-${viewport.width}`);
+      traffic.phase('expenses').perceivedLoadMs = Number(
+        (performance.now() - expenseBegan).toFixed(2),
+      );
+
+      for (const destination of [
+        { phase: 'documents', nav: 'Documentos', heading: 'Documentos' },
+        { phase: 'tasks', nav: 'Tarefas', heading: 'Tarefas' },
+      ]) {
+        traffic.setPhase(destination.phase);
+        const began = performance.now();
+        await navigateTo(page, destination.nav);
+        await expect(
+          page.getByRole('heading', { name: destination.heading, exact: true }),
+        ).toBeVisible();
+        await traffic.waitForQuiet();
+        await screenshotEvidence(page, `navigation-${destination.phase}-${viewport.width}`);
+        traffic.phase(destination.phase).perceivedLoadMs = Number(
+          (performance.now() - began).toFixed(2),
+        );
+      }
+
+      traffic.setPhase('membershipBurst');
+      const membershipStartedAt = Date.now();
+      const burst = await Promise.all([
+        browserApi(page, '/dashboard/summary'),
+        browserApi(page, '/clients?page=1&pageSize=5'),
+        browserApi(page, '/matters?page=1&pageSize=5'),
+        browserApi(page, '/finance/receivables?page=1&pageSize=5'),
+        browserApi(page, '/documents?page=1&pageSize=5'),
+        browserApi(page, '/tasks'),
+      ]);
+      const membershipFinishedAt = Date.now();
+      for (const [index, result] of burst.entries())
+        assertStatus(result, 200, `membership burst ${index + 1}`);
+      await traffic.waitForQuiet();
+
+      const metrics = {
+        environment: 'GitHub-hosted Linux; local Supabase Auth/PostgreSQL/Storage; no API mocks',
+        generatedAt: new Date().toISOString(),
+        navigation: traffic.toJSON(),
+        financialLazyLoad: {
+          expensesRequestedBeforeScroll: false,
+          expenseRequestsAfterViewport: traffic.countPaths('expenses', '/v1/finance/expenses'),
+        },
+        membershipBurst: {
+          startedAt: membershipStartedAt,
+          finishedAt: membershipFinishedAt,
+          requests: burst.length,
+          statuses: burst.map(({ status }) => status),
+        },
+      };
+      traffic.save(metrics, `browser-navigation-metrics-${viewport.width}.json`);
+      metricsByViewport[String(viewport.width)] = metrics;
+      if (viewport.width === 360) mobileMembershipBurst = metrics.membershipBurst;
+      metricsSaved = true;
+      expect(traffic.phase('clients').httpErrors).toEqual([]);
+      expect(traffic.phase('matters').httpErrors).toEqual([]);
+      expect(traffic.phase('finance').httpErrors).toEqual([]);
+      expect(traffic.phase('expenses').httpErrors).toEqual([]);
+      expect(traffic.phase('documents').httpErrors).toEqual([]);
+      expect(traffic.phase('tasks').httpErrors).toEqual([]);
+      expect(traffic.pending()).toBe(0);
+      expect([...externalHosts]).toEqual([]);
+    } finally {
+      if (!metricsSaved)
+        traffic.save(
+          {
+            environment: 'GitHub-hosted Linux; local Supabase; no API mocks',
+            partial: true,
+            navigation: traffic.toJSON(),
+          },
+          `browser-navigation-metrics-${viewport.width}.json`,
+        );
+      await context.close();
+    }
   }
+  writeQaArtifact('browser-navigation-metrics.json', {
+    environment: 'GitHub-hosted Linux; local Supabase Auth/PostgreSQL/Storage; no API mocks',
+    viewports: metricsByViewport,
+    membershipBurst: mobileMembershipBurst,
+  });
 });
 
 test('navegação repetida em duas sessões e organizações distintas', async ({ browser }) => {
+  test.setTimeout(180_000);
   const sessions = [
     { name: 'aurora', email: 'admin.aurora@example.test' },
     { name: 'horizonte', email: 'admin.horizonte@example.test' },
   ] as const;
-  const contexts = await Promise.all(sessions.map(() => browser.newContext()));
-  const pages = await Promise.all(contexts.map((context) => context.newPage()));
-  const traffic = pages.map((page) => createTrafficRecorder(page));
-  try {
-    const externalHosts = await Promise.all(
-      pages.map((page) => enableLocalNetworkOnly(page.context())),
-    );
-    await Promise.all(pages.map((page, index) => login(page, sessions[index]!.email)));
+  const metricsByViewport: Record<string, unknown> = {};
+  for (const viewport of formViewports) {
+    const contexts = await Promise.all(sessions.map(() => browser.newContext({ viewport })));
+    const pages = await Promise.all(contexts.map((context) => context.newPage()));
+    const traffic = pages.map((page) => createTrafficRecorder(page));
+    try {
+      const externalHosts = await Promise.all(
+        pages.map((page) => enableLocalNetworkOnly(page.context())),
+      );
+      await Promise.all(pages.map((page, index) => login(page, sessions[index]!.email)));
 
-    const routes = [
-      { phase: 'dashboard', nav: undefined, heading: /Vis.o geral/ },
-      { phase: 'clients', nav: 'Clientes', heading: 'Clientes' },
-      { phase: 'matters', nav: 'Processos', heading: 'Processos' },
-      { phase: 'finance', nav: /Receb/, heading: 'Entradas, parcelas e pagamentos' },
-      { phase: 'documents', nav: 'Documentos', heading: 'Documentos' },
-      { phase: 'tasks', nav: 'Tarefas', heading: 'Tarefas' },
-    ] as const;
+      const routes = [
+        { phase: 'dashboard', nav: undefined, heading: /Vis.o geral/ },
+        { phase: 'clients', nav: 'Clientes', heading: 'Clientes' },
+        { phase: 'matters', nav: 'Processos', heading: 'Processos' },
+        { phase: 'finance', nav: /Receb/, heading: 'Entradas, parcelas e pagamentos' },
+        { phase: 'documents', nav: 'Documentos', heading: 'Documentos' },
+        { phase: 'tasks', nav: 'Tarefas', heading: 'Tarefas' },
+      ] as const;
 
-    for (const route of routes) {
+      for (const route of routes) {
+        for (const [index, page] of pages.entries()) {
+          const sessionName = sessions[index]!.name;
+          const recorder = traffic[index]!;
+          const phase = `${sessionName}:${route.phase}`;
+          recorder.setPhase(phase);
+          const startedAt = performance.now();
+          if (route.nav) await navigateTo(page, route.nav);
+          await expect(
+            page.getByRole('heading', { name: route.heading, exact: true }),
+          ).toBeVisible();
+          await recorder.waitForQuiet();
+          recorder.phase(phase).perceivedLoadMs = Number(
+            (performance.now() - startedAt).toFixed(2),
+          );
+          await screenshotEvidence(
+            page,
+            `two-session-${sessionName}-${route.phase}-${viewport.width}`,
+          );
+          expect(recorder.phase(phase).httpErrors).toEqual([]);
+        }
+      }
+
       for (const [index, page] of pages.entries()) {
         const sessionName = sessions[index]!.name;
         const recorder = traffic[index]!;
-        const phase = `${sessionName}:${route.phase}`;
+        const phase = `${sessionName}:expenses`;
+        recorder.setPhase('setup');
+        await navigateTo(page, /Receb/);
+        await expect(
+          page.getByRole('heading', { name: 'Entradas, parcelas e pagamentos', exact: true }),
+        ).toBeVisible();
+        await recorder.waitForQuiet();
         recorder.setPhase(phase);
+        expect(recorder.countPaths(phase, '/v1/finance/expenses')).toBe(0);
         const startedAt = performance.now();
-        if (route.nav) {
-          await page
-            .locator('#primary-navigation')
-            .getByRole('button', { name: route.nav })
-            .click();
-        }
-        await expect(page.getByRole('heading', { name: route.heading, exact: true })).toBeVisible();
+        await page.getByRole('heading', { name: 'Despesas', exact: true }).scrollIntoViewIfNeeded();
+        await expect
+          .poll(() => recorder.countPaths(phase, '/v1/finance/expenses'))
+          .toBeGreaterThan(0);
         await recorder.waitForQuiet();
         recorder.phase(phase).perceivedLoadMs = Number((performance.now() - startedAt).toFixed(2));
-        await screenshotEvidence(page, `two-session-${sessionName}-${route.phase}`);
         expect(recorder.phase(phase).httpErrors).toEqual([]);
+        await screenshotEvidence(page, `two-session-${sessionName}-expenses-${viewport.width}`);
       }
-    }
 
-    for (const [index, page] of pages.entries()) {
-      const sessionName = sessions[index]!.name;
-      const recorder = traffic[index]!;
-      const phase = `${sessionName}:expenses`;
-      recorder.setPhase('setup');
-      await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
-      await expect(
-        page.getByRole('heading', { name: 'Entradas, parcelas e pagamentos', exact: true }),
-      ).toBeVisible();
-      await recorder.waitForQuiet();
-      recorder.setPhase(phase);
-      expect(recorder.countPaths(phase, '/v1/finance/expenses')).toBe(0);
-      const startedAt = performance.now();
-      await page.getByRole('heading', { name: 'Despesas', exact: true }).scrollIntoViewIfNeeded();
-      await expect
-        .poll(() => recorder.countPaths(phase, '/v1/finance/expenses'))
-        .toBeGreaterThan(0);
-      await recorder.waitForQuiet();
-      recorder.phase(phase).perceivedLoadMs = Number((performance.now() - startedAt).toFixed(2));
-      expect(recorder.phase(phase).httpErrors).toEqual([]);
-      await screenshotEvidence(page, `two-session-${sessionName}-expenses`);
+      expect(traffic.map((recorder) => recorder.pending())).toEqual([0, 0]);
+      expect(externalHosts.map((hosts) => [...hosts])).toEqual([[], []]);
+      traffic[0]!.save(
+        {
+          environment: 'two local Auth sessions; organizations Aurora and Horizonte; no API mocks',
+          viewport,
+          sessions: Object.fromEntries(
+            sessions.map((session, index) => [session.name, traffic[index]!.toJSON()]),
+          ),
+        },
+        `two-session-navigation-metrics-${viewport.width}.json`,
+      );
+      metricsByViewport[String(viewport.width)] = Object.fromEntries(
+        sessions.map((session, index) => [session.name, traffic[index]!.toJSON()]),
+      );
+    } finally {
+      await Promise.all(contexts.map((context) => context.close()));
     }
-
-    expect(traffic.map((recorder) => recorder.pending())).toEqual([0, 0]);
-    expect(externalHosts.map((hosts) => [...hosts])).toEqual([[], []]);
-    traffic[0]!.save(
-      {
-        environment: 'two local Auth sessions; organizations Aurora and Horizonte; no API mocks',
-        sessions: Object.fromEntries(
-          sessions.map((session, index) => [session.name, traffic[index]!.toJSON()]),
-        ),
-      },
-      'two-session-navigation-metrics.json',
-    );
-  } finally {
-    await Promise.all(contexts.map((context) => context.close()));
   }
+  writeQaArtifact('two-session-navigation-metrics.json', { viewports: metricsByViewport });
 });
 
 test('jornada 1: cliente, processo, responsável e atualização de status', async ({ browser }) => {
@@ -650,7 +723,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       await login(page, 'admin.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const clientName = `Cliente QA ${suffix}`;
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Clientes' }).click();
+      await navigateTo(page, 'Clientes');
       await page.getByRole('button', { name: 'Novo cliente', exact: true }).click();
       await page.getByLabel('Nome completo', { exact: true }).fill(clientName);
       await page.getByLabel('E-mail', { exact: true }).fill('cliente-' + suffix + '@example.test');
@@ -672,7 +745,7 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
 
       const reference = `QA-${suffix}`;
       const matterTitle = `Processo QA ${suffix}`;
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Processos' }).click();
+      await navigateTo(page, 'Processos');
       await page.getByRole('button', { name: 'Novo processo', exact: true }).click();
       const matterForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
@@ -726,7 +799,9 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       });
 
       await page.reload();
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Processos' }).click();
+      await navigateTo(page, 'Clientes');
+      await expect(page.getByText(clientName, { exact: true }).first()).toBeVisible();
+      await navigateTo(page, 'Processos');
       await expect(page.getByText(reference, { exact: true })).toBeVisible();
       await expect(page.getByText('Advogado Aurora', { exact: true })).toBeVisible();
 
@@ -763,7 +838,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const contractNumber = `QA-CT-${suffix}`;
       const contractTitle = `Contrato QA ${suffix}`;
 
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Contratos' }).click();
+      await navigateTo(page, 'Contratos');
       await page.getByRole('button', { name: 'Novo contrato', exact: true }).click();
       const contractForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar contrato', exact: true }),
@@ -808,7 +883,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const reference = `QA-REC-${suffix}`;
       const issueDate = dateInput();
       const firstDueDate = dateInput(14);
-      await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await navigateTo(page, /Receb/);
       const receivableForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Criar cobrança e parcelas' }),
       });
@@ -1042,7 +1117,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       ).toBe(amountUnits('100.00'));
 
       await page.reload();
-      await page.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await navigateTo(page, /Receb/);
       const completedRow = page.getByRole('row').filter({ hasText: reference });
       await completedRow.scrollIntoViewIfNeeded();
       await expect(completedRow).toContainText('Saldo em aberto: R$ 0,00');
@@ -1071,10 +1146,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await login(financePage, 'financeiro.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const description = `Despesa QA ${suffix}`;
-      await financePage
-        .locator('#primary-navigation')
-        .getByRole('button', { name: /Receb/ })
-        .click();
+      await navigateTo(financePage, /Receb/);
       await financePage.getByRole('button', { name: 'Nova despesa' }).click();
       const expenseForm = financePage.locator('form').filter({
         has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
@@ -1101,7 +1173,7 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       await expect(expenseRow).toContainText('Aguardando aprovação');
 
       await login(adminPage, 'admin.aurora@example.test');
-      await adminPage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await navigateTo(adminPage, /Receb/);
       await pageExpenseSection(adminPage);
       expenseRow = adminPage.getByRole('row').filter({ hasText: description });
       await expect(expenseRow).toContainText('Aguardando aprovação');
@@ -1143,15 +1215,12 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       expect(rows.some((row) => Number(row.paid_expenses) >= 42.25)).toBe(true);
 
       await adminPage.reload();
-      await adminPage.locator('#primary-navigation').getByRole('button', { name: /Receb/ }).click();
+      await navigateTo(adminPage, /Receb/);
       await pageExpenseSection(adminPage);
       const paidExpenseRow = adminPage.getByRole('row').filter({ hasText: description });
       await expect(paidExpenseRow).toContainText('Paga');
       await screenshotEvidence(adminPage, `journey-expense-paid-${viewport.width}`);
-      await adminPage
-        .locator('#primary-navigation')
-        .getByRole('button', { name: 'Relatórios' })
-        .click();
+      await navigateTo(adminPage, 'Relatórios');
       await expect(
         adminPage.getByRole('heading', { name: 'Relatórios', exact: true }),
       ).toBeVisible();
@@ -1185,7 +1254,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await login(page, 'admin.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const title = `PDF de assinatura QA ${suffix}`;
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Documentos' }).click();
+      await navigateTo(page, 'Documentos');
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
       const uploadForm = page.locator('form').filter({ has: page.getByLabel('Nome do documento') });
       await uploadForm.getByLabel('Nome do documento').fill(title);
@@ -1213,6 +1282,28 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const documentRow = page.getByRole('row').filter({ hasText: title });
       await expect(documentRow).toBeVisible();
       await expect(documentRow).toContainText('Cliente');
+
+      const infectedTitle = `Arquivo de teste bloqueado QA ${suffix}`;
+      await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
+      const infectedForm = page
+        .locator('form')
+        .filter({ has: page.getByLabel('Nome do documento') });
+      await infectedForm.getByLabel('Nome do documento').fill(infectedTitle);
+      await infectedForm.getByLabel('Visibilidade').selectOption('INTERNAL');
+      await infectedForm.getByLabel('Arquivo').setInputFiles({
+        name: `eicar-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: Buffer.concat([Buffer.from(pdfBytes()), Buffer.from(eicarTestFile, 'ascii')]),
+      });
+      const infectedUpload = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/documents' &&
+          response.request().method() === 'POST',
+      );
+      await infectedForm.getByRole('button', { name: 'Enviar documento' }).click();
+      expect((await infectedUpload).status()).toBe(422);
+      await expect(page.getByRole('status')).toContainText('Erro:');
+      await expect(page.getByRole('row').filter({ hasText: infectedTitle })).toHaveCount(0);
 
       const persistedDocuments = await browserApi(page, '/documents?page=1&pageSize=100');
       assertStatus(persistedDocuments, 200, 'read uploaded document metadata');
@@ -1327,7 +1418,7 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
       await login(page, 'admin.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
       const title = `Tarefa QA ${suffix}`;
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
+      await navigateTo(page, 'Tarefas');
       await page.getByRole('button', { name: 'Nova tarefa' }).click();
       await page.getByLabel('O que precisa ser feito').fill(title);
       const taskForm = page.locator('form').filter({
@@ -1361,7 +1452,7 @@ test('jornada 5: tarefa atribuída a advogado e concluída', async ({ browser })
       ).toBe('COMPLETED');
 
       await page.reload();
-      await page.locator('#primary-navigation').getByRole('button', { name: 'Tarefas' }).click();
+      await navigateTo(page, 'Tarefas');
       await expect(page.getByText(title, { exact: true })).toBeVisible();
       await expect(page.getByLabel(`Status de ${title}`)).toHaveValue('COMPLETED');
       await screenshotEvidence(page, `journey-task-completed-${viewport.width}`);
@@ -1464,17 +1555,23 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
         `/documents/${visibleDocumentId}`,
         { organizationId: organizationB },
       );
-      assertStatus(
-        crossOrganizationDocument,
-        404,
-        'client cannot read a document from another organization',
-      );
+      assertAuthorizationDenial(crossOrganizationDocument, {
+        status: 404,
+        error: 'Not Found',
+        message: 'Documento não encontrado',
+        label: 'client cannot read a document from another organization',
+      });
       const crossOrganizationClientList = await browserApi(
         otherOrganizationClientPage,
         '/clients?page=1&pageSize=5',
         { organizationId: organizationA },
       );
-      assertStatus(crossOrganizationClientList, 401, 'client cannot select another organization');
+      assertAuthorizationDenial(crossOrganizationClientList, {
+        status: 401,
+        error: 'Unauthorized',
+        message: 'Usuário sem vínculo ativo com esta organização',
+        label: 'client cannot select another organization',
+      });
 
       await login(clientPage, 'cliente.aurora@example.test');
       await expect(clientPage.getByRole('heading', { name: /Minha/ })).toBeVisible();
@@ -1486,16 +1583,31 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
       await screenshotEvidence(clientPage, `journey-client-portal-${viewport.width}`);
 
       const forbiddenInternal = await browserApi(clientPage, `/documents/${internalId}`);
-      assertStatus(forbiddenInternal, 404, 'client cannot read internal document');
+      assertAuthorizationDenial(forbiddenInternal, {
+        status: 404,
+        error: 'Not Found',
+        message: 'Documento não encontrado',
+        label: 'client cannot read internal document',
+      });
       const forbiddenSameOrganization = await browserApi(
         clientPage,
         `/documents/${secondClientDocumentId}`,
       );
-      assertStatus(forbiddenSameOrganization, 404, 'client cannot read another client document');
+      assertAuthorizationDenial(forbiddenSameOrganization, {
+        status: 404,
+        error: 'Not Found',
+        message: 'Documento não encontrado',
+        label: 'client cannot read another client document',
+      });
       const crossOrganization = await browserApi(clientPage, '/clients?page=1&pageSize=5', {
         organizationId: organizationB,
       });
-      assertStatus(crossOrganization, 401, 'client cannot select another organization');
+      assertAuthorizationDenial(crossOrganization, {
+        status: 401,
+        error: 'Unauthorized',
+        message: 'Usuário sem vínculo ativo com esta organização',
+        label: 'client cannot select another organization',
+      });
 
       const message = `Mensagem sintética QA ${suffix}`;
       await clientPage.getByLabel(/Responder ao escrit/).fill(message);
@@ -1521,31 +1633,34 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
         secondClientPage,
         `/documents/${visibleDocumentId}`,
       );
-      assertStatus(
-        secondClientCannotReadFirst,
-        404,
-        'second same-organization client cannot read first client document',
-      );
+      assertAuthorizationDenial(secondClientCannotReadFirst, {
+        status: 404,
+        error: 'Not Found',
+        message: 'Documento não encontrado',
+        label: 'second same-organization client cannot read first client document',
+      });
 
       const firstOrganizationCannotReadSecond = await browserApi(
         adminPage,
         `/documents/${otherOrganizationDocumentId}`,
       );
-      assertStatus(
-        firstOrganizationCannotReadSecond,
-        404,
-        'first organization cannot read second organization document',
-      );
+      assertAuthorizationDenial(firstOrganizationCannotReadSecond, {
+        status: 404,
+        error: 'Not Found',
+        message: 'Documento não encontrado',
+        label: 'first organization cannot read second organization document',
+      });
       const secondOrganizationCannotReadFirst = await browserApi(
         otherOrganizationPage,
         `/documents/${visibleDocumentId}`,
         { organizationId: organizationB },
       );
-      assertStatus(
-        secondOrganizationCannotReadFirst,
-        404,
-        'second organization cannot read first organization document',
-      );
+      assertAuthorizationDenial(secondOrganizationCannotReadFirst, {
+        status: 404,
+        error: 'Not Found',
+        message: 'Documento não encontrado',
+        label: 'second organization cannot read first organization document',
+      });
 
       const downloadUrlResponsePromise = clientPage.waitForResponse((response) =>
         response.url().includes(`/v1/documents/${visibleDocumentId}/download-url`),
@@ -1585,6 +1700,7 @@ test('jornada 6: portal, documento privado por cliente, mensagem persistida e is
 test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissões e isolamento', async ({
   browser,
 }) => {
+  test.setTimeout(180_000);
   const scenarios = [
     {
       email: 'admin.aurora@example.test',
@@ -1616,26 +1732,28 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
     },
   ] as const;
 
-  const context = await browser.newContext();
-  const page = await context.newPage();
-  try {
-    for (const scenario of scenarios) {
-      await login(page, scenario.email);
-      for (const [path, expectedStatus] of scenario.allowed) {
-        const result = await browserApi(page, path);
-        assertStatus(result, expectedStatus, `${scenario.email} ${path}`);
+  for (const viewport of formViewports) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    try {
+      for (const scenario of scenarios) {
+        await login(page, scenario.email);
+        for (const [path, expectedStatus] of scenario.allowed) {
+          const result = await browserApi(page, path);
+          assertStatus(result, expectedStatus, `${scenario.email} ${path} at ${viewport.width}px`);
+        }
+        for (const path of scenario.denied) {
+          const result = await browserApi(page, path);
+          assertStatus(result, 403, `${scenario.email} denied ${path} at ${viewport.width}px`);
+        }
+        await page.evaluate(async () => {
+          localStorage.clear();
+        });
+        await page.context().clearCookies();
+        await page.goto('about:blank');
       }
-      for (const path of scenario.denied) {
-        const result = await browserApi(page, path);
-        assertStatus(result, 403, `${scenario.email} denied ${path}`);
-      }
-      await page.evaluate(async () => {
-        localStorage.clear();
-      });
-      await page.context().clearCookies();
-      await page.goto('about:blank');
+    } finally {
+      await context.close();
     }
-  } finally {
-    await context.close();
   }
 });

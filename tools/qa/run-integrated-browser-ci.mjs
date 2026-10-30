@@ -83,6 +83,9 @@ if (process.env.SUPABASE_ACCESS_TOKEN || process.env.SUPABASE_DB_PASSWORD) {
 if (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY !== process.env.SUPABASE_ANON_KEY) {
   stop('A chave anônima do navegador não corresponde à chave local da API.');
 }
+if (process.env.CLAMAV_HOST && !loopbackHosts.has(process.env.CLAMAV_HOST)) {
+  stop('O serviço ClamAV integrado precisa estar restrito ao loopback do runner.');
+}
 for (const file of [
   '.env',
   '.env.development',
@@ -132,9 +135,17 @@ const apiEnv = {
   NODE_ENV: 'test',
   QA_TIMINGS: 'true',
   STORAGE_BUCKET: 'legal-documents',
+  ...(process.env.CLAMAV_HOST
+    ? {
+        CLAMAV_HOST: process.env.CLAMAV_HOST,
+        CLAMAV_PORT: process.env.CLAMAV_PORT ?? '3310',
+        CLAMAV_TIMEOUT_MS: process.env.CLAMAV_TIMEOUT_MS ?? '10000',
+      }
+    : {}),
   SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
   SUPABASE_AUTH_REDIRECT_URL: 'http://127.0.0.1:3010/auth/confirm',
-  SUPABASE_ENVIRONMENT: 'test',
+  // Staging disables the local-test scanner bypass while the DB/Auth/Storage endpoints stay local.
+  SUPABASE_ENVIRONMENT: process.env.CLAMAV_HOST ? 'staging' : 'test',
   SUPABASE_LOCAL: 'true',
   SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
   SUPABASE_URL: process.env.SUPABASE_URL,
