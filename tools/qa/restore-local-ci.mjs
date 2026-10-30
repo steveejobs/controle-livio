@@ -267,7 +267,9 @@ const evidenceDirectory = join(process.env.RUNNER_TEMP, 'livio-integrated-artifa
 mkdirSync(evidenceDirectory, { recursive: true });
 const evidencePath = join(evidenceDirectory, 'restore-rehearsal.json');
 let restoreStage = 'temporary_dump';
-const writeCheckpoint = (details = {}) =>
+const checkpointDetails = {};
+const writeCheckpoint = (details = {}) => {
+  Object.assign(checkpointDetails, details);
   writeFileSync(
     evidencePath,
     JSON.stringify(
@@ -275,12 +277,13 @@ const writeCheckpoint = (details = {}) =>
         status: 'INCOMPLETE',
         stage: restoreStage,
         elapsedMs: Date.now() - started,
-        ...details,
+        ...checkpointDetails,
       },
       null,
       2,
     ),
   );
+};
 writeCheckpoint({ targetDatabase: target });
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
 run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
@@ -737,9 +740,50 @@ assert(
 );
 const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
 assert(restoredOwners.length > 0, 'No public owners were found in the restore target');
+const restoreExecutorRole = sql(target, 'SELECT current_user');
+const parseOwnerEntry = (entry) => {
+  const separator = entry.lastIndexOf(':');
+  assert(separator > 0, `Malformed owner snapshot entry: ${entry}`);
+  return { object: entry.slice(0, separator), owner: entry.slice(separator + 1) };
+};
+const sourceOwnerByObject = new Map(
+  sourceOwnerRecords.map((entry) => {
+    const { object, owner } = parseOwnerEntry(entry);
+    return [object, owner];
+  }),
+);
+const ownerComparison = restoredOwners.map((entry) => {
+  const { object, owner } = parseOwnerEntry(entry);
+  const originalOwner = sourceOwnerByObject.get(object) ?? null;
+  return {
+    object,
+    originalOwner,
+    effectiveOwner: owner,
+    expectedOwner: restoreExecutorRole,
+    rule: '--no-owner assigns restored objects to the pg_restore session user',
+    matches: originalOwner !== null && owner === restoreExecutorRole,
+  };
+});
+const unexpectedOwners = ownerComparison.filter(({ matches }) => !matches);
+writeCheckpoint({
+  targetDatabase: target,
+  restoreStage,
+  ownerComparison: {
+    restoreExecutorRole,
+    sourceObjectCount: sourceOwnerRecords.length,
+    restoredObjectCount: restoredOwners.length,
+    unexpectedOwnerCount: unexpectedOwners.length,
+    objects: ownerComparison,
+  },
+});
+assert.equal(
+  ownerComparison.length,
+  sourceOwnerByObject.size,
+  'Restore target owner object set differs from the source',
+);
 assert(
-  restoredOwners.every((entry) => entry.endsWith(':supabase_admin')),
-  'Restore target objects must be owned by the disposable runner role because --no-owner is used',
+  unexpectedOwners.length === 0,
+  `Restore owner mapping differs for ${unexpectedOwners.length} objects: ${JSON.stringify(unexpectedOwners.slice(0, 10))}`,
 );
 const grantSnapshotEvidence = {
   source: {
@@ -762,8 +806,7 @@ const grantSnapshotEvidence = {
       ...new Set(restoredOwners.map((entry) => entry.slice(entry.lastIndexOf(':') + 1))),
     ].sort(),
   },
-  ownerDifferencePolicy:
-    '--no-owner remaps restored public objects to the disposable supabase_admin role',
+  ownerDifferencePolicy: `--no-owner maps restored public objects to the pg_restore session role ${restoreExecutorRole}`,
   aclDifferencePolicy:
     '--no-acl suppresses source ACL replay; checked-in application grants are applied explicitly',
   applicationDefaultGrantsComparedByRoleName: true,

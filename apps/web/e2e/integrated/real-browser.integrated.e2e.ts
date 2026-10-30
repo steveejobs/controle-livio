@@ -2587,11 +2587,42 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       ).toMatchObject({ id: documentId, title, clientId: documentClientId, visibility: 'CLIENT' });
       confirmPersistence(page, 'upload-client-document');
 
-      const storageResponsePromise = page
-        .context()
-        .waitForEvent('response', (response) =>
-          new URL(response.url()).pathname.startsWith('/storage/v1/object/sign/legal-documents/'),
-        );
+      const storagePathPattern = '**/storage/v1/object/sign/legal-documents/**';
+      let resolveStorageCapture:
+        | ((capture: {
+            pathname: string;
+            status: number;
+            contentType: string;
+            body: Buffer;
+          }) => void)
+        | undefined;
+      let rejectStorageCapture: ((error: unknown) => void) | undefined;
+      const storageResponsePromise = new Promise<{
+        pathname: string;
+        status: number;
+        contentType: string;
+        body: Buffer;
+      }>((resolve, reject) => {
+        resolveStorageCapture = resolve;
+        rejectStorageCapture = reject;
+      });
+      const storageRouteHandler = async (route: Route) => {
+        try {
+          const response = await route.fetch();
+          const capture = {
+            pathname: new URL(route.request().url()).pathname,
+            status: response.status(),
+            contentType: response.headers()['content-type'] ?? '',
+            body: await response.body(),
+          };
+          await route.fulfill({ response });
+          resolveStorageCapture?.(capture);
+        } catch (error) {
+          rejectStorageCapture?.(error);
+          throw error;
+        }
+      };
+      await page.context().route(storagePathPattern, storageRouteHandler);
       const popupPromise = page.waitForEvent('popup');
       const signedUrl = await clickUiOperation(page, {
         operation: 'request-protected-document-download',
@@ -2599,18 +2630,20 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         method: 'GET',
         button: documentRow.getByRole('button', { name: 'Abrir' }),
       });
-      const documentPage = await popupPromise;
+      const [documentPage, storageDownload] = await Promise.all([
+        popupPromise,
+        storageResponsePromise,
+      ]);
       expect(signedUrl.status()).toBe(200);
       const downloadUrl = ((await signedUrl.json()) as { url: string }).url;
       expect(new URL(downloadUrl).hostname).toBe('127.0.0.1');
-      const downloadResponse = await storageResponsePromise;
-      expect(new URL(downloadResponse.url()).pathname).toBe(new URL(downloadUrl).pathname);
-      expect(downloadResponse.status()).toBe(200);
-      expect(downloadResponse.headers()['content-type']).toContain('application/pdf');
-      const downloadedBytes = await downloadResponse.body();
+      expect(storageDownload.pathname).toBe(new URL(downloadUrl).pathname);
+      expect(storageDownload.status).toBe(200);
+      expect(storageDownload.contentType).toContain('application/pdf');
       const uploadedChecksum = createHash('sha256').update(cleanPdf).digest('hex');
-      const downloadedChecksum = createHash('sha256').update(downloadedBytes).digest('hex');
+      const downloadedChecksum = createHash('sha256').update(storageDownload.body).digest('hex');
       expect(downloadedChecksum).toBe(uploadedChecksum);
+      await page.context().unroute(storagePathPattern, storageRouteHandler);
       recordOperationStage(page, 'request-protected-document-download', 'DOWNLOAD_BYTES_CONFIRMED');
       await documentPage.close();
 
@@ -2630,6 +2663,8 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         signerName: 'Cliente Ficticio Alfa',
         expiresInDays: 3,
       });
+      const signingRequestId = ((await requested.json()) as { id: string }).id;
+      expect(signingRequestId).toMatch(/^[a-f\d-]{36}$/i);
       const shareDialog = page.getByRole('dialog', { name: /Compartilhar com/ });
       const signingLink = await shareDialog.getByLabel('Link de assinatura').inputValue();
       const signingPath = new URL(signingLink).pathname;
@@ -2650,6 +2685,23 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         signerName: 'Cliente Ficticio Alfa',
         status: 'PENDING',
       });
+      const signatureAudit = await browserApi(
+        page,
+        `/audit-logs?category=changes&page=1&pageSize=100&search=${encodeURIComponent(signingRequestId)}`,
+      );
+      assertStatus(signatureAudit, 200, 'read signature request audit trail');
+      const signatureAuditEntries = bodyAs<{
+        items: Array<{ kind: string; action: string; resource: string; resourceId: string }>;
+      }>(signatureAudit).items.filter(
+        (entry) =>
+          entry.kind === 'CHANGE' &&
+          entry.action === 'CREATE' &&
+          entry.resource === 'document_signing_request' &&
+          entry.resourceId === signingRequestId,
+      );
+      expect(signatureAuditEntries).toHaveLength(1);
+      if (JSON.stringify(signatureAuditEntries).includes(signingPath.split('/').at(-1) ?? ''))
+        throw new Error('O token de assinatura foi exposto na auditoria.');
       confirmPersistence(page, 'request-document-signature');
       await shareDialog.getByRole('button', { name: 'Fechar' }).click();
 

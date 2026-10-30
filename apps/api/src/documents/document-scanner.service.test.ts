@@ -66,7 +66,15 @@ async function pdfWithEmbeddedEicar() {
 async function pdfWithPageContentEicar() {
   const document = await PDFDocument.create();
   const page = document.addPage([300, 144]);
-  const pageStream = document.context.flateStream(Buffer.from(`% ${eicar}\n`, 'ascii'));
+  const pageContent = Buffer.concat([
+    Buffer.from(
+      `q\nBI\n/W ${Buffer.byteLength(eicar, 'ascii')}\n/H 1\n/BPC 8\n/CS /G\nID\n`,
+      'ascii',
+    ),
+    Buffer.from(eicar, 'ascii'),
+    Buffer.from('\nEI\nQ\n', 'ascii'),
+  ]);
+  const pageStream = document.context.flateStream(pageContent);
   page.node.addContentStream(document.context.register(pageStream));
   return Buffer.from(await document.save({ useObjectStreams: false }));
 }

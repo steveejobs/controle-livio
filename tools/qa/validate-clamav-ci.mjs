@@ -89,11 +89,17 @@ function statusOf(error) {
 async function recordExpectedStatus(name, operation, expectedStatus, details = {}) {
   try {
     const error = await expectHttpStatus(operation(), expectedStatus);
-    record(name, 'PASS', { expectedStatus, actualStatus: statusOf(error), ...details });
+    record(name, 'PASS', {
+      ...details,
+      expectedStatus,
+      actualStatus: statusOf(error),
+      verdict: details.verdict ?? 'expected-rejection',
+    });
     return true;
   } catch (error) {
     const actualStatus = statusOf(error);
     record(name, 'FAIL', {
+      ...details,
       expectedStatus,
       actualStatus: actualStatus ?? null,
       verdict:
@@ -103,7 +109,6 @@ async function recordExpectedStatus(name, operation, expectedStatus, details = {
               error.message.includes('scanner request unexpectedly succeeded')
             ? 'unexpectedly-accepted'
             : 'scan-error',
-      ...details,
     });
     return false;
   }
@@ -130,8 +135,16 @@ async function pdfBytes({ embeddedFile, compress = true, pageContentEicar = fals
   const document = await PDFDocument.create();
   const page = document.addPage([300, 144]);
   if (pageContentEicar) {
-    const commentStream = document.context.flateStream(Buffer.from(`% ${eicar}\n`, 'ascii'));
-    page.node.addContentStream(document.context.register(commentStream));
+    const imageContent = Buffer.concat([
+      Buffer.from(
+        `q\nBI\n/W ${Buffer.byteLength(eicar, 'ascii')}\n/H 1\n/BPC 8\n/CS /G\nID\n`,
+        'ascii',
+      ),
+      Buffer.from(eicar, 'ascii'),
+      Buffer.from('\nEI\nQ\n', 'ascii'),
+    ]);
+    const pageContentStream = document.context.flateStream(imageContent);
+    page.node.addContentStream(document.context.register(pageContentStream));
   }
   if (embeddedFile !== undefined)
     await document.attach(Buffer.from(embeddedFile, 'ascii'), 'eicar.com', {
@@ -173,11 +186,23 @@ function directScan(binary, fixtureName, hostPath, containerPath) {
   );
   if (result.error) throw result.error;
   const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  const detected = /(?:Eicar|FOUND)/i.test(output);
-  const clean = result.status === 0 && /(?:OK|Infected files:\s*0)/i.test(output);
-  const verdict = detected ? 'INFECTED' : clean ? 'CLEAN' : 'ERROR';
-  const debugHighlights = output
-    .split(/\r?\n/)
+  // ClamAV debug output includes EICAR signature names while loading databases.
+  // The documented process exit status is the verdict: 0 clean, 1 infected, 2 error.
+  const exitVerdict = result.status === 0 ? 'CLEAN' : result.status === 1 ? 'INFECTED' : 'ERROR';
+  const outputLines = output.split(/\r?\n/);
+  const resultLines = outputLines
+    .filter((line) =>
+      /^\[fixture\]:\s+(?:.*\sFOUND|OK)\s*$/.test(line.replaceAll(containerPath, '[fixture]')),
+    )
+    .slice(0, 4)
+    .map((line) => line.replaceAll(containerPath, '[fixture]').slice(0, 400));
+  const lineVerdict = resultLines.some((line) => /\sFOUND\s*$/.test(line))
+    ? 'INFECTED'
+    : resultLines.some((line) => /:\s*OK\s*$/.test(line))
+      ? 'CLEAN'
+      : 'ERROR';
+  const verdict = exitVerdict === lineVerdict ? exitVerdict : 'ERROR';
+  const debugHighlights = outputLines
     .filter((line) => /pdf|embed|eicar|signature|stream|scan result|known viruses/i.test(line))
     .slice(0, 80)
     .map((line) => line.replaceAll(containerPath, '[fixture]').slice(0, 400));
@@ -186,6 +211,7 @@ function directScan(binary, fixtureName, hostPath, containerPath) {
     scanner: binary,
     exitCode: result.status,
     verdict,
+    resultLines,
     debugHighlights,
     fixtureBytes: readFileSync(hostPath).length,
   };
@@ -305,9 +331,20 @@ async function runPdfEicarMatrix() {
     clean.clamdscan.verdict === 'CLEAN' &&
     cleanAttachment?.clamscan?.verdict === 'CLEAN' &&
     cleanAttachment.clamdscan.verdict === 'CLEAN';
+  const directScanCasesComplete =
+    qpdfAvailable &&
+    results.length === fixtureBytes.length &&
+    results.every(
+      ({ fixture, parserValidated, externalValidator, clamscan, clamdscan }) =>
+        parserValidated === true &&
+        (fixture === 'raw-eicar.bin' || externalValidator === 'qpdf --check PASS') &&
+        ['CLEAN', 'INFECTED'].includes(clamscan?.verdict) &&
+        ['CLEAN', 'INFECTED'].includes(clamdscan?.verdict),
+    );
 
   const extractedInfectedPdf = service();
   let applicationExtractionPass = true;
+  let isolatedStreamScanPass = true;
   for (const name of [
     'page-content-eicar.pdf',
     'embedded-eicar-uncompressed.pdf',
@@ -315,6 +352,18 @@ async function runPdfEicarMatrix() {
   ]) {
     const bytes = fixtureBytes.find(([fixture]) => fixture === name)?.[1];
     if (!bytes) fail(`the generated scanner matrix is missing ${name}.`);
+    const targets = await extractPdfScanTargets(bytes);
+    const scanTarget = (
+      name === 'page-content-eicar.pdf' ? targets.pageContents : targets.embeddedFiles
+    ).find((content) => content.includes(Buffer.from(eicar, 'ascii')));
+    if (!scanTarget) fail(`the expected EICAR scan target was not extracted from ${name}.`);
+    isolatedStreamScanPass =
+      (await recordExpectedStatus(
+        `isolated-stream-${name}`,
+        () => extractedInfectedPdf.assertClean(scanTarget),
+        422,
+        { verdict: 'decoded-stream-detected-by-clamd' },
+      )) && isolatedStreamScanPass;
     applicationExtractionPass =
       (await recordExpectedStatus(
         `application-extracted-${name}`,
@@ -345,13 +394,18 @@ async function runPdfEicarMatrix() {
   report.results['clamav-pdf-matrix'] = {
     status:
       baseScannerCasesPass &&
+      directScanCasesComplete &&
       fixtureParserPass &&
+      isolatedStreamScanPass &&
       applicationExtractionPass &&
       cleanAttachmentApplicationPass
         ? 'PASS'
         : 'FAIL',
     baseScannerCasesPass,
+    directScanCasesComplete,
     fixtureParserPass,
+    isolatedStreamScanPass,
+    applicationExtractionPass,
     qpdfAvailable,
     qpdfVersion: qpdfAvailable ? qpdfVersion.stdout.trim() : null,
     note: 'Direct PDF verdicts are recorded per scanner; decoded page and embedded streams are separately scanned by the application.',
