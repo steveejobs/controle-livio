@@ -8,6 +8,7 @@ import {
   type Locator,
   type Page,
   type Request,
+  type Response,
 } from '@playwright/test';
 import { addMonths, formatDate } from '../../features/shared/format';
 
@@ -298,7 +299,11 @@ async function expectOperationFeedback(page: Page, message: string) {
   await expect(statuses.nth(exactIndex)).toHaveText(message);
   const trace = currentOperationTrace.get(page);
   if (trace) {
-    trace.events.push({ stage: 'UI_FEEDBACK_CONFIRMED', elapsedMs: Date.now() - trace.startedAt });
+    trace.events.push({
+      stage: 'UI_FEEDBACK_CONFIRMED',
+      elapsedMs: Date.now() - trace.startedAt,
+      message,
+    });
     writeOperationTrace(page, trace);
   }
 }
@@ -391,7 +396,7 @@ function writeOperationTrace(page: Page, trace: OperationTrace) {
   });
 }
 
-function markWorkflowStage(page: Page, workflow: string, stage: string) {
+function markWorkflowStage(page: Page, workflow: string, stage: string, details: JsonObject = {}) {
   currentWorkflowStage.set(page, { testTitle: test.info().title, workflow, stage });
   writeQaArtifact(
     `workflow-stages/${operationSlug(workflow)}-${page.viewportSize()?.width ?? 'unknown'}.json`,
@@ -401,8 +406,62 @@ function markWorkflowStage(page: Page, workflow: string, stage: string) {
       stage,
       recordedAt: new Date().toISOString(),
       viewport: page.viewportSize(),
+      ...details,
     },
   );
+}
+
+async function selectFormOptionByLabel(
+  page: Page,
+  form: Locator,
+  fieldLabel: string,
+  optionLabel: string,
+  workflow: string,
+  stage: string,
+  expectedFixtureValue?: string,
+) {
+  const select = form.getByLabel(fieldLabel, { exact: true });
+  await expect(select, `${workflow}: ${fieldLabel} control`).toBeVisible();
+  const option = await select.evaluate((element, targetLabel) => {
+    const matchingOptions = Array.from((element as HTMLSelectElement).options).filter(
+      (candidate) => candidate.label.trim() === targetLabel,
+    );
+    const match = matchingOptions[0];
+    return {
+      optionCount: (element as HTMLSelectElement).options.length,
+      matchCount: matchingOptions.length,
+      value: match?.value ?? null,
+    };
+  }, optionLabel);
+  const expectedFixtureValueMatches = expectedFixtureValue
+    ? option.value === expectedFixtureValue
+    : null;
+  markWorkflowStage(page, workflow, `${stage}-option-inspected`, {
+    fieldLabel,
+    optionCount: option.optionCount,
+    targetOptionCount: option.matchCount,
+    expectedFixtureValueMatches,
+  });
+  expect(option.matchCount, `${workflow}: one ${fieldLabel} option named ${optionLabel}`).toBe(1);
+  expect(option.value, `${workflow}: ${fieldLabel} option has a value`).toBeTruthy();
+
+  const value = option.value!;
+  const selectedValues = await select.selectOption(
+    { label: optionLabel },
+    {
+      timeout: apiOperationTimeoutMs,
+    },
+  );
+  expect(selectedValues).toEqual([value]);
+  await expect(select).toHaveValue(value, { timeout: apiOperationTimeoutMs });
+  await expect(select.locator('option:checked')).toHaveText(optionLabel);
+  markWorkflowStage(page, workflow, `${stage}-selected`, {
+    fieldLabel,
+    optionLabel,
+    selected: true,
+    expectedFixtureValueMatches,
+  });
+  return value;
 }
 
 type UiOperation = {
@@ -415,7 +474,10 @@ type UiOperation = {
   bodyField?: { name: string; value: string };
 };
 
-type DiagnosticWindow = Window & { __livioQaClickEvents?: Record<string, boolean> };
+type DiagnosticWindow = Window & {
+  __livioQaClickEvents?: Record<string, boolean>;
+  __livioQaSubmitEvents?: Record<string, boolean>;
+};
 
 function requestMatchesBodyField(request: Request, field?: UiOperation['bodyField']) {
   if (!field) return true;
@@ -447,6 +509,8 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   let actionTriggered = false;
   let requestObserved = false;
   let submitObserved = false;
+  let responseObserved = false;
+  let responseStatus: number | undefined;
   const invalidFields: string[] = [];
   const matchesRequest = (request: Request) =>
     new URL(request.url()).pathname === operation.pathname &&
@@ -455,7 +519,12 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   const requestListener = (request: Request) => {
     if (!matchesRequest(request)) return;
     requestObserved = true;
-    trace.events.push({ stage: 'REQUEST_SENT', elapsedMs: Date.now() - trace.startedAt });
+    trace.events.push({
+      stage: 'REQUEST_SENT',
+      elapsedMs: Date.now() - trace.startedAt,
+      method: request.method(),
+      pathname: new URL(request.url()).pathname,
+    });
     writeOperationTrace(page, trace);
   };
   const failedListener = (request: Request) => {
@@ -467,8 +536,23 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
     });
     writeOperationTrace(page, trace);
   };
+  const responseListener = (response: Response) => {
+    const request = response.request();
+    if (!matchesRequest(request)) return;
+    responseObserved = true;
+    responseStatus = response.status();
+    trace.events.push({
+      stage: 'HTTP_RESPONSE',
+      elapsedMs: Date.now() - trace.startedAt,
+      method: request.method(),
+      pathname: new URL(request.url()).pathname,
+      status: response.status(),
+    });
+    writeOperationTrace(page, trace);
+  };
   page.on('request', requestListener);
   page.on('requestfailed', failedListener);
+  page.on('response', responseListener);
 
   let requestPromise: Promise<{ value: Request } | { error: unknown }> | undefined;
   let responsePromise:
@@ -518,17 +602,19 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
         valid: formState.valid,
         invalidFields: formState.invalidFields,
       });
-      await operation.form.evaluate((element) => {
+      await operation.form.evaluate((element, observerKey) => {
         const form = element as HTMLFormElement;
-        form.dataset.livioSubmitObserved = 'false';
+        const diagnosticWindow = window as DiagnosticWindow;
+        diagnosticWindow.__livioQaSubmitEvents ??= {};
+        diagnosticWindow.__livioQaSubmitEvents[observerKey] = false;
         form.addEventListener(
           'submit',
           () => {
-            form.dataset.livioSubmitObserved = 'true';
+            diagnosticWindow.__livioQaSubmitEvents![observerKey] = true;
           },
           { capture: true, once: true },
         );
-      });
+      }, clickObserverKey);
       if (invalidFields.length) {
         await operation.button!.click();
         actionTriggered =
@@ -588,7 +674,11 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
       elapsedMs: Date.now() - trace.startedAt,
     });
     submitObserved = operation.form
-      ? (await operation.form.getAttribute('data-livio-submit-observed')) === 'true'
+      ? ((await page.evaluate(
+          (observerKey) =>
+            (window as DiagnosticWindow).__livioQaSubmitEvents?.[observerKey] === true,
+          clickObserverKey,
+        )) ?? false)
       : true;
     trace.events.push({
       stage: operation.form ? 'FORM_SUBMIT_EVENT' : 'UI_ACTION_DISPATCHED',
@@ -628,11 +718,15 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
     if (!trace.events.some(({ stage }) => stage === 'ACTION_NOT_TRIGGERED')) {
       trace.outcome = !actionTriggered
         ? 'ACTION_NOT_TRIGGERED'
-        : requestObserved
-          ? 'REQUEST_SENT_NO_RESPONSE'
-          : submitObserved
-            ? 'REQUEST_NOT_SENT'
-            : 'ACTION_NOT_TRIGGERED';
+        : responseObserved
+          ? responseStatus !== undefined && responseStatus >= 400
+            ? 'REQUEST_REJECTED'
+            : 'REQUEST_SUCCEEDED_UI_NOT_UPDATED'
+          : requestObserved
+            ? 'REQUEST_SENT_NO_RESPONSE'
+            : submitObserved
+              ? 'REQUEST_NOT_SENT'
+              : 'ACTION_NOT_TRIGGERED';
       trace.events.push({
         stage: trace.outcome,
         elapsedMs: Date.now() - trace.startedAt,
@@ -650,10 +744,13 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   } finally {
     page.off('request', requestListener);
     page.off('requestfailed', failedListener);
+    page.off('response', responseListener);
     if (operation.button)
       await page
         .evaluate((observerKey) => {
-          delete (window as DiagnosticWindow).__livioQaClickEvents?.[observerKey];
+          const diagnosticWindow = window as DiagnosticWindow;
+          delete diagnosticWindow.__livioQaClickEvents?.[observerKey];
+          delete diagnosticWindow.__livioQaSubmitEvents?.[observerKey];
         }, clickObserverKey)
         .catch(() => undefined);
   }
@@ -1234,16 +1331,38 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const matterForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
       });
-      await matterForm.getByLabel('Cliente', { exact: true }).selectOption(createdClient.id);
-      await matterForm
-        .getByLabel('Fluxo de atendimento')
-        .selectOption('12000000-0000-4000-8000-000000000001');
+      const matterClientId = await selectFormOptionByLabel(
+        page,
+        matterForm,
+        'Cliente',
+        clientName,
+        'journey-1-client-process-lawyer',
+        'matter-client',
+        createdClient.id,
+      );
+      const pipelineId = await selectFormOptionByLabel(
+        page,
+        matterForm,
+        'Fluxo de atendimento',
+        'Juridico Local',
+        'journey-1-client-process-lawyer',
+        'matter-pipeline',
+        '12000000-0000-4000-8000-000000000001',
+      );
       await matterForm.getByLabel('Referência interna do processo').fill(reference);
       await matterForm.getByLabel('Nome do processo').fill(matterTitle);
       await expect(matterForm.getByLabel('Advogado responsável (opcional)')).toContainText(
         'Advogado Aurora',
       );
-      await matterForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
+      const responsibleLawyerId = await selectFormOptionByLabel(
+        page,
+        matterForm,
+        'Advogado responsável (opcional)',
+        'Advogado Aurora',
+        'journey-1-client-process-lawyer',
+        'matter-responsible-lawyer',
+        lawyerUserA,
+      );
       markWorkflowStage(page, 'journey-1-client-process-lawyer', 'matter-form-ready');
       await screenshotEvidence(page, `journey-1-matter-form-ready-${viewport.width}`);
       const matter = await clickUiOperation(page, {
@@ -1255,9 +1374,9 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       });
       expect(matter.status()).toBe(201);
       expect(matter.request().postDataJSON()).toMatchObject({
-        clientId: createdClient.id,
-        pipelineId: '12000000-0000-4000-8000-000000000001',
-        responsibleLawyerId: lawyerUserA,
+        clientId: matterClientId,
+        pipelineId,
+        responsibleLawyerId,
         reference,
         title: matterTitle,
       });
@@ -1296,13 +1415,35 @@ test('jornada 1: cliente, processo, responsável e atualização de status', asy
       const duplicateForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar processo', exact: true }),
       });
-      await duplicateForm.getByLabel('Cliente', { exact: true }).selectOption(createdClient.id);
-      await duplicateForm
-        .getByLabel('Fluxo de atendimento')
-        .selectOption('12000000-0000-4000-8000-000000000001');
+      await selectFormOptionByLabel(
+        page,
+        duplicateForm,
+        'Cliente',
+        clientName,
+        'journey-1-client-process-lawyer',
+        'duplicate-matter-client',
+        createdClient.id,
+      );
+      await selectFormOptionByLabel(
+        page,
+        duplicateForm,
+        'Fluxo de atendimento',
+        'Juridico Local',
+        'journey-1-client-process-lawyer',
+        'duplicate-matter-pipeline',
+        '12000000-0000-4000-8000-000000000001',
+      );
       await duplicateForm.getByLabel('Referência interna do processo').fill(reference);
       await duplicateForm.getByLabel('Nome do processo').fill(`Duplicado ${matterTitle}`);
-      await duplicateForm.getByLabel('Advogado responsável (opcional)').selectOption(lawyerUserA);
+      await selectFormOptionByLabel(
+        page,
+        duplicateForm,
+        'Advogado responsável (opcional)',
+        'Advogado Aurora',
+        'journey-1-client-process-lawyer',
+        'duplicate-matter-responsible-lawyer',
+        lawyerUserA,
+      );
       const duplicateMatter = await clickUiOperation(page, {
         operation: 'reject-duplicate-matter',
         pathname: '/v1/matters',
@@ -1344,7 +1485,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const contractForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Cadastrar contrato', exact: true }),
       });
-      await contractForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
+      const contractClientId = await selectFormOptionByLabel(
+        page,
+        contractForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'journey-2-contract-receivable-payment',
+        'contract-client',
+        clientA,
+      );
       await contractForm.getByLabel('Número do contrato').fill(contractNumber);
       await contractForm.getByLabel('Nome do contrato').fill(contractTitle);
       await contractForm.getByLabel('Modelo de honorários').selectOption('FIXED');
@@ -1360,7 +1509,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       });
       expect(contractCreated.status()).toBe(201);
       expect(contractCreated.request().postDataJSON()).toMatchObject({
-        clientId: clientA,
+        clientId: contractClientId,
         number: contractNumber,
         title: contractTitle,
         feeModel: 'FIXED',
@@ -1378,7 +1527,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       }>(persistedContracts).items.find((item) => item.id === contract.id);
       expect(persistedContract).toMatchObject({
         id: contract.id,
-        clientId: clientA,
+        clientId: contractClientId,
         number: contractNumber,
       });
       expect(amountUnits(persistedContract!.fixedAmount)).toBe(amountUnits('100.00'));
@@ -1391,7 +1540,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const receivableForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Criar cobrança e parcelas' }),
       });
-      await receivableForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
+      const receivableClientId = await selectFormOptionByLabel(
+        page,
+        receivableForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'journey-2-contract-receivable-payment',
+        'receivable-client',
+        contractClientId,
+      );
       await receivableForm.getByLabel('Contrato associado (opcional)').selectOption(contract.id);
       await receivableForm.getByLabel('Código da cobrança').fill(reference);
       await receivableForm.getByLabel('Serviço ou motivo da cobrança').fill(`Honorários ${suffix}`);
@@ -1450,7 +1607,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
 
       const persistedReceivables = await browserApi(
         page,
-        `/finance/receivables?page=1&pageSize=100&clientId=${clientA}&contractId=${contract.id}`,
+        `/finance/receivables?page=1&pageSize=100&clientId=${receivableClientId}&contractId=${contract.id}`,
       );
       assertStatus(persistedReceivables, 200, 'read receivable persisted from form');
       const persistedReceivable = bodyAs<{
@@ -1493,7 +1650,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       const paymentForm = page.locator('form').filter({
         has: page.getByRole('button', { name: 'Confirmar pagamento' }),
       });
-      await paymentForm.getByRole('combobox').nth(0).selectOption(clientA);
+      const paymentClientId = await selectFormOptionByLabel(
+        page,
+        paymentForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'journey-2-contract-receivable-payment',
+        'payment-client',
+        receivableClientId,
+      );
 
       async function submitPayment(
         installmentId: string,
@@ -1567,7 +1732,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       ).toContainText('R$ 23,34 em aberto');
       const partialReceivables = await browserApi(
         page,
-        `/finance/receivables?page=1&pageSize=100&clientId=${clientA}&contractId=${contract.id}`,
+        `/finance/receivables?page=1&pageSize=100&clientId=${receivableClientId}&contractId=${contract.id}`,
       );
       assertStatus(partialReceivables, 200, 'read partially paid receivable');
       expect(
@@ -1628,7 +1793,7 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
 
       const finalReceivables = await browserApi(
         page,
-        `/finance/receivables?page=1&pageSize=100&clientId=${clientA}&contractId=${contract.id}`,
+        `/finance/receivables?page=1&pageSize=100&clientId=${receivableClientId}&contractId=${contract.id}`,
       );
       assertStatus(finalReceivables, 200, 'read fully paid receivable');
       const finalReceivable = bodyAs<{ items: Array<typeof persistedReceivable> }>(
@@ -1656,7 +1821,15 @@ test('jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência',
       await expect(completedRow).toContainText('PAID');
       await expect(completedRow).toContainText(formatDate(dueDates.at(-1)));
       await page.getByRole('button', { name: 'Receber pagamento' }).click();
-      await paymentForm.getByRole('combobox').nth(0).selectOption(clientA);
+      await selectFormOptionByLabel(
+        page,
+        paymentForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'journey-2-contract-receivable-payment',
+        'final-payment-client',
+        paymentClientId,
+      );
       await expect(page.getByText('Nenhuma parcela aberta para este cliente.')).toBeVisible();
       await screenshotEvidence(page, `journey-contract-receivable-payment-${viewport.width}`);
     } finally {
@@ -1683,9 +1856,33 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       const expenseForm = financePage.locator('form').filter({
         has: financePage.getByRole('button', { name: 'Cadastrar despesa' }),
       });
-      await expenseForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
-      await expenseForm.getByLabel('Processo').selectOption(matterA);
-      await expenseForm.getByLabel('Responsável').selectOption(financeUserA);
+      const expenseClientId = await selectFormOptionByLabel(
+        financePage,
+        expenseForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'journey-3-expense-approval-payment',
+        'expense-client',
+        clientA,
+      );
+      const expenseMatterId = await selectFormOptionByLabel(
+        financePage,
+        expenseForm,
+        'Processo',
+        'AUR-001 · Cliente Ficticio Alfa',
+        'journey-3-expense-approval-payment',
+        'expense-matter',
+        matterA,
+      );
+      const expenseResponsibleId = await selectFormOptionByLabel(
+        financePage,
+        expenseForm,
+        'Responsável',
+        'Financeiro Aurora',
+        'journey-3-expense-approval-payment',
+        'expense-responsible',
+        financeUserA,
+      );
       await expenseForm.getByLabel('Categoria').fill('QA sintético');
       await expenseForm.getByLabel('Detalhes da despesa').fill(description);
       await expenseForm.getByLabel('Valor').fill('42,25');
@@ -1753,12 +1950,22 @@ test('jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa',
       );
       assertStatus(persistedExpenses, 200, 'read persisted paid expense');
       const persistedExpense = bodyAs<{
-        items: Array<{ description: string; status: string; amount: string }>;
+        items: Array<{
+          description: string;
+          status: string;
+          amount: string;
+          clientId: string;
+          matterId: string;
+          responsibleUserId: string;
+        }>;
       }>(persistedExpenses).items.find((item) => item.description === description);
       expect(persistedExpense).toMatchObject({
         description,
         status: 'PAID',
         amount: '42.25',
+        clientId: expenseClientId,
+        matterId: expenseMatterId,
+        responsibleUserId: expenseResponsibleId,
       });
       confirmPersistence(adminPage, 'pay-approved-expense');
 
@@ -1813,7 +2020,15 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await uploadForm.getByLabel('Nome do documento').fill(title);
       await uploadForm.getByLabel('Tipo de documento (opcional)').fill('QA');
       await uploadForm.getByLabel('Visibilidade').selectOption('CLIENT');
-      await uploadForm.getByLabel('Cliente', { exact: true }).selectOption(clientA);
+      const documentClientId = await selectFormOptionByLabel(
+        page,
+        uploadForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'journey-4-document-upload-download-signature',
+        'document-client',
+        clientA,
+      );
       await uploadForm.getByLabel('Arquivo').setInputFiles({
         name: `qa-${suffix}.pdf`,
         mimeType: 'application/pdf',
@@ -1874,7 +2089,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         bodyAs<{
           items: Array<{ id: string; title: string; clientId: string; visibility: string }>;
         }>(persistedDocuments).items.find((item) => item.id === documentId),
-      ).toMatchObject({ id: documentId, title, clientId: clientA, visibility: 'CLIENT' });
+      ).toMatchObject({ id: documentId, title, clientId: documentClientId, visibility: 'CLIENT' });
       confirmPersistence(page, 'upload-client-document');
 
       const storageResponsePromise = page
