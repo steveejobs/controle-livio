@@ -262,9 +262,12 @@ export class FinanceService {
     actor: AuthenticatedActor,
     idempotencyKey: string,
     input: CreatePaymentInput,
+    receiptReview?: { receiptId: string; correctionReason?: string },
   ) {
     if (!idempotencyKey || idempotencyKey.length > 160)
       throw new BadRequestException('Idempotency-Key é obrigatório e deve ter até 160 caracteres');
+    if (!receiptReview && idempotencyKey.startsWith('receipt:'))
+      throw new BadRequestException('Prefixo idempotente reservado para comprovantes.');
     const payloadHash = sha256(JSON.stringify(input));
     return this.withSerializableRetry(async () =>
       this.prisma.$transaction(
@@ -291,6 +294,17 @@ export class FinanceService {
               idempotent: true,
             };
           }
+
+          const receipt = receiptReview
+            ? await this.lockReceiptForConfirmation(transaction, actor, receiptReview.receiptId)
+            : undefined;
+          if (
+            receipt &&
+            (receipt.clientId !== input.clientId ||
+              receipt.installmentId !== input.allocations[0]?.installmentId ||
+              input.allocations.length !== 1)
+          )
+            throw new BadRequestException('O comprovante não corresponde ao pagamento.');
 
           const { amount, allocated: allocationTotal } = paymentSummary(
             input.amount,
@@ -348,6 +362,19 @@ export class FinanceService {
             },
             include: { allocations: true },
           });
+          if (receipt && receiptReview) {
+            await this.confirmReceipt(
+              transaction,
+              actor,
+              receipt,
+              receiptReview.correctionReason,
+              payment.id,
+              {
+                amount: amount.toFixed(4),
+                paidAt: input.paidAt.toISOString(),
+              },
+            );
+          }
           for (const allocation of input.allocations) {
             const installment = byId.get(allocation.installmentId)!;
             const remaining = this.balanceFromLoaded(installment).minus(
@@ -1162,8 +1189,18 @@ export class FinanceService {
     });
   }
 
-  async payExpense(actor: AuthenticatedActor, id: string, input: ExpensePaymentInput) {
+  async payExpense(
+    actor: AuthenticatedActor,
+    id: string,
+    input: ExpensePaymentInput,
+    receiptReview?: { receiptId: string; correctionReason?: string },
+  ) {
     return this.expenseTransaction(async (transaction) => {
+      const receipt = receiptReview
+        ? await this.lockReceiptForConfirmation(transaction, actor, receiptReview.receiptId)
+        : undefined;
+      if (receipt && receipt.expenseId !== id)
+        throw new BadRequestException('O comprovante não corresponde à despesa.');
       const before = await this.lockExpense(transaction, actor, id);
       if (before.status !== 'APPROVED')
         throw new ConflictException('Somente despesas aprovadas podem ser pagas');
@@ -1178,6 +1215,19 @@ export class FinanceService {
       });
       if (changed.count !== 1) throw new ConflictException('A despesa foi paga por outro usuário');
       const after = await this.findExpense(actor, id, transaction);
+      if (receipt && receiptReview) {
+        await this.confirmReceipt(
+          transaction,
+          actor,
+          receipt,
+          receiptReview.correctionReason,
+          undefined,
+          {
+            amount: paymentAmount.toFixed(4),
+            paidAt: input.paidAt.toISOString(),
+          },
+        );
+      }
       await this.audit.record(transaction, {
         organizationId: actor.organizationId,
         actorUserId: actor.userId,
@@ -1195,6 +1245,69 @@ export class FinanceService {
         },
       });
       return after;
+    });
+  }
+
+  private async lockReceiptForConfirmation(
+    transaction: Transaction,
+    actor: AuthenticatedActor,
+    id: string,
+  ) {
+    await transaction.$queryRaw`SELECT id FROM payment_receipts WHERE id = ${id}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
+    const receipt = await transaction.paymentReceipt.findFirst({
+      where: { id, organizationId: actor.organizationId },
+    });
+    if (!receipt) throw new NotFoundException('Comprovante não encontrado.');
+    if (receipt.status !== 'PENDING_REVIEW')
+      throw new ConflictException('Comprovante já revisado.');
+    return receipt;
+  }
+
+  private async confirmReceipt(
+    transaction: Transaction,
+    actor: AuthenticatedActor,
+    receipt: Awaited<ReturnType<FinanceService['lockReceiptForConfirmation']>>,
+    correctionReason: string | undefined,
+    paymentId: string | undefined,
+    confirmed: { amount: string; paidAt: string },
+  ) {
+    const previousHistory = Array.isArray(receipt.reviewHistory) ? receipt.reviewHistory : [];
+    await transaction.paymentReceipt.update({
+      where: { id: receipt.id },
+      data: {
+        status: 'CONFIRMED',
+        reviewedById: actor.userId,
+        reviewedAt: new Date(),
+        ...(paymentId ? { paymentId } : {}),
+        reviewHistory: JSON.parse(
+          JSON.stringify([
+            ...previousHistory,
+            {
+              decision: 'CONFIRMED',
+              actorUserId: actor.userId,
+              at: new Date().toISOString(),
+              confirmed,
+              correctionReason: correctionReason ?? null,
+            },
+          ]),
+        ) as Prisma.InputJsonValue,
+      },
+    });
+    if (paymentId)
+      await transaction.document.update({
+        where: { id: receipt.documentId },
+        data: { paymentId },
+      });
+    await this.audit.record(transaction, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      actorSessionId: actor.sessionId,
+      action: 'UPDATE',
+      resource: 'payment_receipt',
+      resourceId: receipt.id,
+      before: { status: receipt.status },
+      after: { status: 'CONFIRMED', paymentId: paymentId ?? null, ...confirmed },
+      metadata: { correctionReason: correctionReason ?? null },
     });
   }
 
@@ -1247,6 +1360,35 @@ export class FinanceService {
     });
     if (!receivable) throw new NotFoundException('Recebível não encontrado');
     return receivable;
+  }
+
+  async installmentReceiptBalance(actor: AuthenticatedActor, installmentId: string) {
+    const installment = await this.prisma.receivableInstallment.findFirst({
+      where: {
+        id: installmentId,
+        organizationId: actor.organizationId,
+        ...(actor.clientId ? { receivable: { clientId: actor.clientId } } : {}),
+      },
+      include: {
+        receivable: { select: { clientId: true, originalAmount: true } },
+        allocations: { where: { reversedAt: null, payment: { status: 'CONFIRMED' } } },
+        adjustments: { where: { approvedAt: { not: null } } },
+      },
+    });
+    if (!installment) throw new NotFoundException('Parcela não encontrada');
+    const balance = this.balanceFromLoaded(installment);
+    const previousPaid = installment.allocations.reduce(
+      (sum, allocation) => sum.plus(allocation.amount),
+      new Prisma.Decimal(0),
+    );
+    return {
+      clientId: installment.receivable.clientId,
+      originalAmount: installment.amount.toFixed(2),
+      previousPaid: previousPaid.toFixed(2),
+      balance: balance.toFixed(2),
+      dueDate: installment.dueDate.toISOString().slice(0, 10),
+      status: installment.status,
+    };
   }
 
   async listContracts(

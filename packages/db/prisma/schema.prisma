@@ -220,6 +220,7 @@ model Organization {
   receivables             Receivable[]
   installments            ReceivableInstallment[]
   payments                Payment[]
+  paymentReceipts          PaymentReceipt[]
   paymentChangeRequests   PaymentChangeRequest[]
   paymentAllocations      PaymentAllocation[]
   paymentReversals        PaymentReversal[]
@@ -270,6 +271,8 @@ model User {
   webPushSubscriptions WebPushSubscription[]
   responsibleExpenses  Expense[]             @relation("ExpenseResponsible")
   rejectedExpenses     Expense[]             @relation("ExpenseRejector")
+  submittedReceipts    PaymentReceipt[]      @relation("ReceiptSubmitter")
+  reviewedReceipts     PaymentReceipt[]      @relation("ReceiptReviewer")
 
   @@unique([organizationId, email])
   @@index([authUserId])
@@ -451,6 +454,7 @@ model Client {
   payments        Payment[]
   expenses        Expense[]
   documents       Document[]
+  receipts        PaymentReceipt[]
   internalNotes   InternalNote[]
   clientMessages  ClientMessage[]
   tasks           Task[]
@@ -709,6 +713,7 @@ model ReceivableInstallment {
   allocations        PaymentAllocation[]
   adjustments        FinancialAdjustment[]
   documents          Document[]
+  receipts           PaymentReceipt[]
 
   @@unique([organizationId, receivableId, sequence])
   @@index([organizationId, dueDate, status])
@@ -742,6 +747,7 @@ model Payment {
   reversals       PaymentReversal[]
   changeRequests  PaymentChangeRequest[]
   documents       Document[]
+  receipts        PaymentReceipt[]
 
   @@unique([organizationId, reference])
   @@unique([organizationId, externalId])
@@ -875,6 +881,7 @@ model Expense {
   responsibleUser   User?         @relation("ExpenseResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
   rejectedBy        User?         @relation("ExpenseRejector", fields: [rejectedById], references: [id], onDelete: Restrict)
   documents         Document[]
+  receipts          PaymentReceipt[]
 
   @@index([organizationId, status, dueDate])
   @@index([organizationId, status, paidAt])
@@ -911,6 +918,7 @@ model Document {
   payment            Payment?                 @relation(fields: [paymentId], references: [id], onDelete: Restrict)
   expense            Expense?                 @relation(fields: [expenseId], references: [id], onDelete: Restrict)
   versions           DocumentVersion[]
+  paymentReceipt     PaymentReceipt?
   signingRequests    DocumentSigningRequest[] @relation("SourceDocument")
   signedFromRequests DocumentSigningRequest[] @relation("SignedDocument")
 
@@ -923,6 +931,41 @@ model Document {
   @@index([organizationId, expenseId])
   @@index([organizationId, deletedAt])
   @@map("documents")
+}
+
+model PaymentReceipt {
+  id               String                @id @default(uuid()) @db.Uuid
+  organizationId   String                @map("organization_id") @db.Uuid
+  clientId         String                @map("client_id") @db.Uuid
+  documentId       String                @unique @map("document_id") @db.Uuid
+  installmentId    String?               @map("installment_id") @db.Uuid
+  expenseId        String?               @map("expense_id") @db.Uuid
+  paymentId        String?               @unique @map("payment_id") @db.Uuid
+  sha256           String                @db.Char(64)
+  status           String                @default("PENDING_REVIEW") @db.VarChar(24)
+  extractedFields  Json                  @default("{}") @map("extracted_fields")
+  reconciliation   Json                  @default("{}")
+  reviewHistory    Json                  @default("[]") @map("review_history")
+  submittedById    String                @map("submitted_by_id") @db.Uuid
+  submittedByClient Boolean              @default(false) @map("submitted_by_client")
+  reviewedById     String?               @map("reviewed_by_id") @db.Uuid
+  reviewedAt       DateTime?             @map("reviewed_at") @db.Timestamptz(3)
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client           Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  document         Document              @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  installment      ReceivableInstallment? @relation(fields: [installmentId], references: [id], onDelete: Restrict)
+  expense          Expense?              @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  payment          Payment?              @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  submittedBy      User                  @relation("ReceiptSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  reviewedBy       User?                 @relation("ReceiptReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, sha256])
+  @@index([organizationId, clientId, status])
+  @@index([organizationId, installmentId, status])
+  @@index([organizationId, expenseId, status])
+  @@map("payment_receipts")
 }
 
 model DocumentVersion {

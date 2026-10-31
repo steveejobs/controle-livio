@@ -241,6 +241,23 @@ describe('FinanceService transacional', () => {
     });
   });
 
+  it('reserva chaves de comprovante para a confirmação financeira auditada', async () => {
+    const prisma = { $transaction: vi.fn() };
+    const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+    await expect(
+      service.createPayment(actor, 'receipt:forged', {
+        clientId: 'client-a',
+        reference: 'PIX-FORJADO',
+        amount: '10.00',
+        currency: 'BRL',
+        paidAt: new Date('2026-10-30T12:00:00.000Z'),
+        method: 'PIX',
+        allocations: [],
+      }),
+    ).rejects.toThrow('Prefixo idempotente reservado');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   it('mantém o recebível parcial até quitar a última parcela e bloqueia repetição e excesso', async () => {
     const receivableId = '00000000-0000-4000-8000-000000000020';
     const firstId = '00000000-0000-4000-8000-000000000021';

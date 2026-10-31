@@ -8,6 +8,7 @@ import { LoadMore } from '../shared/load-more';
 import { useApiData } from '../shared/use-api-data';
 import { useNearViewport } from '../shared/use-near-viewport';
 import { usePaginatedData } from '../shared/use-paginated-data';
+import { ReceiptCapture, ReceiptReviewQueue } from './receipt-capture';
 import {
   canSubmitExpense,
   expenseSubmitButtonLabel,
@@ -282,6 +283,8 @@ export function FinanceOperations({
   const canCreateDocuments = permissions.includes('documents:create');
   const canViewDocuments = permissions.includes('documents:view');
   const canViewClients = permissions.includes('clients:view');
+  const canCreateReceipt = permissions.includes('receipts:create');
+  const canReviewReceipt = permissions.includes('receipts:approve');
   const canManageExpensePolicy = isAdministrator && permissions.includes('organization:update');
   const [mode, setMode] = useState<'receivable' | 'payment' | 'expense'>(
     canCreateReceivable ? 'receivable' : canCreatePayment ? 'payment' : 'expense',
@@ -305,6 +308,7 @@ export function FinanceOperations({
   const clientOptionsLoading =
     clients.loading || (clientsNeededForForm && canViewClients && !clients.data && !clients.error);
   const [selectedClient, setSelectedClient] = useState('');
+  const [receiptInstallmentId, setReceiptInstallmentId] = useState('');
   const [receivableClientId, setReceivableClientId] = useState('');
   const [receivableContractId, setReceivableContractId] = useState('');
   const [expenseClientId, setExpenseClientId] = useState('');
@@ -816,6 +820,16 @@ export function FinanceOperations({
         )}
       </header>
       <OperationFeedback message={feedback} />
+      {canReviewReceipt && (
+        <ReceiptReviewQueue
+          onChanged={() => {
+            receivables.reload();
+            payments.reload();
+            expenses.reload();
+            expenseSummary.reload();
+          }}
+        />
+      )}
       <OperationFeedback
         message={
           receivables.error || payments.error
@@ -915,99 +929,115 @@ export function FinanceOperations({
           </button>
         </form>
       ) : mode === 'payment' && canCreatePayment ? (
-        <form className="surface form-grid" data-reveal onSubmit={createPayment}>
-          <ClientSelectField
-            items={clients.data?.items}
-            loading={clientOptionsLoading}
-            error={clients.error?.message}
-            onRetry={clients.retry}
-            canListClients={canViewClients}
-            value={selectedClient}
-            onChange={(event) => setSelectedClient(event.target.value)}
-            required
-          />
-          <label className="form-wide">
-            Parcela
-            <select
+        <>
+          <form className="surface form-grid" data-reveal onSubmit={createPayment}>
+            <ClientSelectField
+              items={clients.data?.items}
+              loading={clientOptionsLoading}
+              error={clients.error?.message}
+              onRetry={clients.retry}
+              canListClients={canViewClients}
+              value={selectedClient}
+              onChange={(event) => setSelectedClient(event.target.value)}
               required
-              name="installmentId"
-              defaultValue=""
-              disabled={!selectedClient || paymentReceivables.loading || !paymentReceivables.data}
-              aria-busy={
-                Boolean(selectedClient && !paymentReceivables.data && !paymentReceivables.error) ||
-                paymentReceivables.loading
-              }
-            >
-              <option value="" disabled>
-                {!selectedClient
-                  ? 'Selecione um cliente primeiro'
-                  : paymentReceivables.loading ||
-                      (!paymentReceivables.data && !paymentReceivables.error)
-                    ? 'Carregando parcelas deste cliente…'
-                    : paymentReceivables.error
-                      ? 'Não foi possível carregar parcelas'
-                      : 'Selecione uma parcela aberta'}
-              </option>
-              {openInstallments.map((item) => (
-                <option value={item.id} key={item.id}>
-                  {item.clientName} · {item.reference} · parcela {item.sequence} ·{' '}
-                  {formatMoney(item.remainingAmount)} em aberto
+            />
+            <label className="form-wide">
+              Parcela
+              <select
+                required
+                name="installmentId"
+                defaultValue=""
+                onChange={(event) => setReceiptInstallmentId(event.target.value)}
+                disabled={!selectedClient || paymentReceivables.loading || !paymentReceivables.data}
+                aria-busy={
+                  Boolean(
+                    selectedClient && !paymentReceivables.data && !paymentReceivables.error,
+                  ) || paymentReceivables.loading
+                }
+              >
+                <option value="" disabled>
+                  {!selectedClient
+                    ? 'Selecione um cliente primeiro'
+                    : paymentReceivables.loading ||
+                        (!paymentReceivables.data && !paymentReceivables.error)
+                      ? 'Carregando parcelas deste cliente…'
+                      : paymentReceivables.error
+                        ? 'Não foi possível carregar parcelas'
+                        : 'Selecione uma parcela aberta'}
                 </option>
-              ))}
-            </select>
-          </label>
-          {selectedClient && paymentReceivables.error && !paymentReceivables.data && (
-            <div className="notice notice-error form-wide" role="alert">
-              {paymentReceivables.error.message}{' '}
-              <button type="button" onClick={paymentReceivables.retry}>
-                Tentar novamente
-              </button>
-            </div>
-          )}
-          {selectedClient &&
-            paymentReceivables.data &&
-            !openInstallments.length &&
-            paymentReceivables.data.items.length >= paymentReceivables.data.total && (
-              <p className="form-wide">Nenhuma parcela aberta para este cliente.</p>
+                {openInstallments.map((item) => (
+                  <option value={item.id} key={item.id}>
+                    {item.clientName} · {item.reference} · parcela {item.sequence} ·{' '}
+                    {formatMoney(item.remainingAmount)} em aberto
+                  </option>
+                ))}
+              </select>
+            </label>
+            {selectedClient && paymentReceivables.error && !paymentReceivables.data && (
+              <div className="notice notice-error form-wide" role="alert">
+                {paymentReceivables.error.message}{' '}
+                <button type="button" onClick={paymentReceivables.retry}>
+                  Tentar novamente
+                </button>
+              </div>
             )}
-          {selectedClient && paymentReceivables.data && (
-            <div className="form-wide">
-              <LoadMore
-                shown={paymentReceivables.data.items.length}
-                total={paymentReceivables.data.total}
-                loading={paymentReceivables.loading}
-                error={paymentReceivables.error}
-                onLoad={paymentReceivables.loadMore}
-                onRetry={paymentReceivables.retry}
-              />
-            </div>
+            {selectedClient &&
+              paymentReceivables.data &&
+              !openInstallments.length &&
+              paymentReceivables.data.items.length >= paymentReceivables.data.total && (
+                <p className="form-wide">Nenhuma parcela aberta para este cliente.</p>
+              )}
+            {selectedClient && paymentReceivables.data && (
+              <div className="form-wide">
+                <LoadMore
+                  shown={paymentReceivables.data.items.length}
+                  total={paymentReceivables.data.total}
+                  loading={paymentReceivables.loading}
+                  error={paymentReceivables.error}
+                  onLoad={paymentReceivables.loadMore}
+                  onRetry={paymentReceivables.retry}
+                />
+              </div>
+            )}
+            <label>
+              Referência do pagamento
+              <input name="reference" required placeholder="PIX-0001" />
+            </label>
+            <label>
+              Valor recebido
+              <input name="amount" required inputMode="decimal" />
+            </label>
+            <label>
+              Data do pagamento
+              <input name="paidAt" type="datetime-local" required />
+            </label>
+            <label>
+              Forma
+              <select name="method" defaultValue="PIX">
+                <option>PIX</option>
+                <option>Transferência</option>
+                <option>Boleto</option>
+                <option>Cartão</option>
+                <option>Dinheiro</option>
+              </select>
+            </label>
+            <button className="primary form-wide" disabled={busy || !clientOptionsReady}>
+              {busy ? 'Confirmando…' : 'Confirmar pagamento'}
+            </button>
+          </form>
+          {canCreateReceipt && receiptInstallmentId && (
+            <ReceiptCapture
+              key={receiptInstallmentId}
+              installmentId={receiptInstallmentId}
+              canReview={canReviewReceipt}
+              onChanged={() => {
+                receivables.reload();
+                paymentReceivables.reload();
+                payments.reload();
+              }}
+            />
           )}
-          <label>
-            Referência do pagamento
-            <input name="reference" required placeholder="PIX-0001" />
-          </label>
-          <label>
-            Valor recebido
-            <input name="amount" required inputMode="decimal" />
-          </label>
-          <label>
-            Data do pagamento
-            <input name="paidAt" type="datetime-local" required />
-          </label>
-          <label>
-            Forma
-            <select name="method" defaultValue="PIX">
-              <option>PIX</option>
-              <option>Transferência</option>
-              <option>Boleto</option>
-              <option>Cartão</option>
-              <option>Dinheiro</option>
-            </select>
-          </label>
-          <button className="primary form-wide" disabled={busy || !clientOptionsReady}>
-            {busy ? 'Confirmando…' : 'Confirmar pagamento'}
-          </button>
-        </form>
+        </>
       ) : mode === 'expense' && canCreateExpense ? (
         <form className="surface form-grid" data-reveal onSubmit={createExpense}>
           <ClientSelectField
@@ -2017,6 +2047,16 @@ export function FinanceOperations({
                                 </button>
                               </div>
                             </form>
+                            {canCreateReceipt && item.clientId && (
+                              <ReceiptCapture
+                                expenseId={item.id}
+                                canReview={canReviewReceipt}
+                                onChanged={() => {
+                                  expenses.reload();
+                                  expenseSummary.reload();
+                                }}
+                              />
+                            )}
                           </td>
                         </tr>
                       )}

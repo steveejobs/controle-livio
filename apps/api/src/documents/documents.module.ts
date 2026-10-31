@@ -23,5 +23,11 @@ import { DocumentScannerService } from './document-scanner.service';
     DocumentUploadAdmissionInterceptor,
     DocumentScannerService,
   ],
+  exports: [
+    DocumentsService,
+    DocumentScannerService,
+    StorageService,
+    DocumentUploadAdmissionInterceptor,
+  ],
 })
 export class DocumentsModule {}

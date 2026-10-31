@@ -84,7 +84,7 @@ VALUES
 ON CONFLICT (id) DO NOTHING;
 
 WITH resources(resource) AS (
-  SELECT unnest(ARRAY['organization','users','roles','clients','matters','pipelines','contracts','receivables','payments','expenses','documents','notes','messages','tasks','calendar','notifications','audit','reports'])
+  SELECT unnest(ARRAY['organization','users','roles','clients','matters','pipelines','contracts','receivables','payments','receipts','expenses','documents','notes','messages','tasks','calendar','notifications','audit','reports'])
 ), actions(action) AS (
   SELECT unnest(ARRAY['view','create','update','delete','export','approve','manage'])
 ), organizations(id) AS (
@@ -113,6 +113,7 @@ WHERE r.key = 'administrator'
    OR (r.key = 'lawyer' AND (
      (p.resource IN ('clients','matters','documents','notes','messages','tasks','calendar') AND p.action IN ('view','create','update','export'))
      OR (p.resource IN ('pipelines','receivables') AND p.action = 'view')
+     OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'contracts' AND p.action IN ('view','create','update'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
      OR (p.resource = 'reports' AND p.action IN ('view','export'))
@@ -120,6 +121,7 @@ WHERE r.key = 'administrator'
    OR (r.key = 'secretary' AND (
      (p.resource IN ('clients','notes','messages','tasks','calendar') AND p.action IN ('view','create','update','export'))
      OR (p.resource IN ('matters','documents') AND p.action IN ('view','create','update'))
+     OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'pipelines' AND p.action = 'view')
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
      OR (p.resource = 'reports' AND p.action IN ('view','export'))
@@ -127,6 +129,7 @@ WHERE r.key = 'administrator'
    OR (r.key = 'finance' AND (
      (p.resource IN ('clients','matters','documents','calendar') AND p.action = 'view')
      OR (p.resource IN ('contracts','receivables','payments','expenses') AND p.action IN ('view','create','update','approve','export'))
+     OR (p.resource = 'receipts' AND p.action IN ('view','create','approve'))
      OR (p.resource = 'messages' AND p.action IN ('view','create'))
      OR (p.resource = 'tasks' AND p.action IN ('view','create','update','export'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
@@ -134,6 +137,7 @@ WHERE r.key = 'administrator'
    ))
    OR (r.key = 'client' AND (
      (p.resource IN ('matters','contracts','receivables','payments','documents','calendar') AND p.action = 'view')
+     OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'messages' AND p.action IN ('view','create'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
    ))

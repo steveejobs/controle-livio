@@ -433,7 +433,7 @@ export class DocumentsService {
     };
   }
 
-  private validateFile(file: Express.Multer.File | undefined): asserts file is Express.Multer.File {
+  validateFile(file: Express.Multer.File | undefined): asserts file is Express.Multer.File {
     if (!file) throw new BadRequestException('Arquivo obrigatório');
     const maximum = this.config.get('MAX_DOCUMENT_SIZE_MB', { infer: true }) * 1024 * 1024;
     if (file.size < 1 || file.size > maximum)

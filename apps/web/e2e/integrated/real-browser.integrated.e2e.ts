@@ -13,7 +13,7 @@ import {
   type Response,
 } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
-import { AFRelationship, PDFDocument } from 'pdf-lib';
+import { AFRelationship, PDFDocument, StandardFonts } from 'pdf-lib';
 import { addMonths, formatDate } from '../../features/shared/format';
 
 const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://127.0.0.1:3001/v1';
@@ -3227,6 +3227,242 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
       }
     } finally {
       await context.close();
+    }
+  }
+});
+
+test('comprovante: leitura, pagamento parcial, portal e quitação conferida', async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  for (const viewport of formViewports) {
+    const financeContext = await browser.newContext({ viewport });
+    const clientContext = await browser.newContext({ viewport });
+    const secondClientContext = await browser.newContext({ viewport });
+    const otherOrganizationContext = await browser.newContext({ viewport });
+    const financePage = await financeContext.newPage();
+    const clientPage = await clientContext.newPage();
+    const secondClientPage = await secondClientContext.newPage();
+    const otherOrganizationPage = await otherOrganizationContext.newPage();
+    try {
+      await login(financePage, 'qa-finance.aurora@example.test');
+      const suffix = randomUUID().slice(0, 8);
+      const reference = `QA-RECIBO-${suffix}`;
+      const created = await browserApi(financePage, '/finance/receivables', {
+        method: 'POST',
+        body: {
+          clientId: clientA,
+          reference,
+          description: 'Cobrança sintética para conciliação',
+          originalAmount: '100.00',
+          currency: 'BRL',
+          issueDate: '2026-10-20',
+          installments: [{ sequence: 1, amount: '100.00', dueDate: '2026-11-15' }],
+        },
+      });
+      assertStatus(created, 201, 'fixture de parcela para comprovante');
+      const installmentId = bodyAs<{ installments: Array<{ id: string }> }>(created)
+        .installments[0]!.id;
+      const receiptPdf = async (amount: string) => {
+        const document = await PDFDocument.create();
+        const page = document.addPage([500, 300]);
+        const font = await document.embedFont(StandardFonts.Helvetica);
+        page.drawText('Comprovante Pix', { x: 30, y: 250, size: 18, font });
+        page.drawText(`Referencia sintetica ${suffix}`, { x: 30, y: 145, size: 12, font });
+        page.drawText(`Valor pago: R$ ${amount}`, { x: 30, y: 215, size: 18, font });
+        page.drawText('Data do pagamento: 29/10/2026', { x: 30, y: 180, size: 18, font });
+        return Buffer.from(await document.save());
+      };
+      await navigateTo(financePage, /Receb/);
+      await financePage.getByRole('button', { name: 'Receber pagamento' }).click();
+      const paymentForm = await formWithSubmitButton(financePage, 'Confirmar pagamento');
+      await selectFormOptionByLabel(
+        financePage,
+        paymentForm,
+        'Cliente',
+        'Cliente Ficticio Alfa',
+        'receipt-reconciliation',
+        'payment-client',
+        clientA,
+      );
+      await paymentForm.getByLabel('Parcela').selectOption(installmentId);
+      const upload = await formWithSubmitButton(financePage, 'Enviar e conferir comprovante');
+      const storageBeforeInfected = await storageObjectInventory(organizationA);
+      await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
+        name: `recibo-infectado-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: await pdfBytes(eicarTestFile),
+      });
+      const infected = financePage.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/finance/receipts' &&
+          response.request().method() === 'POST',
+      );
+      await upload.getByRole('button', { name: 'Enviar e conferir comprovante' }).click();
+      expect((await infected).status()).toBe(422);
+      await expectStorageUnchanged(
+        organizationA,
+        storageBeforeInfected,
+        'receipt-infected-upload',
+        financePage,
+      );
+      await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
+        name: `recibo-parcial-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: await receiptPdf('33,34'),
+      });
+      const uploaded = financePage.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/finance/receipts' &&
+          response.request().method() === 'POST',
+      );
+      await upload.getByRole('button', { name: 'Enviar e conferir comprovante' }).click();
+      const uploadedResponse = await uploaded;
+      expect(uploadedResponse.status()).toBe(201);
+      expect(uploadedResponse.request().postData()).toContain(installmentId);
+      expect(
+        (await uploadedResponse.json()) as { installmentId: string; clientId: string },
+      ).toMatchObject({
+        installmentId,
+        clientId: clientA,
+      });
+      const preview = financePage.getByRole('region', { name: 'Conferência do comprovante' });
+      await expect(preview).toContainText('R$ 33,34');
+      await expect(preview).toContainText('R$ 66,66');
+      const partial = financePage.waitForResponse((response) =>
+        /\/v1\/finance\/receipts\/[a-f0-9-]+\/confirm$/.test(new URL(response.url()).pathname),
+      );
+      await preview.getByRole('button', { name: 'Confirmar pagamento' }).click();
+      expect((await partial).status()).toBe(201);
+
+      await login(clientPage, 'cliente.aurora@example.test');
+      await expect(clientPage.getByRole('heading', { name: /Minha/ })).toBeVisible();
+      const portalSelect = clientPage.getByRole('combobox', { name: 'Parcela' });
+      const portalReceiptArea = clientPage
+        .getByRole('heading', { name: 'Enviar comprovante de uma cobrança' })
+        .locator('xpath=..');
+      await expect(portalReceiptArea.getByText('Carregando cobranças…')).toBeHidden();
+      for (
+        let pageIndex = 0;
+        pageIndex < 8 &&
+        (await portalSelect.getByRole('option', { name: new RegExp(reference) }).count()) === 0;
+        pageIndex += 1
+      ) {
+        const more = portalReceiptArea.getByRole('button', { name: 'Carregar mais' });
+        if (!(await more.isVisible())) break;
+        await more.click();
+      }
+      await expect(portalSelect.getByRole('option', { name: new RegExp(reference) })).toHaveCount(
+        1,
+      );
+      await portalSelect.selectOption(installmentId);
+      const portalUpload = await formWithSubmitButton(clientPage, 'Enviar e conferir comprovante');
+      await portalUpload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
+        name: `recibo-final-${suffix}.pdf`,
+        mimeType: 'application/pdf',
+        buffer: await receiptPdf('66,66'),
+      });
+      const submitted = clientPage.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/v1/finance/receipts' &&
+          response.request().method() === 'POST',
+      );
+      await portalUpload.getByRole('button', { name: 'Enviar e conferir comprovante' }).click();
+      const submittedResponse = await submitted;
+      expect(submittedResponse.status()).toBe(201);
+      expect(submittedResponse.request().postData()).toContain(installmentId);
+      const submittedReceipt = (await submittedResponse.json()) as {
+        id: string;
+        installmentId: string;
+        clientId: string;
+      };
+      expect(submittedReceipt).toMatchObject({ installmentId, clientId: clientA });
+      const clientReceiptId = submittedReceipt.id;
+      const pending = await browserApi(clientPage, `/finance/receipts/${clientReceiptId}`);
+      expect(bodyAs<{ status: string; paymentId: string | null }>(pending)).toMatchObject({
+        status: 'PENDING_REVIEW',
+        paymentId: null,
+      });
+      assertStatus(
+        await browserApi(clientPage, `/finance/receipts/${clientReceiptId}/confirm`, {
+          method: 'POST',
+          body: {
+            amount: '66.66',
+            paidAt: '2026-10-29T12:00:00-03:00',
+            method: 'PIX',
+            reference: `DENIED-${suffix}`,
+          },
+        }),
+        403,
+        'cliente não pode confirmar o próprio comprovante',
+      );
+
+      await login(secondClientPage, 'cliente.beta@example.test');
+      assertAuthorizationDenial(
+        await browserApi(secondClientPage, `/finance/receipts/${clientReceiptId}`),
+        {
+          status: 404,
+          code: 'not_found',
+          message: 'Comprovante não encontrado',
+          label: 'outro cliente do mesmo escritório não lê comprovante',
+        },
+      );
+      await login(otherOrganizationPage, 'cliente.horizonte@example.test');
+      assertAuthorizationDenial(
+        await browserApi(otherOrganizationPage, `/finance/receipts/${clientReceiptId}`, {
+          organizationId: organizationB,
+        }),
+        {
+          status: 404,
+          code: 'not_found',
+          message: 'Comprovante não encontrado',
+          label: 'outro escritório não lê comprovante',
+        },
+      );
+
+      await financePage.reload();
+      await navigateTo(financePage, /Receb/);
+      const queue = financePage.getByRole('region', {
+        name: 'Comprovantes aguardando conferência',
+      });
+      const review = queue
+        .getByRole('region', { name: 'Conferência do comprovante' })
+        .filter({ hasText: `recibo-final-${suffix}.pdf` });
+      await expect(review).toBeVisible();
+      const final = financePage.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === `/v1/finance/receipts/${clientReceiptId}/confirm`,
+      );
+      await review.getByRole('button', { name: 'Confirmar pagamento' }).click();
+      expect((await final).status()).toBe(201);
+      const confirmed = bodyAs<{ status: string; paymentId: string }>(
+        await browserApi(financePage, `/finance/receipts/${clientReceiptId}`),
+      );
+      expect(confirmed.status).toBe('CONFIRMED');
+      expect(confirmed.paymentId).toBeTruthy();
+      const rows = bodyAs<{
+        items: Array<{
+          reference: string;
+          status: string;
+          installments: Array<{ status: string; allocations: Array<{ amount: string }> }>;
+        }>;
+      }>(
+        await browserApi(
+          financePage,
+          `/finance/receivables?page=1&pageSize=100&clientId=${clientA}`,
+        ),
+      );
+      const persisted = rows.items.find((item) => item.reference === reference);
+      expect(persisted?.status).toBe('PAID');
+      expect(persisted?.installments[0]?.status).toBe('PAID');
+      expect(
+        persisted?.installments[0]?.allocations.map(({ amount }) => amountUnits(amount)),
+      ).toEqual([amountUnits('33.34'), amountUnits('66.66')]);
+    } finally {
+      await otherOrganizationContext.close();
+      await secondClientContext.close();
+      await clientContext.close();
+      await financeContext.close();
     }
   }
 });
