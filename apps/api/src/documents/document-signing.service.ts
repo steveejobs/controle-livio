@@ -13,6 +13,7 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { AuthenticatedActor } from '@livio/shared';
 import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
+import { DocumentScannerService } from './document-scanner.service';
 import { StorageService } from './storage.service';
 
 const signatureBucket = 'document-signatures';
@@ -43,6 +44,7 @@ export class DocumentSigningService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
+    private readonly scanner: DocumentScannerService,
   ) {}
 
   async createRequest(
@@ -274,6 +276,8 @@ export class DocumentSigningService {
     let signedDocumentStored = false;
     try {
       const original = await this.storage.download(request.sourceDocumentVersion.storageKey);
+      await this.scanner.assertClean(original, request.sourceDocumentVersion.mimeType);
+      await this.scanner.assertClean(signature, signatureMime);
       const signedPdf = await this.appendSignature(original, signature, {
         title: request.document.title,
         signerName: request.signerName,
@@ -282,6 +286,7 @@ export class DocumentSigningService {
         sourceSha256: request.sourceDocumentVersion.sha256,
         signatureSha256: signatureHash,
       });
+      await this.scanner.assertClean(signedPdf, 'application/pdf');
       await this.storage.upload(signatureStorageKey, signature, signatureMime, signatureBucket);
       signatureStored = true;
       await this.storage.upload(signedStorageKey, signedPdf, 'application/pdf');

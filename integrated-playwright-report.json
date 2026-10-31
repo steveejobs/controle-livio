@@ -1,0 +1,331 @@
+{
+  "config": {
+    "argv": [
+      "C:\\Program Files\\nodejs\\node.exe",
+      "C:\\Users\\jarde\\Documents\\GitHub\\controle-livio\\node_modules\\@playwright\\test\\cli.js",
+      "test",
+      "--config",
+      "playwright.integrated.config.ts",
+      "--list"
+    ],
+    "configFile": "C:\\Users\\jarde\\Documents\\GitHub\\controle-livio\\playwright.integrated.config.ts",
+    "rootDir": "C:/Users/jarde/Documents/GitHub/controle-livio/apps/web/e2e/integrated",
+    "failOnFlakyTests": false,
+    "forbidOnly": true,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {},
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "C:/Users/jarde/Documents/GitHub/controle-livio/integrated-test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "id": "",
+        "name": "",
+        "testDir": "C:/Users/jarde/Documents/GitHub/controle-livio/apps/web/e2e/integrated",
+        "testIgnore": [],
+        "testMatch": [
+          "*.integrated.e2e.ts"
+        ],
+        "timeout": 90000
+      }
+    ],
+    "filteredProjects": [
+      {
+        "grep": {},
+        "grepInvert": null,
+        "outputDir": "C:\\Users\\jarde\\Documents\\GitHub\\controle-livio\\integrated-test-results",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {},
+        "name": "",
+        "testDir": "C:\\Users\\jarde\\Documents\\GitHub\\controle-livio\\apps\\web\\e2e\\integrated",
+        "snapshotDir": "C:\\Users\\jarde\\Documents\\GitHub\\controle-livio\\apps\\web\\e2e\\integrated",
+        "testIgnore": [],
+        "testMatch": "*.integrated.e2e.ts",
+        "timeout": 90000,
+        "use": {
+          "baseURL": "http://127.0.0.1:3010",
+          "browserName": "chromium",
+          "headless": true,
+          "screenshot": "off",
+          "trace": "off",
+          "video": "off"
+        },
+        "dependencies": [],
+        "ignoreSnapshots": false,
+        "__projectId": ""
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list",
+        null
+      ],
+      [
+        "json",
+        {
+          "outputFile": "integrated-playwright-report.json"
+        }
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "default",
+    "updateSourceMethod": "patch",
+    "version": "1.64.1",
+    "workers": 1,
+    "webServer": null
+  },
+  "suites": [
+    {
+      "title": "real-browser.integrated.e2e.ts",
+      "file": "real-browser.integrated.e2e.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "seletor de cliente: carregamento sob demanda, erro, nova tentativa e lista vazia",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-1f5b01e3d43b08eff8e3",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 916,
+          "column": 5
+        },
+        {
+          "title": "autenticação real, navegação, carregamento sob demanda e compartilhamento de membership",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-04b11f76dd0b939a2807",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 1297,
+          "column": 5
+        },
+        {
+          "title": "navegação repetida em duas sessões e organizações distintas",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-d907a96d7f0812711f78",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 1479,
+          "column": 5
+        },
+        {
+          "title": "jornada 1: cliente, processo, responsável e atualização de status",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-b02935bebe1f66dbe435",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 1573,
+          "column": 5
+        },
+        {
+          "title": "jornada 2: contrato, parcelas, saldo parcial, quitação e idempotência",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-86ac43740ad026820b02",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 1771,
+          "column": 5
+        },
+        {
+          "title": "jornada 3: despesa, aprovação independente, pagamento e fluxo de caixa",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-0500f1a94a1434317565",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 2158,
+          "column": 5
+        },
+        {
+          "title": "jornada 4: upload, download protegido e assinatura eletrônica no navegador",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-7cc8f37dee2e5fce1de3",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 2487,
+          "column": 5
+        },
+        {
+          "title": "jornada 5: tarefa atribuída a advogado e concluída",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-d4f7d23ce696bf6986e0",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 2879,
+          "column": 5
+        },
+        {
+          "title": "jornada 6: portal, documento privado por cliente, mensagem persistida e isolamento",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-eeb15a18981e4f490a08",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 2938,
+          "column": 5
+        },
+        {
+          "title": "perfis admin, advogado, financeiro, secretaria e cliente mantêm permissões e isolamento",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-12343ca59ab187ce038d",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 3173,
+          "column": 5
+        },
+        {
+          "title": "comprovante: leitura, pagamento parcial, portal e quitação conferida",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "",
+              "projectName": "",
+              "results": [],
+              "status": "skipped"
+            }
+          ],
+          "id": "157f1c8326af8821e348-6bb5765c2cf8fa0fb848",
+          "file": "real-browser.integrated.e2e.ts",
+          "line": 3234,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-10-31T05:08:31.421Z",
+    "duration": 3091.2970000000005,
+    "expected": 0,
+    "skipped": 11,
+    "unexpected": 0,
+    "flaky": 0
+  }
+}

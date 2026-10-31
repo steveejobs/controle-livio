@@ -29,7 +29,9 @@ type Receipt = {
       | 'payer'
       | 'beneficiary'
       | 'documentType'
-      | 'e2eId',
+      | 'endToEndId'
+      | 'transactionId'
+      | 'dueDate',
       Field
     >
   >;
@@ -40,6 +42,8 @@ type Receipt = {
     paidAmount: string | null;
     expectedAmount: string | null;
     difference: string | null;
+    dueAmountDifference?: string | null;
+    ledgerDifference?: string | null;
     balanceAfter: string | null;
     dueDate: string;
     paidDate: string | null;
@@ -65,6 +69,14 @@ const flagLabels: Record<string, string> = {
   PENALTY: 'Com multa',
   INSUFFICIENT: 'Abaixo do valor cobrado',
   CHARGE_DIVERGENCE: 'Divergência de cobrança',
+  PARTIAL_PAYMENT: 'Pagamento parcial',
+};
+
+const sourceLabels: Record<Field['source'], string> = {
+  PDF_TEXT: 'Texto selecionável do PDF',
+  OCR: 'Leitura OCR local',
+  FINANCIAL_RECORD: 'Cadastro financeiro do Lívio',
+  CALCULATION: 'Cálculo do sistema',
 };
 
 function message(error: unknown) {
@@ -147,11 +159,18 @@ function ReceiptReview({
       setBusy(false);
     }
   };
-  const row = (label: string, value: string | null | undefined) =>
+  const row = (label: string, value: string | null | undefined, field?: Field) =>
     value ? (
       <div>
         <dt>{label}</dt>
-        <dd>{value}</dd>
+        <dd>
+          {value}
+          {field && (
+            <small className="receipt-field-source">
+              {sourceLabels[field.source]} · revise este dado
+            </small>
+          )}
+        </dd>
       </div>
     ) : null;
   return (
@@ -161,40 +180,73 @@ function ReceiptReview({
         Estado: {current.status === 'PENDING_REVIEW' ? 'Aguardando conferência' : current.status}
       </p>
       <dl className="receipt-comparison">
-        {row('Valor original da parcela ou despesa', formatMoney(review.originalAmount))}
-        {row('Já pago', formatMoney(review.previousPaid))}
-        {row('Saldo antes desta operação', formatMoney(review.balanceBefore))}
+        {row('Obrigação original cadastrada', formatMoney(review.originalAmount))}
+        {row('Já pago anteriormente', formatMoney(review.previousPaid))}
+        {row('Saldo registrado antes desta operação', formatMoney(review.balanceBefore))}
         {row(
           'Valor lido no comprovante',
           review.paidAmount ? formatMoney(review.paidAmount) : 'Não identificado',
+          fields.paidAmount,
         )}
         {row(
           'Valor nominal lido',
           fields.nominalAmount?.value ? formatMoney(fields.nominalAmount.value) : undefined,
+          fields.nominalAmount,
         )}
-        {row('Desconto', fields.discount?.value ? formatMoney(fields.discount.value) : undefined)}
-        {row('Juros', fields.interest?.value ? formatMoney(fields.interest.value) : undefined)}
-        {row('Multa', fields.penalty?.value ? formatMoney(fields.penalty.value) : undefined)}
+        {row(
+          'Valor devido indicado no comprovante',
+          fields.dueAmount?.value ? formatMoney(fields.dueAmount.value) : undefined,
+          fields.dueAmount,
+        )}
+        {row(
+          'Desconto',
+          fields.discount?.value ? formatMoney(fields.discount.value) : undefined,
+          fields.discount,
+        )}
+        {row(
+          'Juros',
+          fields.interest?.value ? formatMoney(fields.interest.value) : undefined,
+          fields.interest,
+        )}
+        {row(
+          'Multa',
+          fields.penalty?.value ? formatMoney(fields.penalty.value) : undefined,
+          fields.penalty,
+        )}
         {row(
           'Valor esperado pelo documento',
           review.expectedAmount ? formatMoney(review.expectedAmount) : undefined,
         )}
-        {row('Diferença', review.difference ? formatMoney(review.difference) : undefined)}
+        {row(
+          'Diferença entre pago e valor calculado do documento',
+          review.difference ? formatMoney(review.difference) : undefined,
+        )}
+        {row(
+          'Diferença entre valor devido e cálculo do documento',
+          review.dueAmountDifference ? formatMoney(review.dueAmountDifference) : undefined,
+        )}
+        {row(
+          'Diferença entre cobrança e saldo do Lívio',
+          review.ledgerDifference ? formatMoney(review.ledgerDifference) : undefined,
+        )}
         {row(
           'Saldo previsto após aplicação',
           review.balanceAfter ? formatMoney(review.balanceAfter) : undefined,
         )}
-        {row('Vencimento cadastrado', displayDate(review.dueDate))}
-        {row('Pagamento identificado', displayDate(review.paidDate))}
-        {row('Pagador', fields.payer?.value)}
-        {row('Beneficiário', fields.beneficiary?.value)}
+        {row('Vencimento cadastrado no Lívio', displayDate(review.dueDate))}
+        {row('Pagamento identificado', displayDate(review.paidDate), fields.paidDate)}
         {row(
-          'Origem e confiança do valor',
-          fields.paidAmount
-            ? `${fields.paidAmount.source} · ${Math.round(fields.paidAmount.confidence * 100)}%`
-            : undefined,
+          'Vencimento indicado no comprovante',
+          displayDate(fields.dueDate?.value),
+          fields.dueDate,
         )}
+        {row('Pagador', fields.payer?.value, fields.payer)}
+        {row('Beneficiário', fields.beneficiary?.value, fields.beneficiary)}
       </dl>
+      <p>
+        A origem indica como o dado foi obtido; não representa uma taxa de precisão. Confira os
+        valores antes de confirmar.
+      </p>
       <p>
         Leitura automática: {outcomeLabels[review.outcome] ?? review.outcome}.
         {review.flags?.length
@@ -240,7 +292,7 @@ function ReceiptReview({
               name="reference"
               required
               maxLength={100}
-              defaultValue={fields.e2eId?.value ?? `COMPROVANTE-${current.id.slice(0, 8)}`}
+              defaultValue={fields.endToEndId?.value ?? `COMPROVANTE-${current.id.slice(0, 8)}`}
             />
           </label>
           <label className="form-wide">

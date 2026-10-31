@@ -10,6 +10,7 @@ import { DocumentSettingsService } from './document-settings.service';
 import { StorageService } from './storage.service';
 import { DocumentUploadAdmissionInterceptor } from './document-upload-guards';
 import { DocumentScannerService } from './document-scanner.service';
+import { PdfContentInspectionService } from './pdf-content-inspection.service';
 
 @Module({
   imports: [AuthModule, AuditModule],
@@ -22,6 +23,7 @@ import { DocumentScannerService } from './document-scanner.service';
     StorageService,
     DocumentUploadAdmissionInterceptor,
     DocumentScannerService,
+    PdfContentInspectionService,
   ],
   exports: [
     DocumentsService,

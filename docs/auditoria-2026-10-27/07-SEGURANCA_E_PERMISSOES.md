@@ -1,0 +1,49 @@
+# Segurança e permissões
+
+## Modelo de identidade e autorização
+
+Supabase Auth é a identidade efetiva. Web usa integração SSR/session; API valida token via claims, resolve OrganizationMember ativo, roles e permissões. Se há uma membership, ela é assumida; com múltiplas, API exige organização selecionada por X-Organization-Id. Todos os endpoints privados passam por AuthenticationGuard, PermissionGuard e TenantContextInterceptor. Operações administrativas usam também RequireAdministrator. O cliente pode ocultar áreas, mas isso não substitui controle no servidor.
+
+Papéis de sistema encontrados em packages/shared/src/permissions.ts:
+
+| Papel         | Capacidades indicativas                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| administrator | Gestão ampla da organização e operações administrativas/sensíveis.                                           |
+| lawyer        | Clientes, processos, contratos, documentos e trabalho; leitura financeira definida por permission codes.     |
+| secretary     | Clientes, processos, documentos e trabalho conforme permissões atribuídas.                                   |
+| finance       | Contratos, recebíveis, pagamentos, despesas e relatórios; algumas decisões sensíveis exigem admin adicional. |
+| client        | Acesso somente a dados vinculados e visíveis no portal/mensagens.                                            |
+
+Papéis são combinados por permission codes. O administrador é identificado pelo papel oficial administrator, não apenas por uma combinação equivalente de permissões. Custom roles podem ser criados, mas o ciclo de edição/remoção/atribuição está incompleto na API identificada.
+
+## Proteções observadas no código
+
+- JWT, seleção de membership e escopo da organização; organização é incluída em queries de serviço e policies SQL.
+- Permissão explícita por handler; validação Zod, whitelist/forbidNonWhitelisted, UUID e validação de arquivo.
+- RLS/grants em migrações, buckets privados e URLs assinadas com validade curta.
+- Segredos privilegiados usados no backend, não enviados à UI.
+- Helmet, CORS com allowlist, CSP/HSTS e headers de segurança configurados.
+- Pino redige authorization, cookies e campos sensíveis do corpo; filtro de erro generaliza exceções 5xx e inclui requestId.
+- Operações financeiras críticas usam transações e registros compensatórios/auditáveis.
+- Cron usa segredo comparado em tempo constante; dispatch usa HMAC timestamp, expiração e mecanismo de claim/replay.
+- Tokens de assinatura são aleatórios, armazenados como hash, expiram e têm limite por token.
+
+## Matriz de riscos estáticos
+
+| ID  | Risco                                                                                                                                                                                                                                                             |                                                                                    Impacto |                                            Probabilidade | Evidência e classificação                                                                                                                                                   |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -----------------------------------------------------------------------------------------: | -------------------------------------------------------: | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S01 | Token de assinatura bearer está no path da URL. pino-http serializa URL da requisição por padrão, mas configuração redige headers/corpo e não req.url. ApiExceptionFilter também coloca request.originalUrl no corpo de erro.                                     |                                   Alto: posse do link permite ler/assinar enquanto válido. | Média, condicionada a rota/logs/erros e acesso aos logs. | IDENTIFICADO NO CÓDIGO; risco de exposição em logs ou resposta de erro, não foi observado log real. app.module.ts, api-exception.filter.ts, document-signing.controller.ts. |
+| S02 | Rotas públicas não têm limite global por IP/ator. RequestRateLimitGuard ignora requests sem actor; busca de token inválido pode chegar ao banco antes do throttle por token.                                                                                      | Médio/alto: consumo de recursos e ruído de DB; token tem alta entropia, reduz adivinhação. |                                                   Média. | IDENTIFICADO NO CÓDIGO; sem teste de carga/abuso.                                                                                                                           |
+| S03 | Upload de documento é bufferizado em memória até 100 MiB no FileInterceptor, antes do limite configurável de serviço (default 20 MiB).                                                                                                                            |                                          Alto em concorrência: pressão/negação de serviço. |        Média, depende de tráfego e limite da plataforma. | CONFIRMADO na implementação; exploração não executada. documents.controller.ts / documents.service.ts.                                                                      |
+| S04 | Usuário com mais de uma membership não consegue selecionar organização pela UI observada: API exige X-Organization-Id, web lê localStorage, mas não foi localizado seletor/escrita ou endpoint de memberships.                                                    |                 Médio: bloqueio de acesso legítimo; não indica por si só bypass de tenant. |                      Alta para contas multi-organização. | CONFIRMADO por busca estática no checkout.                                                                                                                                  |
+| S05 | Nove vulnerabilidades no grafo de produção reportado por npm audit --omit=dev: 7 high, 2 moderate. Inclui body-parser, deepmerge-ts via Prisma config, js-yaml via Swagger, multer via platform-express e Zod. Algumas correções propostas exigem upgrades major. |                      Potencial alto; explorabilidade depende do uso/exposição das versões. |                                         Não determinada. | Resultado de auditoria de dependências executado; NÃO CONFIRMADO impacto explorável. Sem atualização feita.                                                                 |
+| S06 | Scanner antimalware de anexos não encontrado; validação MIME/assinatura/tamanho não detecta conteúdo malicioso sofisticado.                                                                                                                                       |                            Alto para escritório e clientes se arquivo perigoso for aberto. |                                     Média/indeterminada. | Ausência estática no código e documentação, não teste de ataque.                                                                                                            |
+| S07 | E-mail customizado/SMTP não está demonstrado; senha mínima de 6 caracteres está configurada.                                                                                                                                                                      |                                       Médio: recuperação e resistência a credencial fraca. |                                                   Média. | Código/configuração observados; entrega e política efetiva de Auth remota não verificadas.                                                                                  |
+| S08 | Disponibilidade de backups e restore de DB/Storage não foi provada nesta auditoria.                                                                                                                                                                               |                                                   Alto se incidente causar perda de dados. |                                            Desconhecida. | Lacuna operacional, não falha reproduzida.                                                                                                                                  |
+| S09 | Assinatura eletrônica demonstra consentimento e trilha documental, mas não identidade forte, certificado ICP-Brasil ou assinatura avançada qualificada.                                                                                                           |                       Alto em disputa se comercializada como garantia jurídica mais forte. |                                 Depende do uso/alegação. | Limite funcional reconhecido no próprio histórico/código; revisão jurídica necessária.                                                                                      |
+
+## Pontos seguros sem confirmação operacional
+
+Não foram executados ataques, fuzzing, exploração, alteração de dados, teste remoto, checagem de permissões em produção nem varredura de superfície publicada. Também não houve consulta à RLS viva do banco. A existência de guard/RLS no código não certifica configuração em produção.
+
+Revisões recomendadas devem conferir: validação de sessão e recovery no alvo correto; matriz de permissão por papel e objeto; RLS de todas as tabelas/buckets; redaction de path sensível; limites de request/arquivo; CSP e upload; dependências e configuração operacional; trilha de auditoria e restauração.

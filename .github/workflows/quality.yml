@@ -44,19 +44,21 @@ jobs:
       - run: npm test
       - run: npm run db:validate
       - run: npm run build
+      - name: Verify OCR assets and extraction from the compiled API
+        run: node tools/qa/verify-receipt-runtime-ci.mjs
       - run: npm run perf:bundle
       - run: npx playwright install --with-deps chromium
       - name: Playwright mocked E2E
         run: npm run test:e2e
         timeout-minutes: 15
-      - name: Upload Playwright report and traces
+      - name: Upload sanitized Playwright run summary
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: playwright-report
           path: |
-            playwright-report/
-            test-results/
+            test-results/.last-run.json
+            ${{ runner.temp }}/livio-integrated-artifacts/receipt-runtime-validation.json
           if-no-files-found: ignore
 
   supabase-isolation:
@@ -104,6 +106,9 @@ jobs:
       - name: Verify scanner timeout and unavailable fail-closed behavior
         if: ${{ always() && steps.clamav-start.outcome == 'success' }}
         run: node tools/qa/validate-clamav-ci.mjs --failure-modes
+      - name: Verify receipt migration, database roles, RLS and concurrent identifiers
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: node tools/qa/verify-payment-receipts-ci.mjs
       - name: Upload sanitized integrated evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -123,6 +128,7 @@ jobs:
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results/**
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results-focused/**
             ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/receipt-migration-validation.json
             ${{ runner.temp }}/livio-integrated-artifacts/rate-limit-isolation.json
             ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log
             ${{ runner.temp }}/livio-integrated-artifacts/api-timings-focused.log

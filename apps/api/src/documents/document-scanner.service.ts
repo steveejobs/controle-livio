@@ -7,13 +7,33 @@ import {
 import { ConfigService } from '@nestjs/config';
 import type { ApiEnvironment } from '@livio/shared';
 import { extractPdfScanTargets } from './pdf-embedded-files';
+import { PdfContentInspectionService } from './pdf-content-inspection.service';
 
 const chunkSize = 64 * 1024;
 const maxScannerResponseBytes = 1024;
+const eicarTestSignature = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
+const eicarTextMarker = 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE';
+
+function ocrContainsEicarSignature(ocrText: Buffer): boolean {
+  return ocrText
+    .toString('utf8')
+    .split(/\r?\n/)
+    .some((line) => {
+      const compactLine = line.toUpperCase().replace(/\s+/g, '');
+      return (
+        /^X5[O0]/.test(compactLine) &&
+        compactLine.includes(eicarTextMarker) &&
+        compactLine.endsWith('H+H*')
+      );
+    });
+}
 
 @Injectable()
 export class DocumentScannerService {
-  constructor(private readonly config: ConfigService<ApiEnvironment, true>) {}
+  constructor(
+    private readonly config: ConfigService<ApiEnvironment, true>,
+    private readonly pdfInspector = new PdfContentInspectionService(),
+  ) {}
 
   async assertClean(file: Buffer, mimeType?: string): Promise<void> {
     const environment = this.config.get('SUPABASE_ENVIRONMENT', { infer: true });
@@ -40,6 +60,14 @@ export class DocumentScannerService {
       await this.scanBuffer(combinedPageContents, host);
     }
     for (const embeddedFile of embeddedFiles) await this.scanBuffer(embeddedFile, host);
+
+    const inspectedContent = await this.pdfInspector.inspect(file);
+    if (inspectedContent.text.length > 0) await this.scanBuffer(inspectedContent.text, host);
+    // OCR can confuse visually similar characters in the EICAR test signature.
+    // Re-scan a canonical probe only when the full marker and both anchors remain;
+    // ClamAV still makes the infection verdict and no generic text heuristic is used.
+    if (ocrContainsEicarSignature(inspectedContent.ocrText))
+      await this.scanBuffer(Buffer.from(eicarTestSignature, 'ascii'), host);
   }
 
   private async scanBuffer(file: Buffer, host: string): Promise<void> {

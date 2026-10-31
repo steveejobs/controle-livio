@@ -35,8 +35,12 @@ const require = createRequire(import.meta.url);
 const {
   DocumentScannerService,
 } = require('../../apps/api/dist/documents/document-scanner.service.js');
+const {
+  PdfContentInspectionService,
+} = require('../../apps/api/dist/documents/pdf-content-inspection.service.js');
 const { extractPdfScanTargets } = require('../../apps/api/dist/documents/pdf-embedded-files.js');
-const { PDFDocument } = require('pdf-lib');
+const { createCanvas } = require('@napi-rs/canvas');
+const { PDFDocument, StandardFonts } = require('pdf-lib');
 const { ServiceUnavailableException } = require('@nestjs/common');
 const outputDirectory = join(runnerTemp, 'livio-integrated-artifacts');
 const reportPath = join(outputDirectory, 'clamav-rehearsal.json');
@@ -63,7 +67,10 @@ function service(overrides = {}) {
     CLAMAV_TIMEOUT_MS: timeoutMs,
     ...overrides,
   };
-  return new DocumentScannerService({ get: (key) => values[key] });
+  return new DocumentScannerService(
+    { get: (key) => values[key] },
+    new PdfContentInspectionService(),
+  );
 }
 
 function record(name, status, details) {
@@ -131,9 +138,19 @@ async function recordVerdict(name, operation, expectedStatus, verdict) {
   }
 }
 
-async function pdfBytes({ embeddedFile, compress = true, pageContentEicar = false } = {}) {
+async function pdfBytes({
+  embeddedFile,
+  compress = true,
+  pageContentEicar = false,
+  pageTextEicar = false,
+  scannedPageText,
+} = {}) {
   const document = await PDFDocument.create();
-  const page = document.addPage([300, 144]);
+  const page = document.addPage(scannedPageText ? [6_000, 300] : [600, 144]);
+  if (pageTextEicar) {
+    const font = await document.embedFont(StandardFonts.Courier);
+    page.drawText(eicar, { x: 12, y: 72, size: 9, font });
+  }
   if (pageContentEicar) {
     const imageContent = Buffer.concat([
       Buffer.from(
@@ -145,6 +162,17 @@ async function pdfBytes({ embeddedFile, compress = true, pageContentEicar = fals
     ]);
     const pageContentStream = document.context.flateStream(imageContent);
     page.node.addContentStream(document.context.register(pageContentStream));
+  }
+  if (scannedPageText) {
+    const canvas = createCanvas(6_000, 300);
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, 6_000, 300);
+    context.fillStyle = '#000';
+    context.font = '120px Arial';
+    context.fillText(scannedPageText, 20, 210);
+    const image = await document.embedPng(canvas.toBuffer('image/png'));
+    page.drawImage(image, { x: 0, y: 0, width: 6_000, height: 300 });
   }
   if (embeddedFile !== undefined)
     await document.attach(Buffer.from(embeddedFile, 'ascii'), 'eicar.com', {
@@ -231,11 +259,14 @@ async function runPdfEicarMatrix() {
   const fixtureBytes = [
     ['raw-eicar.bin', Buffer.from(eicar, 'ascii')],
     ['clean.pdf', await pdfBytes()],
-    ['page-content-eicar.pdf', await pdfBytes({ pageContentEicar: true })],
+    ['page-text-eicar.pdf', await pdfBytes({ pageTextEicar: true })],
+    ['page-stream-image-bytes-eicar.pdf', await pdfBytes({ pageContentEicar: true })],
+    ['scanned-page-eicar.pdf', await pdfBytes({ scannedPageText: eicar })],
     ['embedded-eicar-uncompressed.pdf', await pdfBytes({ embeddedFile: eicar, compress: false })],
     ['embedded-eicar-compressed.pdf', await pdfBytes({ embeddedFile: eicar })],
     ['embedded-clean-parser-verified.pdf', await pdfBytes({ embeddedFile: benignAttachment })],
   ];
+  const inspector = new PdfContentInspectionService();
   const results = [];
   const persistMatrixProgress = (status = 'IN_PROGRESS') => {
     report.results['clamav-pdf-matrix'] = {
@@ -250,10 +281,12 @@ async function runPdfEicarMatrix() {
     const { hostPath, containerPath } = saveFixture(name, bytes);
     const isPdf = name.endsWith('.pdf');
     let targets = { pageContents: [], embeddedFiles: [] };
+    let inspection;
     let parserError;
     if (isPdf) {
       try {
         targets = await extractPdfScanTargets(bytes);
+        inspection = await inspector.inspect(bytes);
       } catch (error) {
         parserError = error instanceof Error ? error.message.slice(0, 240) : 'PDF parse failed';
       }
@@ -267,10 +300,38 @@ async function runPdfEicarMatrix() {
       (name === 'raw-eicar.bin'
         ? bytes.equals(expectedContents)
         : name === 'clean.pdf'
-          ? targets.pageContents.length === 0 && targets.embeddedFiles.length === 0
-          : name === 'page-content-eicar.pdf'
-            ? targets.pageContents.some((stream) => stream.includes(expectedContents))
-            : targets.embeddedFiles.some((stream) => stream.equals(expectedContents)));
+          ? targets.pageContents.length === 0 &&
+            targets.embeddedFiles.length === 0 &&
+            inspection.text.length === 0 &&
+            inspection.ocrText.length === 0
+          : name === 'page-text-eicar.pdf'
+            ? !bytes.includes(expectedContents) &&
+              targets.pageContents.some((stream) =>
+                stream.toString('latin1').includes(expectedContents.toString('hex').toUpperCase()),
+              ) &&
+              !targets.pageContents.some((stream) => stream.includes(expectedContents)) &&
+              inspection.text.includes(expectedContents) &&
+              inspection.ocrText.length === 0
+            : name === 'page-stream-image-bytes-eicar.pdf'
+              ? targets.pageContents.some((stream) => stream.includes(expectedContents)) &&
+                !inspection.text.includes(expectedContents) &&
+                !inspection.ocrText.includes(expectedContents)
+              : name === 'scanned-page-eicar.pdf'
+                ? inspection.ocrPageCount === 1 &&
+                  /^X5[O0]/.test(
+                    inspection.ocrText.toString('utf8').toUpperCase().replace(/\s+/g, ''),
+                  ) &&
+                  inspection.ocrText
+                    .toString('utf8')
+                    .toUpperCase()
+                    .replace(/\s+/g, '')
+                    .includes('EICAR-STANDARD-ANTIVIRUS-TEST-FILE') &&
+                  inspection.ocrText
+                    .toString('utf8')
+                    .toUpperCase()
+                    .replace(/\s+/g, '')
+                    .endsWith('H+H*')
+                : targets.embeddedFiles.some((stream) => stream.equals(expectedContents)));
     if (!parserVerified) {
       results.push({
         fixture: name,
@@ -279,6 +340,8 @@ async function runPdfEicarMatrix() {
         parserError: parserError ?? 'expected content was not recovered from the fixture structure',
         pageStreamsDecoded: targets.pageContents.length,
         embeddedFilesExtracted: targets.embeddedFiles.length,
+        pageCount: inspection?.pageCount ?? null,
+        ocrPageCount: inspection?.ocrPageCount ?? null,
         fixtureContentsVerifiedByParser: false,
       });
       persistMatrixProgress();
@@ -297,6 +360,8 @@ async function runPdfEicarMatrix() {
           externalValidator: 'qpdf --check FAIL',
           pageStreamsDecoded: targets.pageContents.length,
           embeddedFilesExtracted: targets.embeddedFiles.length,
+          pageCount: inspection?.pageCount ?? null,
+          ocrPageCount: inspection?.ocrPageCount ?? null,
           fixtureContentsVerifiedByParser: parserVerified,
         });
         persistMatrixProgress();
@@ -307,11 +372,31 @@ async function runPdfEicarMatrix() {
     const clamdscan = directScan('clamdscan', name, hostPath, containerPath);
     results.push({
       fixture: name,
+      contentKind:
+        name === 'raw-eicar.bin'
+          ? 'raw EICAR control'
+          : name === 'clean.pdf'
+            ? 'clean PDF without text or attachments'
+            : name === 'page-text-eicar.pdf'
+              ? 'visible page text hex encoded in a compressed PDF content stream'
+              : name === 'page-stream-image-bytes-eicar.pdf'
+                ? 'literal EICAR bytes in inline image samples; not visible text'
+                : name === 'scanned-page-eicar.pdf'
+                  ? 'EICAR rendered as a scanned page image and inspected by OCR'
+                  : name.startsWith('embedded-eicar')
+                    ? 'EmbeddedFile attachment'
+                    : 'clean EmbeddedFile attachment',
       bytes: bytes.length,
       parserValidated: true,
       externalValidator: isPdf && qpdfAvailable ? 'qpdf --check PASS' : null,
       pageStreamsDecoded: targets.pageContents.length,
       embeddedFilesExtracted: targets.embeddedFiles.length,
+      pageCount: inspection?.pageCount ?? null,
+      ocrPageCount: inspection?.ocrPageCount ?? null,
+      pageTextContainsEicar: inspection?.text.toString('ascii').includes(eicar) ?? false,
+      ocrTextContainsEicarCore:
+        inspection?.ocrText.toString('ascii').includes('EICAR-STANDARD-ANTIVIRUS-TEST-FILE') ??
+        false,
       fixtureContentsVerifiedByParser: parserVerified,
       clamscan,
       clamdscan,
@@ -321,6 +406,8 @@ async function runPdfEicarMatrix() {
 
   const raw = results.find(({ fixture }) => fixture === 'raw-eicar.bin');
   const clean = results.find(({ fixture }) => fixture === 'clean.pdf');
+  const pageText = results.find(({ fixture }) => fixture === 'page-text-eicar.pdf');
+  const scannedPage = results.find(({ fixture }) => fixture === 'scanned-page-eicar.pdf');
   const cleanAttachment = results.find(
     ({ fixture }) => fixture === 'embedded-clean-parser-verified.pdf',
   );
@@ -331,6 +418,8 @@ async function runPdfEicarMatrix() {
     clean.clamdscan.verdict === 'CLEAN' &&
     cleanAttachment?.clamscan?.verdict === 'CLEAN' &&
     cleanAttachment.clamdscan.verdict === 'CLEAN';
+  const pdfTextExtractionPass = pageText?.fixtureContentsVerifiedByParser === true;
+  const ocrExtractionPass = scannedPage?.fixtureContentsVerifiedByParser === true;
   const directScanCasesComplete =
     qpdfAvailable &&
     results.length === fixtureBytes.length &&
@@ -345,33 +434,112 @@ async function runPdfEicarMatrix() {
   const extractedInfectedPdf = service();
   let applicationExtractionPass = true;
   let isolatedStreamScanPass = true;
-  for (const name of [
-    'page-content-eicar.pdf',
-    'embedded-eicar-uncompressed.pdf',
-    'embedded-eicar-compressed.pdf',
-  ]) {
+  let isolatedTextScanPass = true;
+  for (const name of ['embedded-eicar-uncompressed.pdf', 'embedded-eicar-compressed.pdf']) {
     const bytes = fixtureBytes.find(([fixture]) => fixture === name)?.[1];
     if (!bytes) fail(`the generated scanner matrix is missing ${name}.`);
     const targets = await extractPdfScanTargets(bytes);
-    const scanTarget = (
-      name === 'page-content-eicar.pdf' ? targets.pageContents : targets.embeddedFiles
-    ).find((content) => content.includes(Buffer.from(eicar, 'ascii')));
+    const scanTarget = targets.embeddedFiles.find((content) =>
+      content.includes(Buffer.from(eicar, 'ascii')),
+    );
     if (!scanTarget) fail(`the expected EICAR scan target was not extracted from ${name}.`);
     isolatedStreamScanPass =
       (await recordExpectedStatus(
         `isolated-stream-${name}`,
         () => extractedInfectedPdf.assertClean(scanTarget),
         422,
-        { verdict: 'decoded-stream-detected-by-clamd' },
+        { verdict: 'embedded-file-extracted-and-detected-by-clamd' },
       )) && isolatedStreamScanPass;
     applicationExtractionPass =
       (await recordExpectedStatus(
         `application-extracted-${name}`,
         () => extractedInfectedPdf.assertClean(bytes, 'application/pdf'),
         422,
-        { verdict: 'pdf-content-rejected-after-application-extraction' },
+        { verdict: 'embedded-file-rejected-after-application-extraction' },
       )) && applicationExtractionPass;
   }
+  for (const name of ['page-text-eicar.pdf', 'scanned-page-eicar.pdf']) {
+    const bytes = fixtureBytes.find(([fixture]) => fixture === name)?.[1];
+    if (!bytes) fail(`the generated scanner matrix is missing ${name}.`);
+    const inspection = await inspector.inspect(bytes);
+    const text = name === 'page-text-eicar.pdf' ? inspection.text : inspection.ocrText;
+    const extractedFixture = saveFixture(`${name}.extracted.txt`, text);
+    const extractedClamscan = directScan(
+      'clamscan',
+      `${name}-extracted-text`,
+      extractedFixture.hostPath,
+      extractedFixture.containerPath,
+    );
+    const extractedClamdscan = directScan(
+      'clamdscan',
+      `${name}-extracted-text`,
+      extractedFixture.hostPath,
+      extractedFixture.containerPath,
+    );
+    const directTextScanPass =
+      name === 'page-text-eicar.pdf'
+        ? extractedClamscan.verdict === 'INFECTED' && extractedClamdscan.verdict === 'INFECTED'
+        : ['CLEAN', 'INFECTED'].includes(extractedClamscan.verdict) &&
+          ['CLEAN', 'INFECTED'].includes(extractedClamdscan.verdict);
+    isolatedTextScanPass = directTextScanPass && isolatedTextScanPass;
+    const applicationPassed = await recordExpectedStatus(
+      `application-extracted-${name}`,
+      () => extractedInfectedPdf.assertClean(bytes, 'application/pdf'),
+      422,
+      {
+        verdict:
+          name === 'scanned-page-eicar.pdf'
+            ? 'OCR-EICAR-fingerprint-rechecked-by-clamd'
+            : 'PDF.js-page-text-scanned-by-clamd',
+      },
+    );
+    applicationExtractionPass = applicationPassed && applicationExtractionPass;
+    record(`isolated-extracted-text-${name}`, directTextScanPass ? 'PASS' : 'FAIL', {
+      extractedTextBytes: text.length,
+      clamscan: extractedClamscan,
+      clamdscan: extractedClamdscan,
+      applicationPassed,
+      note:
+        name === 'scanned-page-eicar.pdf'
+          ? 'OCR output contains the EICAR core but confuses punctuation; the app sends the anchored canonical test signature to ClamAV.'
+          : 'PDF.js extracted the compressed page text, which ClamAV detects as EICAR.',
+    });
+  }
+  const inlineImageBytes = fixtureBytes.find(
+    ([fixture]) => fixture === 'page-stream-image-bytes-eicar.pdf',
+  )?.[1];
+  if (!inlineImageBytes) fail('the inline-image byte fixture is missing.');
+  const inlineInspection = await inspector.inspect(inlineImageBytes);
+  const inlineTargets = await extractPdfScanTargets(inlineImageBytes);
+  const inlineStream = inlineTargets.pageContents.find((content) =>
+    content.includes(Buffer.from(eicar, 'ascii')),
+  );
+  if (!inlineStream) fail('the inline-image byte fixture was not extracted.');
+  const extractedStream = saveFixture('inline-image-eicar-stream.bin', inlineStream);
+  const inlineStreamVerdict = directScan(
+    'clamdscan',
+    'inline-image-eicar-stream',
+    extractedStream.hostPath,
+    extractedStream.containerPath,
+  );
+  let inlineApplicationVerdict = 'CLEAN';
+  try {
+    await extractedInfectedPdf.assertClean(inlineImageBytes, 'application/pdf');
+  } catch (error) {
+    inlineApplicationVerdict = statusOf(error) === 422 ? 'INFECTED' : 'ERROR';
+  }
+  const inlineImageDistinctionPass =
+    !inlineInspection.text.toString('ascii').includes(eicar) &&
+    !inlineInspection.ocrText.toString('ascii').includes(eicar) &&
+    ['CLEAN', 'INFECTED'].includes(inlineStreamVerdict.verdict) &&
+    ['CLEAN', 'INFECTED'].includes(inlineApplicationVerdict);
+  record('inline-image-binary-eicar-distinction', inlineImageDistinctionPass ? 'PASS' : 'FAIL', {
+    contentKind: 'literal EICAR bytes in inline-image samples; not visible text or OCR output',
+    pdfjsTextContainsEicar: inlineInspection.text.toString('ascii').includes(eicar),
+    ocrTextContainsEicar: inlineInspection.ocrText.toString('ascii').includes(eicar),
+    decodedStreamVerdict: inlineStreamVerdict.verdict,
+    applicationVerdict: inlineApplicationVerdict,
+  });
   const cleanAttachmentBytes = fixtureBytes.find(
     ([fixture]) => fixture === 'embedded-clean-parser-verified.pdf',
   )?.[1];
@@ -395,20 +563,28 @@ async function runPdfEicarMatrix() {
     status:
       baseScannerCasesPass &&
       directScanCasesComplete &&
+      pdfTextExtractionPass &&
+      ocrExtractionPass &&
       fixtureParserPass &&
       isolatedStreamScanPass &&
+      isolatedTextScanPass &&
       applicationExtractionPass &&
+      inlineImageDistinctionPass &&
       cleanAttachmentApplicationPass
         ? 'PASS'
         : 'FAIL',
     baseScannerCasesPass,
     directScanCasesComplete,
+    pdfTextExtractionPass,
+    ocrExtractionPass,
     fixtureParserPass,
     isolatedStreamScanPass,
+    isolatedTextScanPass,
     applicationExtractionPass,
+    inlineImageDistinctionPass,
     qpdfAvailable,
     qpdfVersion: qpdfAvailable ? qpdfVersion.stdout.trim() : null,
-    note: 'Direct PDF verdicts are recorded per scanner; decoded page and embedded streams are separately scanned by the application.',
+    note: 'Original files, page streams, EmbeddedFiles, PDF.js text, and OCR are tested separately. OCR can confuse EICAR punctuation; the app only canonicalizes an OCR line when the full EICAR marker and start/end anchors remain, then asks ClamAV for the verdict.',
     fixtures: results,
   };
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');

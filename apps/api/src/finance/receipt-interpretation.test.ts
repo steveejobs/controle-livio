@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   brazilianDate,
   decimalFromBrazilian,
+  financialTransactionExternalId,
   interpretReceiptText,
   reconcileReceipt,
 } from './receipt-interpretation';
@@ -15,7 +16,8 @@ describe('interpretação de comprovantes sintéticos em português', () => {
     expect(result.fields.documentType?.value).toBe('PIX');
     expect(result.fields.paidAmount?.value).toBe('33.34');
     expect(result.fields.paidDate?.value).toBe('2026-10-28');
-    expect(result.fields.e2eId?.value).toBe('E12345678202610281435ABCDEF123456');
+    expect(result.fields.endToEndId?.value).toBe('E12345678202610281435ABCDEF123456');
+    expect(financialTransactionExternalId(result.fields)).toMatch(/^livio-receipt:v1:PIX_E2E:/);
     expect(result.fields.nominalAmount).toBeUndefined();
     expect(result.fields.paidAmount?.source).toBe('PDF_TEXT');
   });
@@ -39,6 +41,82 @@ describe('interpretação de comprovantes sintéticos em português', () => {
     expect(comparison.timing).toBe('LATE');
     expect(comparison.flags).toContain('DISCOUNT');
     expect(comparison.flags).toContain('INTEREST');
+  });
+
+  it('compara valor devido explícito, fórmula do boleto e saldo do Lívio sem confundir pagamento parcial', () => {
+    const fields = interpretReceiptText(
+      `Boleto
+Valor nominal: R$ 100,00
+Desconto: R$ 5,00
+Juros: R$ 1,25
+Multa: R$ 2,00
+Valor devido: R$ 98,25
+Valor pago: R$ 33,34
+Data do pagamento: 29/10/2026`,
+      'PDF_TEXT',
+    ).fields;
+    const partial = reconcileReceipt({
+      originalAmount: '100.00',
+      previousPaid: '0.00',
+      balance: '100.00',
+      dueDate: '2026-10-29',
+      fields,
+      today: '2026-10-31',
+    });
+    expect(partial.expectedAmount).toBe('98.25');
+    expect(partial.difference).toBe('-64.91');
+    expect(partial.dueAmountDifference).toBe('0.00');
+    expect(partial.ledgerDifference).toBe('-1.75');
+    expect(partial.outcome).toBe('PARTIAL');
+    expect(partial.balanceAfter).toBe('66.66');
+    expect(partial.flags).toContain('PARTIAL_PAYMENT');
+
+    const contradictory = reconcileReceipt({
+      originalAmount: '100.00',
+      previousPaid: '0.00',
+      balance: '100.00',
+      dueDate: '2026-10-29',
+      fields: { ...fields, dueAmount: { ...fields.dueAmount!, value: '97.25' } },
+      today: '2026-10-31',
+    });
+    expect(contradictory.dueAmountDifference).toBe('-1.00');
+    expect(contradictory.warnings).toContain(
+      'O valor devido difere do valor calculado com valor nominal, desconto, juros e multa.',
+    );
+  });
+
+  it('gera identificador bancário opaco, tipado e não inventa chave quando o tipo é desconhecido', () => {
+    const transfer = interpretReceiptText(
+      `Transferência
+Banco: Banco Sintético
+Valor pago: R$ 12,00
+Data do pagamento: 29/10/2026
+Identificador da transação: TX-ABC-123456`,
+      'PDF_TEXT',
+    ).fields;
+    const key = financialTransactionExternalId(transfer);
+    expect(key).toMatch(/^livio-receipt:v1:TRANSFER_TRANSACTION:[a-f0-9]{64}$/);
+    expect(key).not.toContain('TX-ABC-123456');
+    expect(
+      financialTransactionExternalId({
+        ...transfer,
+        institution: { value: 'Banco Outro', source: 'PDF_TEXT', confidence: 0.88 },
+      }),
+    ).not.toBe(key);
+    expect(financialTransactionExternalId({ ...transfer, institution: undefined })).toBeUndefined();
+    expect(
+      financialTransactionExternalId({
+        ...transfer,
+        documentType: { value: 'OUTRO', source: 'PDF_TEXT', confidence: 0.88 },
+      }),
+    ).toBeUndefined();
+    expect(financialTransactionExternalId({})).toBeUndefined();
+    expect(
+      financialTransactionExternalId({
+        transactionId: { value: 'TX-ABC-123456', source: 'PDF_TEXT', confidence: 0.88 },
+        documentType: { value: 'BOLETO', source: 'PDF_TEXT', confidence: 0.88 },
+      }),
+    ).not.toBe(key);
   });
 
   it('interpreta transferência com data ISO e identifica insuficiência sem calcular saldo negativo', () => {

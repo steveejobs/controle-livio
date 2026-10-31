@@ -523,6 +523,7 @@ type UiOperation = {
   operation: string;
   pathname: string;
   method?: string;
+  expectedContentType?: string;
   form?: Locator;
   button?: Locator;
   action?: () => Promise<unknown>;
@@ -546,7 +547,10 @@ function requestMatchesBodyFields(
   } catch {
     // Multipart bodies are correlated by named synthetic form fields below.
   }
-  const body = request.postDataBuffer()?.toString('latin1');
+  // Browser FormData encodes text parts as UTF-8. Decoding the raw multipart
+  // body as Latin-1 turns values such as "inválido" into mojibake and reports
+  // a false mismatch even though the browser sent the selected value.
+  const body = request.postDataBuffer()?.toString('utf8');
   if (!body) return false;
   return fields.every((field) => {
     const fieldMarker = `name="${field.name}"`;
@@ -578,6 +582,7 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
     ...(operation.bodyField ? [operation.bodyField] : []),
     ...(operation.additionalBodyFields ?? []),
   ];
+  const expectedContentType = operation.expectedContentType?.toLowerCase();
   const trace: OperationTrace = {
     id: `${operationSlug(run)}-${page.viewportSize()?.width ?? 'unknown'}-${traceSequence}-${operationSlug(operation.operation)}`,
     run,
@@ -592,24 +597,32 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
   let actionTriggered = false;
   let requestObserved = false;
   let requestBodyMismatch = false;
+  let requestContentTypeMismatch = false;
   let submitObserved = false;
   let responseObserved = false;
   let responseStatus: number | undefined;
   const invalidFields: string[] = [];
   const matchesEndpoint = (request: Request) =>
     new URL(request.url()).pathname === operation.pathname && request.method() === method;
+  const contentTypeOf = (request: Request) =>
+    request.headers()['content-type']?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
   const requestListener = (request: Request) => {
     if (!matchesEndpoint(request)) return;
     requestObserved = true;
+    const contentType = contentTypeOf(request);
+    requestContentTypeMismatch =
+      expectedContentType !== undefined && contentType !== expectedContentType;
     const bodyFieldMatches = requestBodyFieldMatches(request, bodyFields);
-    requestBodyMismatch = bodyFieldMatches.some(
-      ({ matchesExpectedValue }) => !matchesExpectedValue,
-    );
+    requestBodyMismatch =
+      requestContentTypeMismatch ||
+      bodyFieldMatches.some(({ matchesExpectedValue }) => !matchesExpectedValue);
     trace.events.push({
       stage: 'REQUEST_SENT',
       elapsedMs: Date.now() - trace.startedAt,
       method: request.method(),
       pathname: new URL(request.url()).pathname,
+      contentType,
+      contentTypeMatches: !requestContentTypeMismatch,
       bodyFieldMatches,
     });
     writeOperationTrace(page, trace);
@@ -791,10 +804,13 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
     const { value: request } = requestResult;
     const { value: response } = responseResult;
     requestObserved = true;
+    const contentType = contentTypeOf(request);
+    requestContentTypeMismatch =
+      expectedContentType !== undefined && contentType !== expectedContentType;
     const bodyFieldMatches = requestBodyFieldMatches(request, bodyFields);
-    requestBodyMismatch = bodyFieldMatches.some(
-      ({ matchesExpectedValue }) => !matchesExpectedValue,
-    );
+    requestBodyMismatch =
+      requestContentTypeMismatch ||
+      bodyFieldMatches.some(({ matchesExpectedValue }) => !matchesExpectedValue);
     if (requestBodyMismatch) {
       trace.outcome = 'REQUEST_BODY_MISMATCH';
       trace.events.push({
@@ -803,6 +819,8 @@ async function clickUiOperation(page: Page, operation: UiOperation) {
         method: request.method(),
         pathname: new URL(request.url()).pathname,
         status: response.status(),
+        contentType,
+        contentTypeMatches: !requestContentTypeMismatch,
         bodyFieldMatches,
       });
       writeOperationTrace(page, trace);
@@ -1119,6 +1137,54 @@ async function browserApi(
       selectedOrganization: organizationId,
       accessToken,
       headers: extraHeaders ?? {},
+    },
+  );
+  let parsed: JsonValue | undefined;
+  try {
+    parsed = response.bodyText ? (JSON.parse(response.bodyText) as JsonValue) : undefined;
+  } catch {
+    parsed = { nonJsonResponse: true };
+  }
+  return { status: response.status, body: parsed };
+}
+
+async function browserRawApi(
+  page: Page,
+  path: string,
+  {
+    method = 'POST',
+    body,
+    contentType = 'application/json',
+  }: {
+    method?: string;
+    body: string;
+    contentType?: string;
+  },
+): Promise<BrowserResult> {
+  const accessToken = await browserAccessToken(page);
+  if (!accessToken) return { status: 0, body: { error: 'Supabase browser session unavailable' } };
+
+  const response = await page.evaluate(
+    async ({ apiBase, apiPath, httpMethod, rawBody, mediaType, selectedOrganization, token }) => {
+      const result = await fetch(`${apiBase}${apiPath}`, {
+        method: httpMethod,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Organization-Id': selectedOrganization,
+          'Content-Type': mediaType,
+        },
+        body: rawBody,
+      });
+      return { status: result.status, bodyText: await result.text() };
+    },
+    {
+      apiBase,
+      apiPath: path,
+      httpMethod: method,
+      rawBody: body,
+      mediaType: contentType,
+      selectedOrganization: organizationA,
+      token: accessToken,
     },
   );
   let parsed: JsonValue | undefined;
@@ -2410,6 +2476,7 @@ async function submitScannerProbe(page: Page, title: string, operation: string) 
   return clickUiOperation(page, {
     operation,
     pathname: '/v1/documents',
+    expectedContentType: 'multipart/form-data',
     form,
     button: form.getByRole('button', { name: 'Enviar documento', exact: true }),
     bodyField: { name: 'title', value: title },
@@ -2484,6 +2551,64 @@ async function expectStorageAddedOne(
   return currentObjects;
 }
 
+test('documentos: corpo JSON malformado é rejeitado sem chegar ao Storage', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await login(page, 'qa-documents.aurora@example.test');
+    const before = await storageObjectInventory(organizationA);
+    const response = await browserRawApi(page, '/documents', {
+      body: '{"title":',
+    });
+    expect(response.status).toBe(400);
+    await expectStorageUnchanged(organizationA, before, 'malformed-document-body', page);
+  } finally {
+    await context.close();
+  }
+});
+
+test('documentos: campo obrigatório ausente é rejeitado sem chegar ao Storage', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await login(page, 'qa-documents.aurora@example.test');
+    const before = await storageObjectInventory(organizationA);
+    const response = await browserUpload(
+      page,
+      { visibility: 'INTERNAL' },
+      'missing-title.pdf',
+      'application/pdf',
+      Array.from(await pdfBytes()),
+    );
+    expect(response.status).toBe(400);
+    await expectStorageUnchanged(organizationA, before, 'missing-document-title', page);
+  } finally {
+    await context.close();
+  }
+});
+
+test('documentos: formato não permitido é rejeitado sem chegar ao Storage', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  try {
+    await login(page, 'qa-documents.aurora@example.test');
+    const before = await storageObjectInventory(organizationA);
+    const response = await browserUpload(
+      page,
+      { title: 'Formato sintético não permitido QA', category: 'QA', visibility: 'INTERNAL' },
+      'unsupported.bin',
+      'application/octet-stream',
+      Array.from(Buffer.from('synthetic unsupported file format', 'ascii')),
+    );
+    expect(response.status).toBe(400);
+    await expectStorageUnchanged(organizationA, before, 'unsupported-document-format', page);
+  } finally {
+    await context.close();
+  }
+});
+
 test('jornada 4: upload, download protegido e assinatura eletrônica no navegador', async ({
   browser,
 }) => {
@@ -2522,6 +2647,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const uploaded = await clickUiOperation(page, {
         operation: 'upload-client-document',
         pathname: '/v1/documents',
+        expectedContentType: 'multipart/form-data',
         form: uploadForm,
         button: uploadForm.getByRole('button', { name: 'Enviar documento' }),
         bodyField: { name: 'title', value: title },
@@ -2557,6 +2683,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const infectedResponse = await clickUiOperation(page, {
         operation: 'reject-infected-document-upload',
         pathname: '/v1/documents',
+        expectedContentType: 'multipart/form-data',
         form: infectedForm,
         button: infectedForm.getByRole('button', { name: 'Enviar documento' }),
         bodyField: { name: 'title', value: infectedTitle },
@@ -2706,6 +2833,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       await shareDialog.getByRole('button', { name: 'Fechar' }).click();
 
       const invalidTitle = `Arquivo inválido QA ${suffix}`;
+      const storageBeforeInvalidUpload = await storageObjectInventory(organizationA);
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
       const invalidForm = await formWithSubmitButton(page, 'Enviar documento');
       await invalidForm.getByLabel('Nome do documento').fill(invalidTitle);
@@ -2718,6 +2846,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const invalidResponse = await clickUiOperation(page, {
         operation: 'reject-invalid-document-upload',
         pathname: '/v1/documents',
+        expectedContentType: 'multipart/form-data',
         form: invalidForm,
         button: invalidForm.getByRole('button', { name: 'Enviar documento' }),
         bodyField: { name: 'title', value: invalidTitle },
@@ -2732,6 +2861,12 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
         'Erro: Tipo de arquivo não permitido ou conteúdo incompatível',
       );
       await expect(page.getByRole('row').filter({ hasText: invalidTitle })).toHaveCount(0);
+      await expectStorageUnchanged(
+        organizationA,
+        storageBeforeInvalidUpload,
+        'invalid-document-content',
+        page,
+      );
 
       const oversizedTitle = `Arquivo grande QA ${suffix}`;
       await page.getByRole('button', { name: 'Enviar documento', exact: true }).click();
@@ -2746,6 +2881,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const oversizedResponse = await clickUiOperation(page, {
         operation: 'reject-oversized-document-upload',
         pathname: '/v1/documents',
+        expectedContentType: 'multipart/form-data',
         form: oversizedForm,
         button: oversizedForm.getByRole('button', { name: 'Enviar documento' }),
         bodyField: { name: 'title', value: oversizedTitle },
@@ -3240,10 +3376,12 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
     const clientContext = await browser.newContext({ viewport });
     const secondClientContext = await browser.newContext({ viewport });
     const otherOrganizationContext = await browser.newContext({ viewport });
+    const concurrentFinanceContext = await browser.newContext({ viewport });
     const financePage = await financeContext.newPage();
     const clientPage = await clientContext.newPage();
     const secondClientPage = await secondClientContext.newPage();
     const otherOrganizationPage = await otherOrganizationContext.newPage();
+    const concurrentFinancePage = await concurrentFinanceContext.newPage();
     try {
       await login(financePage, 'qa-finance.aurora@example.test');
       const suffix = randomUUID().slice(0, 8);
@@ -3422,6 +3560,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
 
       await financePage.reload();
       await navigateTo(financePage, /Receb/);
+      await login(concurrentFinancePage, 'admin.aurora@example.test');
       const queue = financePage.getByRole('region', {
         name: 'Comprovantes aguardando conferência',
       });
@@ -3433,8 +3572,55 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
         (response) =>
           new URL(response.url()).pathname === `/v1/finance/receipts/${clientReceiptId}/confirm`,
       );
+      const confirmationForm = review.locator('form');
+      const confirmationInput = await confirmationForm.evaluate((form) => {
+        if (!(form instanceof HTMLFormElement)) throw new Error('Formulário financeiro ausente.');
+        const values = new FormData(form);
+        const localDate = String(values.get('paidAt') ?? '');
+        return {
+          amount: String(values.get('amount') ?? ''),
+          paidAt: new Date(localDate).toISOString(),
+          method: String(values.get('method') ?? ''),
+          reference: String(values.get('reference') ?? ''),
+        };
+      });
+      const confirmationPath = `/finance/receipts/${clientReceiptId}/confirm`;
+      let arrivals = 0;
+      let releaseRequests: (() => void) | undefined;
+      const releaseGate = new Promise<void>((resolve) => {
+        releaseRequests = resolve;
+      });
+      const holdRequest = async (route: Route) => {
+        arrivals += 1;
+        await releaseGate;
+        await route.continue();
+      };
+      const confirmationGlob = `**/v1${confirmationPath}`;
+      await financePage.route(confirmationGlob, holdRequest);
+      await concurrentFinancePage.route(confirmationGlob, holdRequest);
       await review.getByRole('button', { name: 'Confirmar pagamento' }).click();
-      expect((await final).status()).toBe(201);
+      const concurrentRetry = browserApi(concurrentFinancePage, confirmationPath, {
+        method: 'POST',
+        body: confirmationInput,
+      });
+      let uiConfirmation: Response;
+      let retryConfirmation: BrowserResult;
+      try {
+        await expect.poll(() => arrivals, { timeout: 10_000 }).toBe(2);
+        releaseRequests?.();
+        [uiConfirmation, retryConfirmation] = await Promise.all([final, concurrentRetry]);
+      } finally {
+        releaseRequests?.();
+        await financePage.unroute(confirmationGlob, holdRequest);
+        await concurrentFinancePage.unroute(confirmationGlob, holdRequest);
+      }
+      expect([200, 201, 409]).toContain(uiConfirmation.status());
+      expect([200, 201, 409]).toContain(retryConfirmation.status);
+      expect([200, 201]).toContain(
+        [uiConfirmation.status(), retryConfirmation.status].find(
+          (status) => status === 200 || status === 201,
+        ),
+      );
       const confirmed = bodyAs<{ status: string; paymentId: string }>(
         await browserApi(financePage, `/finance/receipts/${clientReceiptId}`),
       );
@@ -3460,6 +3646,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       ).toEqual([amountUnits('33.34'), amountUnits('66.66')]);
     } finally {
       await otherOrganizationContext.close();
+      await concurrentFinanceContext.close();
       await secondClientContext.close();
       await clientContext.close();
       await financeContext.close();

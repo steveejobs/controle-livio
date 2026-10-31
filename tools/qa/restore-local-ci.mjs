@@ -6,6 +6,14 @@ import assert from 'node:assert/strict';
 
 const excludedSchedulerSchemas = ['cron', 'net'];
 const excludedSchedulerExtensions = new Set(['pg_cron', 'pg_net']);
+const expectedRestoreInventory = {
+  sourceOwners: 351,
+  sourceAclRows: 232,
+  restoredAclRows: 216,
+  restoredDefaultAclRows: 27,
+  excludedSchedulerAclRows: 16,
+  excludedSchedulerDefaultAclRows: 3,
+};
 const multiWordTocDescriptions = [
   'MATERIALIZED VIEW DATA',
   'PUBLICATION TABLES IN SCHEMA',
@@ -73,6 +81,17 @@ const referencesExcludedSchema = (entry) => {
   if (excludedSchedulerSchemas.includes(entry.namespace)) return true;
   if (entry.description === 'SCHEMA' && excludedSchedulerSchemas.includes(entry.name)) return true;
 
+  if (entry.description === 'ACL' || entry.description === 'DEFAULT ACL') {
+    const tokens = entry.name.split(/[\s.(]/).filter(Boolean);
+    if (excludedSchedulerSchemas.some((schema) => tokens.includes(schema))) return true;
+    if (
+      excludedSchedulerSchemas.some((schema) =>
+        tokens.some((token) => token.startsWith(`${schema}.`)),
+      )
+    )
+      return true;
+  }
+
   // COMMENT/SECURITY LABEL TOC rows put their object kind and name in the tag field.
   // Their namespace column is '-', so inspect that typed payload instead of the whole row text.
   if (entry.description === 'COMMENT' || entry.description === 'SECURITY LABEL') {
@@ -91,6 +110,10 @@ const referencesExcludedScheduler = (entry) => {
   if (referencesExcludedSchema(entry)) return true;
   if (!entry) return false;
   if (entry.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name)) return true;
+  if (entry.description === 'ACL' || entry.description === 'DEFAULT ACL') {
+    const [targetKind, ...targetParts] = entry.name.split(' ');
+    if (targetKind === 'EXTENSION' && excludedSchedulerExtensions.has(targetParts[0])) return true;
+  }
   if (entry.description === 'COMMENT' || entry.description === 'SECURITY LABEL') {
     const [targetKind, ...targetParts] = entry.name.split(' ');
     return targetKind === 'EXTENSION' && excludedSchedulerExtensions.has(targetParts.join(' '));
@@ -101,12 +124,20 @@ const referencesExcludedScheduler = (entry) => {
 const filterUnsupportedTocEntries = (entries, knownOwners = new Set()) =>
   entries.filter((line) => {
     const entry = parseTocEntry(line, knownOwners);
-    return (
-      entry?.description !== 'ACL' &&
-      entry?.description !== 'DEFAULT ACL' &&
-      !referencesExcludedScheduler(entry)
-    );
+    return !referencesExcludedScheduler(entry);
   });
+
+const publicSchemaPreparationForRestore = (tocLines, knownOwners = new Set()) => {
+  const archiveContainsPublicSchema = tocLines
+    .map((line) => parseTocEntry(line, knownOwners))
+    .some((entry) => entry?.description === 'SCHEMA' && entry.name === 'public');
+  return {
+    archiveContainsPublicSchema,
+    statement: archiveContainsPublicSchema
+      ? 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty'
+      : 'ALTER SCHEMA public OWNER TO supabase_admin',
+  };
+};
 
 const listArguments = (archive) => [
   'pg_restore',
@@ -123,7 +154,6 @@ const restoreArguments = (target, restoreList, archive) => [
   '-d',
   target,
   '--exit-on-error',
-  '--no-acl',
   '--no-owner',
   ...excludedSchedulerSchemas.flatMap((schema) => ['--exclude-schema', schema]),
   '--use-list',
@@ -152,6 +182,7 @@ const tocFixture = [
   '1234; 0 0 ACL - FUNCTION cron.alter_job(bigint) postgres',
   '1234; 0 0 ACL - cron postgres',
   '1234; 0 0 DEFAULT ACL - DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA cron postgres',
+  '1234; 0 0 DEFAULT ACL - DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public postgres',
   '1234; 0 0 COMMENT - SCHEMA cron postgres',
   '1234; 0 0 COMMENT - FUNCTION cron.alter_job(bigint) postgres',
   '7; 3079 19318 EXTENSION - pg_cron',
@@ -168,18 +199,35 @@ const tocFixture = [
   '1237; 0 16401 TABLE DATA public clients supabase_admin',
   '1237; 0 0 COMMENT - TABLE public.clients supabase_admin',
   '1238; 0 0 ACL - TABLE public clients supabase_admin',
+  '1239; 0 0 ACL - FUNCTION public.has_permission(uuid,text,text) supabase_admin',
 ];
 const fixtureOwners = discoverTocOwners(tocFixture);
 assert.deepEqual(
   filterUnsupportedTocEntries(tocFixture, fixtureOwners),
   [
+    '1234; 0 0 DEFAULT ACL - DEFAULT PRIVILEGES FOR ROLE supabase_admin IN SCHEMA public postgres',
     '1237; 2615 2200 SCHEMA - public supabase_admin',
     '1237; 2615 2200 COMMENT - SCHEMA public supabase_admin',
     '1237; 1259 16400 TABLE public clients supabase_admin',
     '1237; 0 16401 TABLE DATA public clients supabase_admin',
     '1237; 0 0 COMMENT - TABLE public.clients supabase_admin',
+    '1238; 0 0 ACL - TABLE public clients supabase_admin',
+    '1239; 0 0 ACL - FUNCTION public.has_permission(uuid,text,text) supabase_admin',
   ],
-  'Scheduler schema objects/references and ACLs are removed while public structure and data remain',
+  'Scheduler objects/ACLs are removed while public structure, grants, and default ACLs remain',
+);
+assert.equal(
+  publicSchemaPreparationForRestore(tocFixture, fixtureOwners).statement,
+  'ALTER SCHEMA public RENAME TO restore_bootstrap_empty',
+  'An archived public schema must replace the template0 bootstrap schema',
+);
+assert.equal(
+  publicSchemaPreparationForRestore(
+    tocFixture.filter((line) => !line.includes('SCHEMA - public')),
+    fixtureOwners,
+  ).statement,
+  'ALTER SCHEMA public OWNER TO supabase_admin',
+  'When public is absent from the archive, its template0 owner must be prepared explicitly',
 );
 assert.deepEqual(
   tocFixture
@@ -227,7 +275,10 @@ assert.deepEqual(
   ['pg_restore', '-l', '--exclude-schema=cron', '--exclude-schema=net', '/tmp/restore.dump'],
   'TOC preflight must apply pg_restore schema filters to the source list',
 );
-assert(restorePlanFixture.includes('--no-acl'), 'Restore must suppress source ACL statements');
+assert(
+  !restorePlanFixture.includes('--no-acl'),
+  'Restore must replay source grants and default ACLs',
+);
 assert(restorePlanFixture.includes('--no-owner'), 'Restore must use the disposable runner owner');
 assert(
   restorePlanFixture.includes('--exclude-schema') &&
@@ -298,6 +349,9 @@ const excludedExtensionEntries = tocEntries.filter(
 const aclEntries = tocEntries.filter(
   ({ entry }) => entry?.description === 'ACL' || entry?.description === 'DEFAULT ACL',
 );
+const excludedSchedulerAclEntries = aclEntries
+  .filter(({ entry }) => referencesExcludedScheduler(entry))
+  .map(({ line }) => line.trim());
 const cronAlterJobTocEntries = tocEntries
   .filter(({ line, entry }) => entry?.description === 'ACL' && /alter_job/i.test(line))
   .map(({ line }) => line.trim());
@@ -310,6 +364,8 @@ const schedulerReferencesRemainingAfterNativeFilter = schemaFilteredToc
 const tocEvidence = {
   sourceTocEntries: tocEntries.filter(({ entry }) => entry).length,
   sourceAclRows: aclEntries.length,
+  aclRowsExcludedWithSchedulerSchemas: excludedSchedulerAclEntries.length,
+  excludedSchedulerAclTocRows: excludedSchedulerAclEntries,
   sourceSchedulerReferences,
   nativeSchemaFilterApplied: true,
   schemaFilterListArguments: listArguments(archive).slice(1),
@@ -346,16 +402,58 @@ const filteredTocEntries = toc
 const filteredTocEvidence = {
   effectiveRestoreTocEntries: filteredTocEntries.length,
   prohibitedReferencesAfterFinalFilter: residualUnsupportedReferences,
-};
-assert(
-  !filteredTocEntries.some(
+  aclRowsRestored: filteredTocEntries.filter(
     (entry) => entry?.description === 'ACL' || entry?.description === 'DEFAULT ACL',
-  ),
-  'Source ACL TOC entries must be omitted; the runner reapplies only checked-in application grants',
+  ).length,
+  defaultAclRowsRestored: filteredTocEntries.filter((entry) => entry?.description === 'DEFAULT ACL')
+    .length,
+  defaultAclRowsExcludedWithSchedulerSchemas: excludedSchedulerAclEntries.filter(
+    (line) => parseTocEntry(line, tocOwners)?.description === 'DEFAULT ACL',
+  ).length,
+};
+writeCheckpoint({
+  targetDatabase: target,
+  ...tocEvidence,
+  ...filteredTocEvidence,
+  expectedRestoreInventory,
+});
+assert(
+  filteredTocEvidence.aclRowsRestored > 0,
+  'Source public grants and default ACLs must be restored from the archive',
+);
+assert(
+  filteredTocEvidence.defaultAclRowsRestored > 0,
+  'Source default ACL entries must be restored from the archive',
+);
+assert.equal(
+  tocEvidence.sourceAclRows,
+  expectedRestoreInventory.sourceAclRows,
+  'Synthetic source archive ACL TOC row count differs from the expected backup inventory',
+);
+assert.equal(
+  filteredTocEvidence.aclRowsRestored,
+  expectedRestoreInventory.restoredAclRows,
+  'Restore list does not retain all 216 expected public ACL entries',
+);
+assert.equal(
+  filteredTocEvidence.defaultAclRowsRestored,
+  expectedRestoreInventory.restoredDefaultAclRows,
+  'Restore list does not retain all 27 expected public default ACL entries',
+);
+assert.equal(
+  excludedSchedulerAclEntries.length,
+  expectedRestoreInventory.excludedSchedulerAclRows,
+  'The number of scheduler ACL TOC rows excluded differs from the expected archive inventory',
+);
+assert.equal(
+  filteredTocEvidence.defaultAclRowsExcludedWithSchedulerSchemas,
+  expectedRestoreInventory.excludedSchedulerDefaultAclRows,
+  'The number of scheduler default ACL rows excluded differs from the expected archive inventory',
 );
 const effectiveRestoreArgs = restoreArguments(target, restoreList, archive);
-for (const requiredFlag of ['--no-acl', '--no-owner', '--exclude-schema', '--use-list'])
+for (const requiredFlag of ['--no-owner', '--exclude-schema', '--use-list'])
   assert(effectiveRestoreArgs.includes(requiredFlag), `Restore plan is missing ${requiredFlag}`);
+assert(!effectiveRestoreArgs.includes('--no-acl'), 'Restore must preserve source ACL statements');
 assert(
   excludedSchedulerSchemas.every((schema) => effectiveRestoreArgs.includes(schema)),
   'Restore plan must exclude cron and net schemas using pg_restore native filters',
@@ -366,12 +464,12 @@ writeCheckpoint({
   ...filteredTocEvidence,
   effectiveRestoreArguments: effectiveRestoreArgs,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
-  aclRowsSuppressedByNoAcl: aclEntries.length,
+  aclRowsExcludedWithSchedulerSchemas: excludedSchedulerAclEntries.length,
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
   excludedSchedulerSchemas,
 });
 console.log(
-  `Restore TOC preflight passed: ${tocEntries.filter(({ entry }) => entry?.description === 'SCHEMA' && excludedSchedulerSchemas.includes(entry.name)).length} scheduler schema rows excluded; ${excludedExtensionEntries.length} scheduler extension rows removed; ${aclEntries.length} ACL/default ACL rows removed from the TOC and suppressed with --no-acl; ${cronAlterJobTocEntries.length} alter_job ACL rows found.`,
+  `Restore TOC preflight passed: ${tocEntries.filter(({ entry }) => entry?.description === 'SCHEMA' && excludedSchedulerSchemas.includes(entry.name)).length} scheduler schema rows excluded; ${excludedExtensionEntries.length} scheduler extension rows removed; ${filteredTocEvidence.aclRowsRestored} grants/default ACLs retained and ${excludedSchedulerAclEntries.length} scheduler ACL rows excluded; ${cronAlterJobTocEntries.length} alter_job ACL rows found.`,
 );
 execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
   input: toc,
@@ -379,23 +477,25 @@ execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
 });
 // createdb fails if the randomly named destination exists. Never clean or overwrite a database.
 run('createdb', '-U', 'supabase_admin', '-T', 'template0', target);
-// PostgreSQL may omit the built-in public schema from the archive. Preserve it in that case.
-if (
-  toc
-    .split('\n')
-    .map((line) => parseTocEntry(line, tocOwners))
-    .some((entry) => entry?.description === 'SCHEMA' && entry.name === 'public')
-) {
-  sql(target, 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty');
-}
+// If the archive contains public, replace template0's bootstrap schema so pg_restore can
+// create it as supabase_admin. Otherwise, template0's pg_database_owner schema is not in
+// the TOC and --no-owner cannot remap it, so explicitly prepare its owner before restore.
+const publicSchemaPreparationPlan = publicSchemaPreparationForRestore(toc.split('\n'), tocOwners);
+sql(target, publicSchemaPreparationPlan.statement);
+const publicSchemaPreparation = publicSchemaPreparationPlan.archiveContainsPublicSchema
+  ? 'Archive contains SCHEMA public; template0 schema renamed for archive recreation'
+  : 'Archive omits SCHEMA public; template0 schema owner set to supabase_admin before restore';
 restoreStage = 'pg_restore';
 writeCheckpoint({
   targetDatabase: target,
   ...tocEvidence,
   ...filteredTocEvidence,
   effectiveRestoreArguments: effectiveRestoreArgs,
+  publicSchemaPreparation,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
-  aclRowsSuppressedByNoAcl: aclEntries.length,
+  aclRowsRestored: filteredTocEvidence.aclRowsRestored,
+  aclRowsExcludedWithSchedulerSchemas: excludedSchedulerAclEntries.length,
+  excludedSchedulerAclTocRows: excludedSchedulerAclEntries,
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
   excludedSchedulerSchemas,
 });
@@ -407,8 +507,11 @@ writeCheckpoint({
   ...filteredTocEvidence,
   pgRestoreCompleted: true,
   effectiveRestoreArguments: effectiveRestoreArgs,
+  publicSchemaPreparation,
   schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
-  aclRowsSuppressedByNoAcl: aclEntries.length,
+  aclRowsRestored: filteredTocEvidence.aclRowsRestored,
+  aclRowsExcludedWithSchedulerSchemas: excludedSchedulerAclEntries.length,
+  excludedSchedulerAclTocRows: excludedSchedulerAclEntries,
   cronAlterJobAclTocRows: cronAlterJobTocEntries,
   excludedSchedulerSchemas,
 });
@@ -559,123 +662,78 @@ const ownerSnapshot = (database) =>
   );
 const sourceGrantRecords = parsedGrantSnapshot('postgres');
 const sourceOwnerRecords = ownerSnapshot('postgres').split('\n').filter(Boolean);
-const sourceApplicationDefaultGrants = sourceGrantRecords.filter(
-  ({ objectType, grantee }) =>
-    objectType === 'DEFAULT ACL' && ['anon', 'authenticated', 'service_role'].includes(grantee),
+writeCheckpoint({
+  targetDatabase: target,
+  restoreStage,
+  expectedSourceOwnerObjectCount: expectedRestoreInventory.sourceOwners,
+  sourceOwnerObjectCount: sourceOwnerRecords.length,
+  sourceOwnerRecords,
+});
+assert.equal(
+  sourceOwnerRecords.length,
+  expectedRestoreInventory.sourceOwners,
+  'Synthetic source owner inventory differs from the expected 351 objects',
 );
-const destinationDefaultGrantsBeforePolicy = parsedGrantSnapshot(target).filter(
-  ({ objectType, grantee }) =>
-    objectType === 'DEFAULT ACL' && ['anon', 'authenticated', 'service_role'].includes(grantee),
-);
-const applicationRoles = new Set(['anon', 'authenticated', 'service_role']);
-const defaultObjectCategories = {
-  r: 'TABLES',
-  S: 'SEQUENCES',
-  f: 'FUNCTIONS',
-  T: 'TYPES',
-  n: 'SCHEMAS',
-};
-const defaultCategoryPrivileges = {
-  r: new Set([
-    'SELECT',
-    'INSERT',
-    'UPDATE',
-    'DELETE',
-    'TRUNCATE',
-    'REFERENCES',
-    'TRIGGER',
-    'MAINTAIN',
-  ]),
-  S: new Set(['USAGE', 'SELECT', 'UPDATE']),
-  f: new Set(['EXECUTE']),
-  T: new Set(['USAGE']),
-  n: new Set(['USAGE', 'CREATE']),
-};
-const sqlIdentifier = (value) => `"${value.replaceAll('"', '""')}"`;
-function applyApplicationDefaultGrants(sourceGrants, destinationGrants) {
-  const grouped = new Map();
-  for (const grant of [...sourceGrants, ...destinationGrants]) {
-    if (grant.objectType !== 'DEFAULT ACL' || !applicationRoles.has(grant.grantee)) continue;
-    const objectType = grant.object.split(':').at(-1);
-    const category = defaultObjectCategories[objectType];
-    if (!category) throw new Error(`Unsupported default ACL object type: ${objectType}`);
-    const key = JSON.stringify([grant.schema, grant.owner, objectType, grant.grantee]);
-    const group = grouped.get(key) ?? {
-      schema: grant.schema,
-      owner: grant.owner,
-      objectType,
-      category,
-      grantee: grant.grantee,
-      grants: new Map(),
-    };
-    if (sourceGrants.includes(grant))
-      group.grants.set(
-        grant.privilege,
-        (group.grants.get(grant.privilege) ?? false) || grant.grantOption === true,
-      );
-    grouped.set(key, group);
-  }
-  const statements = [];
-  for (const group of grouped.values()) {
-    const { schema, owner, objectType, category, grantee, grants } = group;
-    const schemaClause = schema && objectType !== 'n' ? ` IN SCHEMA ${sqlIdentifier(schema)}` : '';
-    const roleClause = sqlIdentifier(owner);
-    const granteeClause = sqlIdentifier(grantee);
-    statements.push(
-      `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleClause}${schemaClause} REVOKE ALL PRIVILEGES ON ${category} FROM ${granteeClause}`,
-    );
-    for (const [privilege, grantOption] of grants) {
-      if (!defaultCategoryPrivileges[objectType].has(privilege))
-        throw new Error(`Unsupported ${objectType} default ACL privilege: ${privilege}`);
-      statements.push(
-        `ALTER DEFAULT PRIVILEGES FOR ROLE ${roleClause}${schemaClause} GRANT ${privilege} ON ${category} TO ${granteeClause}${grantOption ? ' WITH GRANT OPTION' : ''}`,
-      );
-    }
-  }
-  if (statements.length > 0) sql(target, `BEGIN;\n${statements.join(';\n')};\nCOMMIT;`);
-  return statements.length;
-}
-const normalizeDefaultGrantSemantics = (grants) => {
-  const normalized = new Map();
-  for (const { objectType, schema, object, owner, grantee, privilege, grantOption } of grants) {
-    const record = { objectType, schema, object, owner, grantee, privilege, grantOption };
-    const key = JSON.stringify({ ...record, grantOption: undefined });
-    const previous = normalized.get(key);
-    if (!previous || grantOption === true) normalized.set(key, record);
-  }
-  return [...normalized.values()].sort((left, right) =>
-    JSON.stringify(left).localeCompare(JSON.stringify(right)),
-  );
-};
+const normalizeRestoredGrantSemantics = (grants) =>
+  grants
+    .map((grant) => {
+      if (grant.objectType === 'DEFAULT ACL') return grant;
+      const sourceOwner = grant.owner;
+      return {
+        ...grant,
+        owner: 'supabase_admin',
+        grantor: grant.grantor === sourceOwner ? 'supabase_admin' : grant.grantor,
+        grantee: grant.grantee === sourceOwner ? 'supabase_admin' : grant.grantee,
+      };
+    })
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 const requiredRoles = sql(
   target,
   "SELECT count(*)::text FROM pg_roles WHERE rolname IN ('supabase_admin', 'anon', 'authenticated', 'service_role')",
 );
 assert.equal(requiredRoles, '4', 'Required Supabase roles are missing from the restore target');
-
-// ACLs from the source are suppressed. Re-apply only the checked-in application grants.
-sql(
-  target,
-  `BEGIN;
-   GRANT USAGE ON SCHEMA public TO authenticated;
-   GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
-   REVOKE ALL ON FUNCTION public.current_organization_ids() FROM PUBLIC;
-   REVOKE ALL ON FUNCTION public.has_permission(uuid, text, text) FROM PUBLIC;
-   REVOKE ALL ON FUNCTION public.current_client_id(uuid) FROM PUBLIC;
-   REVOKE ALL ON FUNCTION public.can_access_client_resource(uuid, uuid, text, text) FROM PUBLIC;
-   REVOKE ALL ON FUNCTION public.storage_object_organization_id(text) FROM PUBLIC;
-   REVOKE ALL ON FUNCTION public.can_download_storage_object(text) FROM PUBLIC;
-   GRANT EXECUTE ON FUNCTION public.current_organization_ids() TO authenticated;
-   GRANT EXECUTE ON FUNCTION public.has_permission(uuid, text, text) TO authenticated;
-   GRANT EXECUTE ON FUNCTION public.current_client_id(uuid) TO authenticated;
-   GRANT EXECUTE ON FUNCTION public.can_access_client_resource(uuid, uuid, text, text) TO authenticated;
-   GRANT EXECUTE ON FUNCTION public.storage_object_organization_id(text) TO authenticated;
-   GRANT EXECUTE ON FUNCTION public.can_download_storage_object(text) TO authenticated;
-   COMMIT;`,
+const restoreExecutorRole = sql(target, 'SELECT current_user');
+assert.equal(restoreExecutorRole, 'supabase_admin', 'Restore must run as supabase_admin');
+const roleSessionChecks = ['supabase_admin', 'anon', 'authenticated', 'service_role'].map(
+  (role) => {
+    const currentRole = sql(target, `SET ROLE "${role}"; SELECT current_user; RESET ROLE`);
+    assert.equal(currentRole, role, `Restore target could not set and use role ${role}`);
+    return { role, canAssumeSessionRole: true, observedCurrentUser: currentRole };
+  },
 );
-const applicationDefaultGrantStatements = applyApplicationDefaultGrants(
-  sourceApplicationDefaultGrants,
-  destinationDefaultGrantsBeforePolicy,
+const destinationGrantRecords = parsedGrantSnapshot(target);
+const sourceNormalizedGrantRecords = normalizeRestoredGrantSemantics(sourceGrantRecords);
+const destinationNormalizedGrantRecords = normalizeRestoredGrantSemantics(destinationGrantRecords);
+const grantRecordKey = (grant) => JSON.stringify(grant);
+const sourceGrantKeys = new Set(sourceNormalizedGrantRecords.map(grantRecordKey));
+const destinationGrantKeys = new Set(destinationNormalizedGrantRecords.map(grantRecordKey));
+const missingRestoredGrants = sourceNormalizedGrantRecords.filter(
+  (grant) => !destinationGrantKeys.has(grantRecordKey(grant)),
+);
+const unexpectedRestoredGrants = destinationNormalizedGrantRecords.filter(
+  (grant) => !sourceGrantKeys.has(grantRecordKey(grant)),
+);
+const grantSemanticComparison = {
+  status:
+    missingRestoredGrants.length === 0 && unexpectedRestoredGrants.length === 0 ? 'PASS' : 'FAIL',
+  sourceGrantCount: sourceGrantRecords.length,
+  destinationGrantCount: destinationGrantRecords.length,
+  missingRestoredGrants,
+  unexpectedRestoredGrants,
+  ownerMapping:
+    'Non-default ACL owner/grantor/grantee references are normalized to the supabase_admin restore owner; default ACL identities remain unchanged',
+};
+writeCheckpoint({
+  targetDatabase: target,
+  restoreStage,
+  grantSemanticComparison,
+  sourceGrantRecords,
+  destinationGrantRecords,
+});
+assert.deepEqual(
+  destinationNormalizedGrantRecords,
+  sourceNormalizedGrantRecords,
+  `Restored grants/default ACLs differ after owner mapping: ${JSON.stringify(grantSemanticComparison)}`,
 );
 
 assert.equal(
@@ -717,16 +775,6 @@ assert.equal(
   '0',
   'Security function grants do not match the checked-in authenticated-only policy',
 );
-const destinationGrantRecords = parsedGrantSnapshot(target);
-const destinationApplicationDefaultGrants = destinationGrantRecords.filter(
-  ({ objectType, grantee }) =>
-    objectType === 'DEFAULT ACL' && ['anon', 'authenticated', 'service_role'].includes(grantee),
-);
-assert.deepEqual(
-  normalizeDefaultGrantSemantics(destinationApplicationDefaultGrants),
-  normalizeDefaultGrantSemantics(sourceApplicationDefaultGrants),
-  'Application roles lost source default privileges or gained unexpected default privileges',
-);
 assert(
   destinationGrantRecords.some(
     ({ objectType, schema, privilege, grantee, grantOption }) =>
@@ -740,7 +788,12 @@ assert(
 );
 const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
 assert(restoredOwners.length > 0, 'No public owners were found in the restore target');
-const restoreExecutorRole = sql(target, 'SELECT current_user');
+assert.equal(
+  restoredOwners.length,
+  expectedRestoreInventory.sourceOwners,
+  'Restore target does not contain all 351 expected owner entries',
+);
+assert.equal(restoreExecutorRole, 'supabase_admin', 'Unexpected restore executor owner mapping');
 const parseOwnerEntry = (entry) => {
   const separator = entry.lastIndexOf(':');
   assert(separator > 0, `Malformed owner snapshot entry: ${entry}`);
@@ -759,9 +812,9 @@ const ownerComparison = restoredOwners.map((entry) => {
     object,
     originalOwner,
     effectiveOwner: owner,
-    expectedOwner: restoreExecutorRole,
-    rule: '--no-owner assigns restored objects to the pg_restore session user',
-    matches: originalOwner !== null && owner === restoreExecutorRole,
+    expectedOwner: 'supabase_admin',
+    rule: 'Archive object owners map to restore role; omitted public schema is prepared as supabase_admin',
+    matches: originalOwner !== null && owner === 'supabase_admin',
   };
 });
 const unexpectedOwners = ownerComparison.filter(({ matches }) => !matches);
@@ -785,33 +838,55 @@ assert(
   unexpectedOwners.length === 0,
   `Restore owner mapping differs for ${unexpectedOwners.length} objects: ${JSON.stringify(unexpectedOwners.slice(0, 10))}`,
 );
+const ownerCountsByObjectType = Object.fromEntries(
+  [...new Set(ownerComparison.map(({ object }) => object.split(':', 1)[0]))]
+    .sort()
+    .map((type) => [
+      type,
+      ownerComparison.filter(({ object }) => object.startsWith(`${type}:`)).length,
+    ]),
+);
+assert.equal(
+  ownerComparison.find(({ object }) => object === 'SCHEMA:public')?.effectiveOwner,
+  'supabase_admin',
+  'Public schema must be owned by supabase_admin',
+);
+assert.equal(
+  filteredTocEvidence.aclRowsRestored + excludedSchedulerAclEntries.length,
+  aclEntries.length,
+  'Every source ACL TOC row must be restored or listed as an excluded scheduler ACL',
+);
 const grantSnapshotEvidence = {
   source: {
     summary: summarizeGrants(sourceGrantRecords),
-    applicationDefaultGrants: sourceApplicationDefaultGrants,
+    grantsAndDefaultAcls: sourceGrantRecords,
     ownerObjectCount: sourceOwnerRecords.length,
     ownerRoles: [
       ...new Set(sourceOwnerRecords.map((entry) => entry.slice(entry.lastIndexOf(':') + 1))),
     ].sort(),
   },
-  destinationBeforeApplicationPolicy: {
+  destinationAfterArchiveAclReplay: {
     summary: summarizeGrants(parsedGrantSnapshot(target)),
-    applicationDefaultGrants: destinationDefaultGrantsBeforePolicy,
-  },
-  destinationAfterApplicationPolicy: {
-    summary: summarizeGrants(destinationGrantRecords),
-    applicationDefaultGrants: destinationApplicationDefaultGrants,
+    grantsAndDefaultAcls: destinationGrantRecords,
     ownerObjectCount: restoredOwners.length,
     ownerRoles: [
       ...new Set(restoredOwners.map((entry) => entry.slice(entry.lastIndexOf(':') + 1))),
     ].sort(),
   },
-  ownerDifferencePolicy: `--no-owner maps restored public objects to the pg_restore session role ${restoreExecutorRole}`,
-  aclDifferencePolicy:
-    '--no-acl suppresses source ACL replay; checked-in application grants are applied explicitly',
-  applicationDefaultGrantsComparedByRoleName: true,
-  applicationDefaultGrantStatementsApplied: applicationDefaultGrantStatements,
-  defaultAclGrantorsRecordedAndNormalizedSeparately: true,
+  semanticComparison: grantSemanticComparison,
+  ownerMapping: `--no-owner maps archive objects to ${restoreExecutorRole}; public schema is prepared explicitly when absent from archive TOC`,
+  grantorNormalization:
+    'For non-default object ACLs, source owner/grantor/grantee references map to supabase_admin when they represent ownership; default ACL role/grantor/grantee semantics remain exact',
+  roleSessionChecks,
+  ownerComparison: {
+    expectedOwner: 'supabase_admin',
+    sourceObjectCount: sourceOwnerRecords.length,
+    restoredObjectCount: restoredOwners.length,
+    ownerCountsByObjectType,
+    allOwnersMatch: unexpectedOwners.length === 0,
+    objects: ownerComparison,
+  },
+  excludedSchedulerAclEntries,
 };
 writeCheckpoint({ targetDatabase: target, restoreStage, grantSnapshotEvidence });
 
@@ -905,30 +980,46 @@ const databaseOwner = sql(
   'SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()',
 );
 assert.equal(databaseOwner, 'supabase_admin', 'Disposable restore database owner differs');
+const hasExcludedBackupInformation = sourceSchedulerReferences.length > 0;
 restoreStage = 'complete';
 writeFileSync(
   evidencePath,
   JSON.stringify(
     {
-      status: 'PASS',
+      status: hasExcludedBackupInformation ? 'INCOMPLETE' : 'PASS',
       stage: restoreStage,
       targetDatabase: target,
       scope:
-        'New disposable database; public tables, rows, sequences, financial totals, schema structure, FKs, controlled owners, and application grants verified',
+        'New disposable database; public tables, rows, sequences, financial totals, schema structure, FKs, every public object owner, source grants/default ACLs, and expected role sessions verified after pg_restore completed',
       tables: tables.length,
       sequences: sequenceSnapshot('postgres').split('\n').filter(Boolean).length,
       requiredSupabaseRoles: Number(requiredRoles),
+      roleSessionChecks,
       databaseOwner,
+      publicSchemaPreparation,
       ...tocEvidence,
       ...filteredTocEvidence,
       publicObjectsOwnedBy: 'supabase_admin',
-      applicationGrantsAppliedAndVerified: true,
+      publicOwnerCountsByObjectType: ownerCountsByObjectType,
+      allPublicOwnersVerified: unexpectedOwners.length === 0,
+      grantsAndDefaultAclsCompared: true,
       grantSnapshotEvidence,
       foreignKeysComparedAndValidated: true,
       financialTotalsCompared: recoveredFinancials,
       effectiveRestoreArguments: effectiveRestoreArgs,
       schedulerExtensionRowsRemoved: excludedExtensionEntries.length,
-      aclRowsSuppressedByNoAcl: aclEntries.length,
+      aclRowsRestored: filteredTocEvidence.aclRowsRestored,
+      aclRowsExcludedWithSchedulerSchemas: excludedSchedulerAclEntries.length,
+      excludedSchedulerAclTocRows: excludedSchedulerAclEntries,
+      unreconstructedBackupInformation: hasExcludedBackupInformation
+        ? {
+            schedulerSchemaAndExtensionTocRows: sourceSchedulerReferences,
+            schedulerAclTocRows: excludedSchedulerAclEntries,
+            schedulerExtensions: excludedExtensionEntries.map(({ line }) => line.trim()),
+            reason:
+              'cron/net schemas and scheduler extensions are intentionally excluded from this isolated synthetic restore; dependent jobs and ACLs cannot exist in the destination',
+          }
+        : null,
       cronAlterJobAclTocRows: cronAlterJobTocEntries,
       excludedSchedulerSchemasAbsent: true,
       elapsedMs: Date.now() - started,
@@ -937,12 +1028,19 @@ writeFileSync(
         'Storage objects not restored',
         'Hosted Auth configuration and external secrets not restored',
         'Global roles are provided by the disposable Supabase runner and checked',
-        'Source ACLs/owners are intentionally not replayed; checked-in application grants are applied explicitly',
-        'Scheduler extensions and schemas are deliberately excluded',
+        ...(hasExcludedBackupInformation
+          ? [
+              'Status remains INCOMPLETE because scheduler schema, extension, job, or ACL information is deliberately excluded; exact TOC rows are recorded above',
+            ]
+          : []),
       ],
     },
     null,
     2,
   ),
 );
-console.log(`Restore rehearsal passed: ${tables.length} public tables`);
+console.log(
+  hasExcludedBackupInformation
+    ? `Restore validation completed with excluded backup information; status INCOMPLETE (${tables.length} public tables verified)`
+    : `Restore rehearsal passed: ${tables.length} public tables`,
+);

@@ -5,7 +5,7 @@
   "description": "Fundação segura e multiempresa para um CRM jurídico.",
   "packageManager": "npm@11.17.0",
   "engines": {
-    "node": ">=22.0.0",
+    "node": "24.x",
     "npm": ">=10.0.0"
   },
   "workspaces": [

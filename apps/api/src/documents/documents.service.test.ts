@@ -1,12 +1,15 @@
+import { createServer, type AddressInfo } from 'node:net';
 import {
   ForbiddenException,
   NotFoundException,
   ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
 import type { AuthenticatedActor } from '@livio/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { DocumentsService } from './documents.service';
+import { DocumentScannerService } from './document-scanner.service';
 
 const actor: AuthenticatedActor = {
   userId: 'user',
@@ -69,6 +72,96 @@ describe('documentos privados', () => {
       }),
     );
     expect(auditRecord.mock.calls[0]?.[1]).not.toHaveProperty('after.fileName');
+  });
+
+  it('rejeita EICAR extraído da página PDF antes de promover o arquivo ao Storage', async () => {
+    const eicar = 'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*';
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage([600, 144]);
+    const font = await pdf.embedFont(StandardFonts.Courier);
+    page.drawText(eicar, { x: 12, y: 72, size: 9, font });
+    const bytes = Buffer.from(await pdf.save());
+    const scanned: Buffer[] = [];
+    const server = createServer((socket) => {
+      let input = Buffer.alloc(0);
+      let file = Buffer.alloc(0);
+      let commandRead = false;
+      socket.on('data', (chunk) => {
+        input = Buffer.concat([input, chunk]);
+        if (!commandRead) {
+          const commandEnd = input.indexOf(0);
+          if (commandEnd < 0) return;
+          input = input.subarray(commandEnd + 1);
+          commandRead = true;
+        }
+        while (input.length >= 4) {
+          const length = input.readUInt32BE(0);
+          if (input.length < 4 + length) return;
+          if (length > 0) file = Buffer.concat([file, input.subarray(4, 4 + length)]);
+          input = input.subarray(4 + length);
+          if (length === 0) {
+            scanned.push(file);
+            const isExtractedText =
+              file.toString('ascii').includes(eicar) && !file.includes(Buffer.from('Tj'));
+            socket.end(isExtractedText ? 'stream: Eicar-Test-Signature FOUND\0' : 'stream: OK\0');
+            return;
+          }
+        }
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address() as AddressInfo;
+    const scanner = new DocumentScannerService({
+      get: (key: string) =>
+        ({
+          SUPABASE_ENVIRONMENT: 'staging',
+          SUPABASE_LOCAL: true,
+          CLAMAV_HOST: '127.0.0.1',
+          CLAMAV_PORT: address.port,
+          CLAMAV_TIMEOUT_MS: 2_000,
+        })[key],
+    } as never);
+    const storage = { upload: vi.fn(), remove: vi.fn() };
+    const transactionClient = {};
+    const transaction = vi.fn(async (operation: (tx: unknown) => unknown) =>
+      operation(transactionClient),
+    );
+    const auditRecord = vi.fn().mockResolvedValue(undefined);
+    const service = new DocumentsService(
+      { $transaction: transaction } as never,
+      storage as never,
+      { record: auditRecord } as never,
+      { get: vi.fn().mockReturnValue(4) } as never,
+      {} as never,
+      {} as never,
+      scanner,
+    );
+    try {
+      await expect(
+        service.create(actor, { title: 'Documento EICAR sintético', visibility: 'INTERNAL' }, {
+          originalname: 'qa-eicar-page.pdf',
+          mimetype: 'application/pdf',
+          size: bytes.length,
+          buffer: bytes,
+        } as Express.Multer.File),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(scanned).toHaveLength(3);
+      expect(scanned[0]?.subarray(0, 5).toString('ascii')).toBe('%PDF-');
+      expect(scanned[2]?.toString('ascii')).toContain(eicar);
+      expect(storage.upload).not.toHaveBeenCalled();
+      expect(storage.remove).not.toHaveBeenCalled();
+      expect(auditRecord).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          resource: 'document_upload',
+          after: expect.objectContaining({ outcome: 'blocked', reason: 'content_rejected' }),
+        }),
+      );
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
   });
 
   it('não permite que o filtro da listagem substitua o cliente autenticado do portal', async () => {

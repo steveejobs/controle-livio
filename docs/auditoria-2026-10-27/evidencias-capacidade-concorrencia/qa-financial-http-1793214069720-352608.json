@@ -1,0 +1,479 @@
+{
+  "runId": "1793214069720-352608",
+  "startedAt": "2026-10-28T19:01:09.764Z",
+  "requestedApiConnectionLimit": 1,
+  "scope": "synthetic browser-only",
+  "preflight": {
+    "projectRef": "ioebcdpyrszokdyaoaqv",
+    "destinations": {
+      "authHost": "ioebcdpyrszokdyaoaqv.supabase.co",
+      "storageHost": "ioebcdpyrszokdyaoaqv.supabase.co",
+      "databaseHost": "aws-0-us-east-2.pooler.supabase.com",
+      "directDatabaseHost": "aws-0-us-east-2.pooler.supabase.com",
+      "database": "postgres",
+      "databaseIdentityMatches": true
+    },
+    "sharedProjectProductionConnected": true,
+    "ownerAuthorizedSyntheticWrites": true,
+    "publicSignupDisabled": true,
+    "externalCredentialsPresent": false,
+    "pushSubscriptions": 0,
+    "privateStorageBuckets": [
+      "client-photos",
+      "document-signatures",
+      "legal-documents"
+    ],
+    "rlsTablesProtected": "13/13",
+    "scheduler": {
+      "active": true,
+      "scope": "job ativo; QA não cria agenda ou notificações vencidas"
+    },
+    "existingDataModified": false
+  },
+  "checks": {
+    "frontend_browser_real": {
+      "status": "FAIL",
+      "stage": "frontend real autenticado no navegador",
+      "evidence": {
+        "errorType": "Error",
+        "message": "API remained busy with 4 local requests."
+      },
+      "error": "Error"
+    }
+  },
+  "cleanup": {
+    "organizationsArchived": 1,
+    "membershipsSuspended": 3,
+    "usersSuspended": 3,
+    "authUsersBanned": 3,
+    "syntheticProfilesRetained": 3,
+    "retainedSyntheticAuditAndRateLimitEvidence": true,
+    "apiStopRequested": true,
+    "apiShutdownGraceful": true,
+    "webStopRequested": true,
+    "webShutdownGraceful": true
+  },
+  "skippedChecks": {
+    "overview_http_performance_timing": "NOT_RUN: medições HTTP já registradas em execuções anteriores desta sprint."
+  },
+  "apiDiagnostics": {
+    "configuredConnectionLimit": 1,
+    "configuredPoolTimeoutSeconds": "10 (default)",
+    "poolConfiguration": {
+      "event": "prisma_pool_config",
+      "connectionLimit": "1",
+      "poolTimeoutSeconds": "10",
+      "metricsPreview": true
+    },
+    "poolSummary": null,
+    "poolSamples": 616,
+    "queryRoundtrips": {
+      "count": 301,
+      "durationMs": {
+        "samples": 301,
+        "p50Ms": 173,
+        "p95Ms": 356,
+        "maxMs": 714
+      },
+      "shapes": [
+        {
+          "signature": "a8402858d4f1",
+          "operation": "BEGIN",
+          "tables": [],
+          "count": 73,
+          "durationMs": {
+            "samples": 73,
+            "p50Ms": 171,
+            "p95Ms": 177,
+            "maxMs": 190
+          }
+        },
+        {
+          "signature": "5d3e388117c3",
+          "operation": "OTHER",
+          "tables": [],
+          "count": 72,
+          "durationMs": {
+            "samples": 72,
+            "p50Ms": 171,
+            "p95Ms": 179,
+            "maxMs": 182
+          }
+        },
+        {
+          "signature": "79663c1d3b43",
+          "operation": "COMMIT",
+          "tables": [],
+          "count": 72,
+          "durationMs": {
+            "samples": 72,
+            "p50Ms": 172,
+            "p95Ms": 185,
+            "maxMs": 191
+          }
+        },
+        {
+          "signature": "8d0dc51f66da",
+          "operation": "SELECT",
+          "tables": [
+            "organization_members",
+            "organizations",
+            "users",
+            "lateral",
+            "organization_member_roles",
+            "roles",
+            "role_permissions",
+            "permissions"
+          ],
+          "count": 23,
+          "durationMs": {
+            "samples": 23,
+            "p50Ms": 353,
+            "p95Ms": 557,
+            "maxMs": 714
+          }
+        },
+        {
+          "signature": "9a5ed9bd3646",
+          "operation": "INSERT",
+          "tables": [
+            "api_rate_limits",
+            "set"
+          ],
+          "count": 23,
+          "durationMs": {
+            "samples": 23,
+            "p50Ms": 345,
+            "p95Ms": 359,
+            "maxMs": 378
+          }
+        },
+        {
+          "signature": "082ec346a088",
+          "operation": "INSERT",
+          "tables": [
+            "activity_events"
+          ],
+          "count": 11,
+          "durationMs": {
+            "samples": 11,
+            "p50Ms": 347,
+            "p95Ms": 421,
+            "maxMs": 421
+          }
+        },
+        {
+          "signature": "e004ebd5b553",
+          "operation": "SELECT",
+          "tables": [],
+          "count": 6,
+          "durationMs": {
+            "samples": 6,
+            "p50Ms": 172,
+            "p95Ms": 350,
+            "maxMs": 350
+          }
+        },
+        {
+          "signature": "940496a20c66",
+          "operation": "SELECT",
+          "tables": [
+            "matters",
+            "lateral",
+            "clients",
+            "pipeline_stages",
+            "pipelines"
+          ],
+          "count": 2,
+          "durationMs": {
+            "samples": 2,
+            "p50Ms": 344,
+            "p95Ms": 358,
+            "maxMs": 358
+          }
+        },
+        {
+          "signature": "ed28044dbdec",
+          "operation": "SELECT",
+          "tables": [
+            "matters"
+          ],
+          "count": 2,
+          "durationMs": {
+            "samples": 2,
+            "p50Ms": 341,
+            "p95Ms": 346,
+            "maxMs": 346
+          }
+        },
+        {
+          "signature": "c5cd04ad83df",
+          "operation": "INSERT",
+          "tables": [
+            "activity_events"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 364,
+            "p95Ms": 364,
+            "maxMs": 364
+          }
+        },
+        {
+          "signature": "2dda98aa6274",
+          "operation": "UPDATE",
+          "tables": [
+            "users"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 349,
+            "p95Ms": 349,
+            "maxMs": 349
+          }
+        },
+        {
+          "signature": "d1131eac80e9",
+          "operation": "SELECT",
+          "tables": [
+            "organization_members",
+            "lateral",
+            "profiles",
+            "organizations"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 356,
+            "p95Ms": 356,
+            "maxMs": 356
+          }
+        },
+        {
+          "signature": "db85b7c5e9f5",
+          "operation": "SELECT",
+          "tables": [
+            "clients"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 344,
+            "p95Ms": 344,
+            "maxMs": 344
+          }
+        },
+        {
+          "signature": "6b13aab96042",
+          "operation": "SELECT",
+          "tables": [
+            "matters"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 360,
+            "p95Ms": 360,
+            "maxMs": 360
+          }
+        },
+        {
+          "signature": "ce8c37156c53",
+          "operation": "SELECT",
+          "tables": [
+            "receivables"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 354,
+            "p95Ms": 354,
+            "maxMs": 354
+          }
+        },
+        {
+          "signature": "dac24886257e",
+          "operation": "SELECT",
+          "tables": [
+            "tasks"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 344,
+            "p95Ms": 344,
+            "maxMs": 344
+          }
+        },
+        {
+          "signature": "1177c639876b",
+          "operation": "WITH",
+          "tables": [
+            "receivable_installments",
+            "installments_in_period",
+            "bounds",
+            "payment_allocations",
+            "payments",
+            "financial_adjustments",
+            "paid",
+            "adjustments",
+            "buckets",
+            "totals"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 381,
+            "p95Ms": 381,
+            "maxMs": 381
+          }
+        },
+        {
+          "signature": "4eaf38b6a95c",
+          "operation": "SELECT",
+          "tables": [
+            "pipelines",
+            "lateral",
+            "pipeline_stages"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 344,
+            "p95Ms": 344,
+            "maxMs": 344
+          }
+        },
+        {
+          "signature": "5c94850a29bb",
+          "operation": "SELECT",
+          "tables": [
+            "calendar_events"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 355,
+            "p95Ms": 355,
+            "maxMs": 355
+          }
+        },
+        {
+          "signature": "aef5f246268f",
+          "operation": "WITH",
+          "tables": [
+            "receivable_installments",
+            "receivables",
+            "clients",
+            "payment_allocations",
+            "target_installments",
+            "payments",
+            "financial_adjustments",
+            "paid",
+            "adjustments"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 373,
+            "p95Ms": 373,
+            "maxMs": 373
+          }
+        },
+        {
+          "signature": "0b01243d35e4",
+          "operation": "SELECT",
+          "tables": [
+            "notifications"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 350,
+            "p95Ms": 350,
+            "maxMs": 350
+          }
+        },
+        {
+          "signature": "a043db330104",
+          "operation": "SELECT",
+          "tables": [
+            "notifications"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 345,
+            "p95Ms": 345,
+            "maxMs": 345
+          }
+        },
+        {
+          "signature": "f9884187ee3b",
+          "operation": "SELECT",
+          "tables": [
+            "users"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 345,
+            "p95Ms": 345,
+            "maxMs": 345
+          }
+        },
+        {
+          "signature": "14f74cb08080",
+          "operation": "SELECT",
+          "tables": [
+            "audit_logs"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 356,
+            "p95Ms": 356,
+            "maxMs": 356
+          }
+        },
+        {
+          "signature": "e7ee3e1442fc",
+          "operation": "SELECT",
+          "tables": [
+            "activity_events"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 344,
+            "p95Ms": 344,
+            "maxMs": 344
+          }
+        },
+        {
+          "signature": "64a1f7eb39f6",
+          "operation": "SELECT",
+          "tables": [
+            "audit_logs"
+          ],
+          "count": 1,
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 343,
+            "p95Ms": 343,
+            "maxMs": 343
+          }
+        }
+      ]
+    }
+  },
+  "finishedAt": "2026-10-28T19:05:01.650Z",
+  "status": "FAIL",
+  "limitations": [
+    "Pagamento parcial, estorno, reembolso processado e conciliação de despesas permanecem indisponíveis.",
+    "O comprovante sintético permanece no Storage privado associado à organização QA arquivada; nenhum objeto preexistente foi alterado.",
+    "Históricos de auditoria e contadores de rate limit QA são retidos; somente organizações QA, memberships, usuários e contas Auth deste run são encerrados/suspensos."
+  ]
+}

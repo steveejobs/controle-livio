@@ -1,4 +1,5 @@
 import { Prisma } from '@livio/db';
+import { createHash } from 'node:crypto';
 
 export type FieldSource = 'PDF_TEXT' | 'OCR' | 'FINANCIAL_RECORD' | 'CALCULATION';
 export type ExtractedField = { value: string; source: FieldSource; confidence: number };
@@ -20,7 +21,7 @@ export type ReceiptFields = Partial<
     | 'paidDate'
     | 'processedDate'
     | 'paidTime'
-    | 'e2eId'
+    | 'endToEndId'
     | 'transactionId'
     | 'digitableLine'
     | 'barcode'
@@ -90,7 +91,12 @@ export function interpretReceiptText(
       'valor (?:efetivamente )?pago|valor da transa[cç][aã]o|valor transferido|total pago',
     ),
   );
-  put('dueAmount', extractMoney('valor (?:total )?devido|total da cobran[cç]a|valor a pagar'));
+  put(
+    'dueAmount',
+    extractMoney(
+      'valor (?:total )?(?:devido|cobrado)|total da cobran[cç]a|valor a pagar|valor atualizado',
+    ),
+  );
   put('nominalAmount', extractMoney('valor (?:nominal|original|do documento|do boleto)'));
   put('discount', extractMoney('desconto(?:s)?'));
   put('interest', extractMoney('juros'));
@@ -106,15 +112,15 @@ export function interpretReceiptText(
     ),
   );
   put(
-    'e2eId',
+    'endToEndId',
     matchLine(
-      /(?:^|\n)\s*(?:id(?:entificador)?\s*e2e|end.to.end)\s*[:-]?\s*([A-Za-z0-9]{15,40})/im,
+      /(?:^|\n)\s*(?:id(?:entificador)?\s*(?:e2e|end.to.end)|endtoend(?:id)?)\s*[:-]?\s*([A-Za-z0-9]{15,40})/im,
     ),
   );
   put(
     'transactionId',
     matchLine(
-      /(?:^|\n)\s*(?:id(?:entificador)?\s*(?:da\s*)?transa[cç][aã]o|autentica[cç][aã]o)\s*[:-]?\s*([A-Za-z0-9.-]{6,160})/im,
+      /(?:^|\n)\s*(?:id(?:entificador)?\s*(?:da\s*)?transa[cç][aã]o|autentica[cç][aã]o)\s*[:-]?\s*([A-Za-z0-9._:/-]{6,160})/im,
     ),
   );
   put(
@@ -162,6 +168,41 @@ export function interpretReceiptText(
   return { fields, warnings };
 }
 
+/**
+ * O external_id de Payment tem unicidade por organização no PostgreSQL. A chave
+ * opaca inclui a família do identificador; identificadores de cobrança (nosso
+ * número/linha digitável) não são usados como identificadores de liquidação.
+ */
+export function financialTransactionExternalId(fields: ReceiptFields): string | undefined {
+  const endToEndId = fields.endToEndId?.value.trim().normalize('NFC');
+  let kind: string | undefined;
+  let value: string | undefined;
+  if (endToEndId) {
+    kind = 'PIX_E2E';
+    value = endToEndId;
+  } else {
+    const transactionId = fields.transactionId?.value.trim().normalize('NFC');
+    const type = fields.documentType?.value;
+    if (!transactionId) return undefined;
+    if (type === 'PIX') kind = 'PIX_TRANSACTION';
+    else if (type === 'TRANSFERENCIA') kind = 'TRANSFER_TRANSACTION';
+    else if (type === 'BOLETO') kind = 'BOLETO_SETTLEMENT';
+    else return undefined;
+    const institution = fields.institution?.value
+      .trim()
+      .normalize('NFC')
+      .replace(/\s+/g, ' ')
+      .toLocaleLowerCase('pt-BR');
+    // Generic bank references are only safe inside the issuer's namespace.
+    // Without an institution, leave this optional key unset instead of risking
+    // a false duplicate across banks; identical uploads still use the receipt hash.
+    if (!institution) return undefined;
+    value = `${institution}\u0000${transactionId}`;
+  }
+  const digest = createHash('sha256').update(value).digest('hex');
+  return `livio-receipt:v1:${kind}:${digest}`;
+}
+
 export function reconcileReceipt(input: {
   originalAmount: string;
   previousPaid: string;
@@ -178,6 +219,7 @@ export function reconcileReceipt(input: {
   const nominal = input.fields.nominalAmount
     ? decimal(input.fields.nominalAmount.value)
     : undefined;
+  const documentDue = input.fields.dueAmount ? decimal(input.fields.dueAmount.value) : undefined;
   const discount = input.fields.discount
     ? decimal(input.fields.discount.value)
     : new Prisma.Decimal(0);
@@ -187,14 +229,27 @@ export function reconcileReceipt(input: {
   const penalty = input.fields.penalty
     ? decimal(input.fields.penalty.value)
     : new Prisma.Decimal(0);
-  const expected = nominal?.minus(discount).plus(interest).plus(penalty);
+  const formulaExpected = nominal?.minus(discount).plus(interest).plus(penalty);
+  const expected = formulaExpected ?? documentDue;
   const difference = paid && expected ? paid.minus(expected) : undefined;
+  const dueAmountDifference =
+    formulaExpected && documentDue ? documentDue.minus(formulaExpected) : undefined;
+  // When the receipt carries an explicit payable amount, compare it to the live
+  // ledger balance. A face value alone is compared only before any prior payment.
+  const ledgerComparable = documentDue ?? (previous.isZero() ? formulaExpected : undefined);
+  const ledgerDifference = ledgerComparable?.minus(balance);
   const warnings: string[] = [];
   const paidDate = input.fields.paidDate?.value;
   const today = input.today ?? new Date().toISOString().slice(0, 10);
   if (paidDate && paidDate > today) warnings.push('A data de pagamento está no futuro.');
   if (input.fields.dueDate && input.fields.dueDate.value !== input.dueDate)
     warnings.push('O vencimento do documento difere do registro financeiro.');
+  if (dueAmountDifference && !dueAmountDifference.isZero())
+    warnings.push(
+      'O valor devido difere do valor calculado com valor nominal, desconto, juros e multa.',
+    );
+  if (ledgerDifference && !ledgerDifference.isZero())
+    warnings.push('O valor da cobrança difere do saldo atual registrado no Lívio.');
   if (difference && !difference.isZero())
     warnings.push('O valor pago difere da cobrança indicada no documento.');
   if (paid?.greaterThan(balance))
@@ -214,6 +269,7 @@ export function reconcileReceipt(input: {
     ...(interest.isPositive() ? ['INTEREST'] : []),
     ...(penalty.isPositive() ? ['PENALTY'] : []),
     ...(difference?.isNegative() ? ['INSUFFICIENT'] : []),
+    ...(paid && paid.lessThan(balance) ? ['PARTIAL_PAYMENT'] : []),
     ...(difference && !difference.isZero() ? ['CHARGE_DIVERGENCE'] : []),
   ];
   return {
@@ -223,6 +279,8 @@ export function reconcileReceipt(input: {
     paidAmount: paid?.toFixed(2) ?? null,
     expectedAmount: expected?.toFixed(2) ?? null,
     difference: difference?.toFixed(2) ?? null,
+    dueAmountDifference: dueAmountDifference?.toFixed(2) ?? null,
+    ledgerDifference: ledgerDifference?.toFixed(2) ?? null,
     balanceAfter: paid && !paid.greaterThan(balance) ? balance.minus(paid).toFixed(2) : null,
     dueDate: input.dueDate,
     paidDate: paidDate ?? null,

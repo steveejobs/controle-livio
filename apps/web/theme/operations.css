@@ -34,6 +34,14 @@
   font-weight: 600;
 }
 
+.receipt-field-source {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--color-ink-soft);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
 .form-wide {
   grid-column: 1 / -1;
 }

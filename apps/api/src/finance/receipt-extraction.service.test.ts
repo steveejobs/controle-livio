@@ -54,6 +54,16 @@ describe('leitura local de comprovantes sintéticos', () => {
     expect(result.fields.paidDate?.value).toBe('2026-10-30');
   }, 30_000);
 
+  it('rejeita dimensões raster excessivas antes de decodificar a imagem', async () => {
+    const canvas = createCanvas(32, 32);
+    const oversized = canvas.toBuffer('image/png');
+    oversized.writeUInt32BE(5000, 16);
+    oversized.writeUInt32BE(5000, 20);
+    await expect(new ReceiptExtractionService().extract(oversized, 'image/png')).rejects.toThrow(
+      'limite seguro para OCR',
+    );
+  });
+
   it('usa OCR nas páginas de PDF digitalizado sem texto selecionável', async () => {
     const canvas = createCanvas(1500, 300);
     const context = canvas.getContext('2d');

@@ -144,6 +144,9 @@ describe('serviço de comprovantes', () => {
       extractedFields: {
         paidAmount: { value: '25.00' },
         paidDate: { value: '2026-10-30' },
+        institution: { value: 'Banco Sintético' },
+        transactionId: { value: 'TX-TESTE-123456' },
+        documentType: { value: 'TRANSFERENCIA' },
       },
       reconciliation: { difference: '0.00', warnings: [] },
     });
@@ -158,11 +161,70 @@ describe('serviço de comprovantes', () => {
       'receipt:receipt-1',
       expect.objectContaining({
         amount: '25.0000',
+        externalId: expect.stringMatching(/^livio-receipt:v1:TRANSFER_TRANSACTION:[a-f0-9]{64}$/),
         allocations: [{ installmentId: 'installment-1', amount: '25.0000' }],
       }),
       { receiptId: 'receipt-1', correctionReason: undefined },
     );
     expect(result).toBeUndefined();
+  });
+
+  it('permite confirmar um valor parcial sem tratá-lo como correção do OCR', async () => {
+    prisma.paymentReceipt.findFirst.mockResolvedValue({
+      id: 'receipt-1',
+      status: 'PENDING_REVIEW',
+      installmentId: 'installment-1',
+      expenseId: null,
+      clientId: target.clientId,
+      extractedFields: {
+        paidAmount: { value: '25.00' },
+        paidDate: { value: '2026-10-30' },
+      },
+      reconciliation: {
+        difference: '-75.00',
+        dueAmountDifference: '0.00',
+        ledgerDifference: '0.00',
+        warnings: ['O valor pago difere da cobrança indicada no documento.'],
+      },
+    });
+    await expect(
+      service.confirm(actor as never, 'receipt-1', {
+        amount: '25.00',
+        paidAt: '2026-10-30T12:00:00-03:00',
+        method: 'PIX',
+        reference: 'PARCIAL-25',
+      }),
+    ).resolves.toBeUndefined();
+    expect(finance.createPayment).toHaveBeenCalledOnce();
+  });
+
+  it('exige motivo quando valores do boleto divergem do nominal calculado ou do saldo', async () => {
+    prisma.paymentReceipt.findFirst.mockResolvedValue({
+      id: 'receipt-1',
+      status: 'PENDING_REVIEW',
+      installmentId: 'installment-1',
+      expenseId: null,
+      clientId: target.clientId,
+      extractedFields: {
+        paidAmount: { value: '25.00' },
+        paidDate: { value: '2026-10-30' },
+      },
+      reconciliation: {
+        difference: '0.00',
+        dueAmountDifference: '-1.00',
+        ledgerDifference: '0.00',
+        warnings: ['O valor devido difere do valor calculado.'],
+      },
+    });
+    await expect(
+      service.confirm(actor as never, 'receipt-1', {
+        amount: '25.00',
+        paidAt: '2026-10-30T12:00:00-03:00',
+        method: 'PIX',
+        reference: 'BOLETO-DIVERGENTE',
+      }),
+    ).rejects.toThrow('Informe o motivo da correção');
+    expect(finance.createPayment).not.toHaveBeenCalled();
   });
 
   it('bloqueia confirmação acima do saldo sem lançar pagamento', async () => {

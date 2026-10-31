@@ -1,4 +1,4 @@
-import { GoneException, NotFoundException } from '@nestjs/common';
+import { GoneException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PDFDocument } from 'pdf-lib';
 import { deflateSync } from 'node:zlib';
 import type { AuthenticatedActor } from '@livio/shared';
@@ -82,7 +82,12 @@ describe('DocumentSigningService', () => {
         operation({ documentSigningRequest: { create: requestCreate } }),
       ),
     };
-    const service = new DocumentSigningService(prisma as never, {} as never, audit as never);
+    const service = new DocumentSigningService(
+      prisma as never,
+      {} as never,
+      audit as never,
+      {} as never,
+    );
 
     const result = await service.createRequest(actor, 'document-a', { expiresInDays: 7 });
 
@@ -123,7 +128,12 @@ describe('DocumentSigningService', () => {
       $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
     };
     const storage = { signedUrl: vi.fn().mockResolvedValue(signedUrl) };
-    const service = new DocumentSigningService(prisma as never, storage as never, {} as never);
+    const service = new DocumentSigningService(
+      prisma as never,
+      storage as never,
+      {} as never,
+      {} as never,
+    );
 
     const result = await service.publicDetails(token);
 
@@ -193,7 +203,24 @@ describe('DocumentSigningService', () => {
         }),
       remove: vi.fn(),
     };
-    const service = new DocumentSigningService(prisma as never, storage as never, audit as never);
+    const stages: string[] = [];
+    const scanner = {
+      assertClean: vi.fn(async (_file: Buffer, mimeType?: string) => {
+        stages.push(`scan:${mimeType}`);
+      }),
+    };
+    storage.upload.mockImplementation(
+      async (key: string, file: Buffer, mime: string, bucket?: string) => {
+        uploads.push({ key, file, bucket });
+        stages.push(`upload:${mime}`);
+      },
+    );
+    const service = new DocumentSigningService(
+      prisma as never,
+      storage as never,
+      audit as never,
+      scanner as never,
+    );
 
     const result = await service.sign('e'.repeat(64), {
       signerName: 'Marina Souza',
@@ -206,6 +233,13 @@ describe('DocumentSigningService', () => {
     expect(result.signedDocumentId).toMatch(/^[0-9a-f-]{36}$/);
     expect(finalPdf.getPageCount()).toBe(2);
     expect(uploads).toHaveLength(2);
+    expect(stages).toEqual([
+      'scan:application/pdf',
+      'scan:image/png',
+      'scan:application/pdf',
+      'upload:image/png',
+      'upload:application/pdf',
+    ]);
     expect(uploads[0]?.bucket).toBe('document-signatures');
     expect(transactionUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -221,10 +255,85 @@ describe('DocumentSigningService', () => {
     expect(audit.record).toHaveBeenCalledOnce();
   });
 
+  it('keeps the source, signature, and signed PDF out of Storage when any scan rejects', async () => {
+    const sourcePdf = await PDFDocument.create();
+    sourcePdf.addPage();
+    const sourceBytes = Buffer.from(await sourcePdf.save());
+    const signature = signaturePng();
+    const request = {
+      id: 'request-a',
+      organizationId: 'org-a',
+      documentId: 'document-a',
+      sourceVersion: 3,
+      status: 'PENDING',
+      signerName: 'Marina Souza',
+      createdById: 'user-a',
+      expiresAt: new Date(Date.now() + 60_000),
+      document: {
+        id: 'document-a',
+        organizationId: 'org-a',
+        title: 'Contrato de honorários',
+        category: 'CONTRATO_HONORARIOS',
+        clientId: 'client-a',
+        matterId: null,
+        contractId: 'contract-a',
+      },
+      sourceDocumentVersion: {
+        storageKey: 'organizations/org-a/source.pdf',
+        mimeType: 'application/pdf',
+        sha256: 'a'.repeat(64),
+      },
+    };
+
+    for (const rejectedScan of [1, 2, 3]) {
+      let scanCount = 0;
+      const scanner = {
+        assertClean: vi.fn(async () => {
+          scanCount += 1;
+          if (scanCount === rejectedScan)
+            throw new UnprocessableEntityException('synthetic rejected file');
+        }),
+      };
+      const storage = {
+        download: vi.fn().mockResolvedValue(sourceBytes),
+        upload: vi.fn(),
+        remove: vi.fn(),
+      };
+      const prisma = {
+        documentSigningRequest: {
+          findUnique: vi.fn().mockResolvedValue(request),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
+      };
+      const service = new DocumentSigningService(
+        prisma as never,
+        storage as never,
+        {} as never,
+        scanner as never,
+      );
+
+      await expect(
+        service.sign('e'.repeat(64), {
+          signerName: 'Marina Souza',
+          consent: true,
+          signature: `data:image/png;base64,${signature.toString('base64')}`,
+        }),
+      ).rejects.toBeInstanceOf(UnprocessableEntityException);
+      expect(scanner.assertClean).toHaveBeenCalledTimes(rejectedScan);
+      expect(storage.upload).not.toHaveBeenCalled();
+    }
+  });
+
   it('does not resolve malformed or expired public links', async () => {
     const findUnique = vi.fn().mockResolvedValue(null);
     const prisma = { documentSigningRequest: { findUnique } };
-    const service = new DocumentSigningService(prisma as never, {} as never, {} as never);
+    const service = new DocumentSigningService(
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
 
     await expect(service.publicDetails('not-a-token')).rejects.toBeInstanceOf(NotFoundException);
     expect(findUnique).not.toHaveBeenCalled();
@@ -241,6 +350,7 @@ describe('DocumentSigningService', () => {
         documentSigningRequest: { findUnique },
         $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
       } as never,
+      {} as never,
       {} as never,
       {} as never,
     );

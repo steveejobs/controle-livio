@@ -1,0 +1,256 @@
+{
+  "runId": "1793210901033-f197d7",
+  "startedAt": "2026-10-28T18:08:21.061Z",
+  "scope": "sintético; organizações, identidades, clientes, recebíveis, pagamentos, despesas e comprovante criados neste run",
+  "preflight": {
+    "projectRef": "ioebcdpyrszokdyaoaqv",
+    "destinations": {
+      "authHost": "ioebcdpyrszokdyaoaqv.supabase.co",
+      "storageHost": "ioebcdpyrszokdyaoaqv.supabase.co",
+      "databaseHost": "aws-0-us-east-2.pooler.supabase.com",
+      "directDatabaseHost": "aws-0-us-east-2.pooler.supabase.com",
+      "database": "postgres",
+      "databaseIdentityMatches": true
+    },
+    "sharedProjectProductionConnected": true,
+    "ownerAuthorizedSyntheticWrites": true,
+    "publicSignupDisabled": true,
+    "externalCredentialsPresent": false,
+    "pushSubscriptions": 0,
+    "privateStorageBuckets": [
+      "client-photos",
+      "document-signatures",
+      "legal-documents"
+    ],
+    "rlsTablesProtected": "13/13",
+    "scheduler": {
+      "active": true,
+      "scope": "job ativo; QA não cria agenda ou notificações vencidas"
+    },
+    "existingDataModified": false
+  },
+  "checks": {
+    "overview_http_autenticado": {
+      "status": "PASS",
+      "stage": "Auth JWT, membership, permissões, rate limit, Prisma e JSON HTTP",
+      "evidence": {
+        "coldMs": 4126,
+        "warm": {
+          "samples": 10,
+          "p50Ms": 2634,
+          "p95Ms": 3403,
+          "maxMs": 3403
+        },
+        "concurrent2Ms": [
+          4517,
+          5402
+        ],
+        "combined": {
+          "samples": 12,
+          "p50Ms": 2640,
+          "p95Ms": 5402,
+          "maxMs": 5402
+        },
+        "rateLimitActive": true,
+        "rateLimitWindow": "2026-10-28T18:10:00.000Z",
+        "concurrentCounterBefore": 1,
+        "concurrentCounterAfter": 3,
+        "concurrentRemaining": [
+          297,
+          298
+        ],
+        "baselineBalance": "100.0000 BRL",
+        "httpStatuses": [
+          200,
+          200,
+          200
+        ]
+      }
+    },
+    "isolamento_entre_organizacoes": {
+      "status": "PASS",
+      "stage": "GET /clients/:id/overview com JWT de outro escritório",
+      "evidence": {
+        "status": 404,
+        "bodyContainsSyntheticClient": false
+      }
+    },
+    "pagamentos_concorrentes_idempotencia_distinta": {
+      "status": "PASS",
+      "stage": "POST /finance/payments em concorrência 2 no PostgreSQL real",
+      "evidence": {
+        "httpStatuses": [
+          201,
+          400
+        ],
+        "confirmedPayments": 1,
+        "activeAllocations": 1,
+        "totalAllocated": "65.0000",
+        "remainingBalance": "35.0000",
+        "raceDurationMs": 9354,
+        "keysWereDistinct": true
+      }
+    },
+    "relatorio_recebimentos_e_saldo": {
+      "status": "PASS",
+      "stage": "overview pós-pagamento e GET /reports/received",
+      "evidence": {
+        "overviewBalance": "35.0000",
+        "actualReceived": "65.00",
+        "reportHttpStatus": 200
+      }
+    },
+    "rate_limit_sintetico": {
+      "status": "PASS",
+      "stage": "conferência da linha técnica criada pelo guard global",
+      "evidence": {
+        "recordBelongsToQaUserAndOrganization": true,
+        "requestCount": 5,
+        "modifiedPreexistingCounter": false
+      }
+    },
+    "expense_policy_permissions": {
+      "status": "PASS",
+      "stage": "JWT financeiro e JWT administrador em organização sintética",
+      "evidence": {
+        "absentPolicyDefaultsToRequired": true,
+        "independentApproverAvailable": true,
+        "nonAdminConfigurationDenied": true,
+        "adminConfigurationAccepted": true
+      }
+    },
+    "expense_create_edit_attachment_and_confirmation": {
+      "status": "PASS",
+      "stage": "criação/edição por JWT financeiro, documento privado e aprovação desabilitada",
+      "evidence": {
+        "expenseStatus": "APPROVED",
+        "exactAmount": "125.1250",
+        "dueDateSet": true,
+        "responsibleLinked": true,
+        "clientLinked": true,
+        "documentVersion": 1,
+        "documentSha256MatchesUpload": true,
+        "signedUrlHostMatchesProject": true,
+        "signedUrlExpirySeconds": 300,
+        "noRealDocumentUsed": true
+      }
+    },
+    "expense_full_payment_duplicate_history": {
+      "status": "PASS",
+      "stage": "pagamento integral exato, bloqueio parcial/duplicado, transições e histórico",
+      "evidence": {
+        "exactAmount": "125.1250",
+        "partialPaymentRejected": true,
+        "duplicatePaymentRejected": true,
+        "paidCancellationRejected": true,
+        "approvalAfterPaymentRejected": true,
+        "auditEvents": 4,
+        "receiptVisibleInExpenseList": true
+      }
+    },
+    "expense_required_approval_rejection_and_resubmission": {
+      "status": "PASS",
+      "stage": "rejeição justificada, reedição, reenvio, aprovação independente e pagamento exato",
+      "evidence": {
+        "selfApprovalRejected": true,
+        "paymentBeforeApprovalRejected": true,
+        "rejectionRequiresReason": true,
+        "rejectedExpenseEditableAndReset": true,
+        "pendingSummaryAmount": "20.1000",
+        "pendingNotCountedAsApprovedForecast": true,
+        "approvedForecastAmount": "20.1000",
+        "independentApprover": true,
+        "finalStatus": "PAID",
+        "auditTransitions": [
+          "REJECT",
+          "APPROVE",
+          "PAY"
+        ]
+      }
+    },
+    "expense_reports_and_decimal_consistency": {
+      "status": "PASS",
+      "stage": "resumo, caixa efetivo, previsão e resultado por cliente",
+      "evidence": {
+        "paidCount": 2,
+        "paidAmount": "145.2250",
+        "paidCashFlow": "145.2250",
+        "unpaidForecast": "0.0000",
+        "pendingApprovalAfterCompletion": "0.0000",
+        "clientExpenseAmount": "145.2250",
+        "filterMatchedTwoPaidExpenses": true,
+        "separateCurrencyGrouping": true
+      }
+    },
+    "expense_cancellation_and_invalid_transitions": {
+      "status": "PASS",
+      "stage": "cancelamento permitido em rascunho e rejeição de reuso/transições inválidas",
+      "evidence": {
+        "cancellationStatus": "CANCELLED",
+        "duplicateCancelRejected": true,
+        "submitAfterCancelRejected": true,
+        "paymentAfterCancelRejected": true
+      }
+    },
+    "expense_tenant_and_document_isolation": {
+      "status": "PASS",
+      "stage": "JWT administrador de outro escritório contra despesas e comprovante sintéticos",
+      "evidence": {
+        "foreignExpenseListCount": 0,
+        "foreignHistoryNotFound": true,
+        "foreignUpdateNotFound": true,
+        "foreignDocumentNotFound": true,
+        "otherOrganizationSummaryHasNoForeignExpenses": true,
+        "sourceOrganizationPaidAmount": "145.2250"
+      }
+    },
+    "expense_single_administrator_office": {
+      "status": "PASS",
+      "stage": "escritório sintético com somente um administrador ativo",
+      "evidence": {
+        "approvalRequiredByDefault": true,
+        "noIndependentApproverReported": true,
+        "submissionBlockedWithoutApprover": true,
+        "disablingApprovalAllowedForAdmin": true,
+        "immediateApprovalAndIntegralPayment": "PAID"
+      }
+    },
+    "expenses_http_end_to_end": {
+      "status": "PASS",
+      "stage": "rotas HTTP autenticadas de despesas, Storage, auditoria e relatórios",
+      "evidence": {
+        "approvalOffAndOn": true,
+        "createEditDueDateResponsibleClient": true,
+        "rejectionAndIndependentApproval": true,
+        "exactIntegralPayments": [
+          "125.1250",
+          "20.1000"
+        ],
+        "duplicateAndInvalidTransitionsRejected": true,
+        "syntheticReceiptUploadedAndSignedUrlVerified": true,
+        "filteringHistorySummaryAndCashFlowVerified": true,
+        "organizationIsolationVerified": true,
+        "singleAdministratorWorkflowVerified": true,
+        "sourceOrganizationPaidExpenses": "145.2250 BRL",
+        "foreignOrganizationAmountExcluded": true
+      }
+    }
+  },
+  "cleanup": {
+    "organizationsArchived": 2,
+    "membershipsSuspended": 3,
+    "usersSuspended": 3,
+    "authUsersBanned": 3,
+    "syntheticProfilesRetained": 3,
+    "retainedSyntheticAuditAndRateLimitEvidence": true,
+    "apiStopRequested": true,
+    "webStopRequested": false
+  },
+  "finishedAt": "2026-10-28T18:13:58.197Z",
+  "status": "PASS",
+  "limitations": [
+    "Pagamento parcial, estorno, reembolso processado e conciliação de despesas permanecem indisponíveis.",
+    "O comprovante sintético permanece no Storage privado associado à organização QA arquivada; nenhum objeto preexistente foi alterado.",
+    "Históricos de auditoria e contadores de rate limit QA são retidos; somente organizações QA, memberships, usuários e contas Auth deste run são encerrados/suspensos."
+  ]
+}

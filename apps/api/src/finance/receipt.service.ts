@@ -17,7 +17,11 @@ import { StorageService } from '../documents/storage.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { FinanceService } from './finance.service';
 import { ReceiptExtractionService } from './receipt-extraction.service';
-import { reconcileReceipt, type ReceiptFields } from './receipt-interpretation';
+import {
+  financialTransactionExternalId,
+  reconcileReceipt,
+  type ReceiptFields,
+} from './receipt-interpretation';
 import type {
   ReceiptConfirmationInput,
   ReceiptDecisionInput,
@@ -317,17 +321,19 @@ export class ReceiptService {
     const paidDate = dateInZone(new Date(input.paidAt), organization.timezone);
     const comparison = receipt.reconciliation as {
       difference?: string | null;
+      dueAmountDifference?: string | null;
+      ledgerDifference?: string | null;
       warnings?: string[];
     };
-    const discrepancy = Boolean(
-      comparison.difference && !new Prisma.Decimal(comparison.difference).isZero(),
+    const chargeMismatch = [comparison.dueAmountDifference, comparison.ledgerDifference].some(
+      (value) => value && !new Prisma.Decimal(value).isZero(),
     );
     const mismatch =
       !fields.paidAmount ||
       !fields.paidDate ||
       !amount.equals(fields.paidAmount.value) ||
       paidDate !== fields.paidDate.value ||
-      discrepancy ||
+      chargeMismatch ||
       Boolean(comparison.warnings?.some((warning) => warning.includes('vencimento')));
     if (mismatch && !input.correctionReason)
       throw new BadRequestException('Informe o motivo da correção dos dados extraídos.');
@@ -343,6 +349,7 @@ export class ReceiptService {
           'Valor excede o saldo. Decida crédito ou devolução antes de registrar.',
         );
       try {
+        const transactionExternalId = financialTransactionExternalId(fields);
         return await this.finance.createPayment(
           actor,
           `receipt:${id}`,
@@ -353,7 +360,7 @@ export class ReceiptService {
             currency: 'BRL',
             paidAt: new Date(input.paidAt),
             method: input.method,
-            ...(fields.e2eId ? { externalId: fields.e2eId.value } : {}),
+            ...(transactionExternalId ? { externalId: transactionExternalId } : {}),
             allocations: [{ installmentId: receipt.installmentId, amount: amount.toFixed(4) }],
           },
           { receiptId: id, correctionReason: input.correctionReason },
