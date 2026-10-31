@@ -5,12 +5,7 @@ import type { ApiError } from '../../lib/api';
 
 export function Notice({ error, onRetry }: { error?: ApiError; onRetry?: () => void }) {
   if (!error) return null;
-  const message =
-    error.status === 403
-      ? 'Acesso negado para esta operacao.'
-      : error.status === 401
-        ? 'Sua sessao expirou. Entre novamente.'
-        : error.message;
+  const message = error.status === 403 ? 'Acesso negado para esta operação.' : error.message;
   return (
     <div role="alert" className="notice notice-error">
       {message}
