@@ -8,7 +8,9 @@
 
 ## Itens que impedem uso operacional
 
-Atualização da revisão funcional: foi confirmado que a candidata `8ac9dbc` aceita fotos de cliente até 5 MiB, acima do limite de corpo hospedado. A correção para 4 MiB está apenas no checkout local, acompanhada de testes. O ZIP anterior permanece imutável; é necessária nova candidata após autorização. Veja `ativacao-2026-11-01/COBERTURA_FUNCIONAL.md` para cobertura, testes adicionais e lacunas por opção.
+Atualização da revisão funcional: foi confirmado que a candidata `8ac9dbc` aceita fotos de cliente até 5 MiB, acima do limite de corpo hospedado. A correção para 4 MiB foi enviada à branch de validação, acompanhada de testes, sem publicação operacional. O ZIP anterior permanece imutável; é necessária nova candidata após autorização. Veja `ativacao-2026-11-01/COBERTURA_FUNCIONAL.md` para cobertura, testes adicionais e lacunas por opção.
+
+A correção de fotos e a primeira ampliação foram enviadas à branch de validação no commit `e714d69`, com autorização exclusiva para CI. O Quality #41309005830 aprovou integração e restore, mas falhou em dois downloads CSV do navegador. O ciclo de vida do blob e os testes de exportação foram ajustados localmente; nova CI necessária. Não substituir a evidência da candidata por uma declaração de aprovação desse workflow.
 
 1. **Scanner de documentos:** a API nova exige `CLAMAV_HOST`, ausente na configuração Vercel Production. O limite `MAX_DOCUMENT_SIZE_MB` foi alinhado para 4 MiB, mas ainda falta scanner privado ou gateway HTTPS autenticado. Não publicar a porta TCP do `clamd` na internet.
 2. **Banco publicado:** a última migration aplicada é `20261027150000`. A tabela de comprovantes da migration `20261031120000_payment_receipts.sql` não existe nesse banco. A migration `20261101100000_restrict_public_table_privileges.sql` foi preparada para revogar grants excessivos de `anon` e `authenticated`, observados em 45 tabelas. Nenhuma das duas foi aplicada no banco compartilhado.

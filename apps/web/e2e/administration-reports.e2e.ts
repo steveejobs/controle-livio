@@ -7,6 +7,8 @@ const reports = [
   'overdue',
   'aging',
   'cash-forecast',
+  'cash-flow',
+  'cash-flow-by-client',
   'partial-payments',
   'active-contracts',
   'revenue-by-lawyer',
@@ -24,8 +26,25 @@ for (const viewport of [
   }) => {
     test.setTimeout(180_000);
     await page.setViewportSize(viewport);
+    await page.addInitScript(() => {
+      const copied: string[] = [];
+      Object.assign(window, { copiedLinksQA: copied });
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            copied.push(value);
+          },
+        },
+      });
+    });
     await page.emulateMedia({ reducedMotion: 'reduce' });
-    const requests: Array<{ method: string; path: string; body?: Record<string, unknown> }> = [];
+    const requests: Array<{
+      method: string;
+      path: string;
+      query?: string;
+      body?: Record<string, unknown>;
+    }> = [];
     const pipelines: Array<Record<string, unknown>> = [];
     const users: Array<Record<string, unknown>> = [];
     let accessAlertSettings = { enabled: false, times: ['09:00'], timezone: 'America/Sao_Paulo' };
@@ -77,7 +96,7 @@ for (const viewport of [
         body = accessAlertSettings;
       } else if (path === '/v1/admin/users' && method === 'POST') {
         const user = {
-          id: 'user-1',
+          id: `user-${users.length + 1}`,
           status: 'ACTIVE',
           email: submitted?.email,
           fullName: submitted?.fullName,
@@ -86,8 +105,12 @@ for (const viewport of [
         users.push(user);
         body = {
           ...user,
-          invitationUrl:
-            'https://example.test/auth/confirm?token_hash=qa-test&type=invite&next=/reset-password',
+          ...(submitted?.delivery === 'EMAIL'
+            ? {}
+            : {
+                invitationUrl:
+                  'https://example.test/auth/confirm?token_hash=qa-test&type=invite&next=/reset-password',
+              }),
         };
       } else if (path === '/v1/admin/users/user-1/status' && method === 'PATCH') {
         users[0] = { ...users[0], status: submitted?.status };
@@ -131,14 +154,14 @@ for (const viewport of [
           headers: { 'access-control-allow-origin': '*' },
           body: '\ufeffmonth,amount\n2026-10,10.00\n',
         });
-        requests.push({ method, path });
+        requests.push({ method, path, query: url.search });
         return;
       } else if (path.startsWith('/v1/reports/')) {
         body = { basis: 'qa', rows: [] };
       } else {
         throw new Error(`Unexpected API request: ${method} ${path}`);
       }
-      requests.push({ method, path, body: submitted ?? undefined });
+      requests.push({ method, path, query: url.search, body: submitted ?? undefined });
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -196,11 +219,23 @@ for (const viewport of [
     await expect(page.getByLabel('Link de convite', { exact: true })).toHaveValue(
       /token_hash=qa-test/,
     );
+    await page.getByRole('button', { name: 'Copiar link', exact: true }).click();
+    await expect(page.getByText('Link de convite copiado.', { exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Ocultar link', exact: true }).click();
+    await expect(page.getByLabel('Link de convite', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Redefinir senha' })).toBeVisible();
     await page.getByRole('button', { name: 'Redefinir senha' }).click();
     await expect(page.getByLabel('Link de redefinição de senha')).toHaveValue(
       /token_hash=qa-recovery/,
     );
+    await page.getByRole('button', { name: 'Copiar link', exact: true }).click();
+    await expect(page.getByText('Link de redefinição copiado.', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => Reflect.get(window, 'copiedLinksQA') as string[])).toEqual([
+      'https://example.test/auth/confirm?token_hash=qa-test&type=invite&next=/reset-password',
+      'https://example.test/auth/confirm?token_hash=qa-recovery&type=recovery',
+    ]);
+    await page.getByRole('button', { name: 'Ocultar link', exact: true }).click();
+    await expect(page.getByLabel('Link de redefinição de senha')).toHaveCount(0);
     expect(
       requests.find((request) => request.path === '/v1/admin/users' && request.method === 'POST')
         ?.body,
@@ -214,6 +249,25 @@ for (const viewport of [
       'SUSPENDED',
       'ACTIVE',
     ]);
+    await page.getByLabel('Nome completo').fill('Secretaria QA');
+    await page.getByLabel('E-mail profissional').fill('secretary@example.test');
+    await page.getByLabel('Perfil de acesso').selectOption('role-secretary');
+    await page.getByRole('combobox', { name: 'Como entregar o convite' }).selectOption('EMAIL');
+    await page.getByRole('button', { name: 'Cadastrar e enviar convite', exact: true }).click();
+    await expect(
+      page.getByText(
+        'Convite enviado. O profissional poderá definir a senha e entrar pelo login normal.',
+        { exact: true },
+      ),
+    ).toBeVisible();
+    expect(
+      requests.filter((r) => r.path === '/v1/admin/users' && r.method === 'POST').at(-1)?.body,
+    ).toMatchObject({
+      delivery: 'EMAIL',
+      roleIds: ['role-secretary'],
+      email: 'secretary@example.test',
+    });
+    await expect(page.getByLabel('Link de convite', { exact: true })).toHaveCount(0);
     await page.getByRole('button', { name: 'Atualizar permissões padrão' }).click();
     await expect
       .poll(() => requests.filter((request) => request.path.endsWith('/reconcile')).length)
@@ -248,19 +302,51 @@ for (const viewport of [
     const reportSelect = page.getByRole('combobox', { name: 'Relatório' });
     for (const report of reports) {
       await reportSelect.selectOption(report);
+      if (report === 'received') {
+        await page.getByLabel('Data inicial').fill('2026-01-01');
+        await page.getByLabel('Data final').fill('2026-11-30');
+        for (const group of ['day', 'week', 'month']) {
+          await page.getByRole('combobox', { name: 'Agrupar por' }).selectOption(group);
+          await expect
+            .poll(() =>
+              requests.some(
+                (request) =>
+                  request.path === '/v1/reports/received' &&
+                  new URLSearchParams(request.query).get('groupBy') === group &&
+                  new URLSearchParams(request.query).get('to') === '2026-11-30',
+              ),
+            )
+            .toBe(true);
+        }
+      }
       await expect
         .poll(() => requests.some((request) => request.path.startsWith(`/v1/reports/${report}`)))
         .toBe(true);
-      const downloadPromise = page.waitForEvent('download');
-      await page.getByRole('button', { name: 'Exportar CSV' }).click();
-      const download = await downloadPromise;
-      expect(download.suggestedFilename()).toBe(`livio-${report}.csv`);
+      await test.step(`export CSV ${report}`, async () => {
+        try {
+          const [download] = await Promise.all([
+            page.waitForEvent('download', { timeout: 10_000 }),
+            page.getByRole('button', { name: 'Exportar CSV' }).click(),
+          ]);
+          expect(download.suggestedFilename()).toBe(`livio-${report}.csv`);
+          expect(await download.failure()).toBeNull();
+        } catch (error) {
+          const requested = requests.some(
+            (request) => request.path === `/v1/reports/${report}/export.csv`,
+          );
+          throw new Error(`CSV_DOWNLOAD_FAILED report=${report} requestObserved=${requested}`, {
+            cause: error,
+          });
+        }
+      });
     }
     await reportSelect.selectOption('receivables-due');
-    const downloadPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: 'Exportar CSV' }).click();
-    const download = await downloadPromise;
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 10_000 }),
+      page.getByRole('button', { name: 'Exportar CSV' }).click(),
+    ]);
     expect(download.suggestedFilename()).toBe('livio-receivables-due.csv');
+    expect(await download.failure()).toBeNull();
     expect(requests.some((request) => request.path.endsWith('/export.csv'))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,

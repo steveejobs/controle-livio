@@ -1,19 +1,26 @@
 {
   "baseRelease": "8ac9dbc35d9246083f66ba80ae72001ebac28e3c",
-  "state": "UNCOMMITTED_LOCAL_CHANGES",
+  "state": "VALIDATION_COMMIT_PLUS_LOCAL_TEST_ADDITIONS",
   "checks": {
-    "unit": { "api": 209, "web": 35, "shared": 20, "total": 264, "status": "PASS" },
+    "unit": {
+      "api": 209,
+      "web": 36,
+      "shared": 20,
+      "total": 265,
+      "status": "PASS"
+    },
     "lint": "PASS",
     "typecheck": "PASS",
     "prismaValidate": "PASS",
     "apiBuild": "PASS",
     "webBuild": "PASS",
-    "initialJavaScriptGzipBytes": 252823,
+    "initialJavaScriptGzipBytes": 252858,
     "initialJavaScriptLimitBytes": 260000,
-    "integratedPostChange": "NOT_RUN",
+    "integratedPostChange": "PASS_FOR_e714d69_QUALITY_41309005830",
+    "secondaryTestsCI": "PENDING_WITH_CSV_FIX",
     "hostedPostChange": "NOT_RUN"
   },
-  "recordedAt": "2026-11-01T12:50:34.588Z",
+  "recordedAt": "2026-11-01T13:28:47.033Z",
   "scope": "Browser with intercepted API, loopback-only public configuration; not hosted runtime or PostgreSQL integration.",
   "runs": [
     {
@@ -340,15 +347,199 @@
           ]
         }
       ]
+    },
+    {
+      "file": ".tmp/functional-extra-report.json",
+      "sha256": "221de909ad1caa1ff225dda58432b744efcc3b144452fadb0b12b852d8e7c132",
+      "stats": {
+        "startTime": "2026-11-01T13:01:46.150Z",
+        "duration": 58698.578,
+        "expected": 4,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "cases": [
+        {
+          "file": "administration-reports.e2e.ts",
+          "title": "administrator actions, pipeline stages and all reports at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 13882
+            }
+          ]
+        },
+        {
+          "file": "administration-reports.e2e.ts",
+          "title": "administrator actions, pipeline stages and all reports at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 7365
+            }
+          ]
+        },
+        {
+          "file": "receipt-decisions.e2e.ts",
+          "title": "receipt review decisions, cancellation and retry at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 5333
+            }
+          ]
+        },
+        {
+          "file": "receipt-decisions.e2e.ts",
+          "title": "receipt review decisions, cancellation and retry at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 5454
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": ".tmp/functional-expense-report.json",
+      "sha256": "c6f9ddf4afac1cd0d052195f471dabcd244c2cd1fd042d42d662bad87ac38bc4",
+      "stats": {
+        "startTime": "2026-11-01T13:04:36.584Z",
+        "duration": 25318.789,
+        "expected": 2,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "cases": [
+        {
+          "file": "expense-secondary.e2e.ts",
+          "title": "expense policy, filters, history, editing, rejection and cancellation at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 8128
+            }
+          ]
+        },
+        {
+          "file": "expense-secondary.e2e.ts",
+          "title": "expense policy, filters, history, editing, rejection and cancellation at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 5094
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": ".tmp/functional-document-report.json",
+      "sha256": "9df60c246cc5c56712823860f1e798f91a1c755d2952f2f68aaa6b3a6e244f8f",
+      "stats": {
+        "startTime": "2026-11-01T13:06:57.898Z",
+        "duration": 34527.700000000004,
+        "expected": 2,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "cases": [
+        {
+          "file": "document-maintenance.e2e.ts",
+          "title": "office settings, signature revocation and document versions at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 9697
+            }
+          ]
+        },
+        {
+          "file": "document-maintenance.e2e.ts",
+          "title": "office settings, signature revocation and document versions at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 6505
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": ".tmp/functional-csv-report.json",
+      "sha256": "e814de7da4afffcd34f6ab2c38044f3d30d61afa8fe7f742c0e8ac854d03acfd",
+      "stats": {
+        "startTime": "2026-11-01T13:24:29.630Z",
+        "duration": 97390.105,
+        "expected": 2,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "cases": [
+        {
+          "file": "administration-reports.e2e.ts",
+          "title": "administrator actions, pipeline stages and all reports at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 7766
+            }
+          ]
+        },
+        {
+          "file": "administration-reports.e2e.ts",
+          "title": "administrator actions, pipeline stages and all reports at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 6640
+            }
+          ]
+        }
+      ]
     }
   ],
-  "expected": 27,
+  "expected": 33,
   "unexpected": 0,
   "flaky": 0,
   "productionSourceSha256": {
     "packages/shared/src/environment.ts": "fb90f8a601b503256eabde64ac5bb5c2eb79b953942f973ab792a63703fb7a93",
     "apps/api/src/clients/clients.controller.ts": "60094b2d68e77676687c8a208e84a08b4a8cb70ff61f11bd773feae336f17fe3",
     "apps/api/src/clients/clients.service.ts": "1c64715f68a77d46dde07371a87bb46e9a89f287115501cc8e82f531ada2a07d",
-    "apps/web/features/clients/client-photo.tsx": "e4e12a093d176aabf2c4db049fa23502f3059efcb9dfe0d36e12b89815c5ea2c"
-  }
+    "apps/web/features/clients/client-photo.tsx": "e4e12a093d176aabf2c4db049fa23502f3059efcb9dfe0d36e12b89815c5ea2c",
+    "apps/web/lib/api.ts": "3fcc30bd39a26d33bb3d06c88f7cf7a69e13f814190d063a927fbf6728b0bc3f"
+  },
+  "uniqueCases": 33,
+  "successfulExecutions": 37,
+  "aggregation": "Latest result per file/title; repeated scenarios are counted once in expected and uniqueCases.",
+  "validationCommit": "e714d69e60a66152968182f79e95f636d4ff0b66",
+  "ciRuns": [
+    {
+      "id": 41309005830,
+      "sha": "e714d69e60a66152968182f79e95f636d4ff0b66",
+      "application": "FAIL_CSV_DOWNLOAD",
+      "integrated": "PASS",
+      "syntheticRestore": "PASS",
+      "mocked": {
+        "passed": 25,
+        "failed": 2
+      }
+    }
+  ]
 }

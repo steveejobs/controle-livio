@@ -169,19 +169,56 @@ describe('authenticated API client', () => {
       }),
     );
     const click = vi.fn();
-    const link = { href: '', download: '', rel: '', click };
+    const remove = vi.fn();
+    const append = vi.fn();
+    const link = { href: '', download: '', rel: '', hidden: false, click, remove };
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('document', { createElement: vi.fn(() => link) });
+    vi.stubGlobal('document', { createElement: vi.fn(() => link), body: { append } });
     vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:report');
     const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
     const { downloadApiFile } = await import('./api');
 
-    await downloadApiFile('/reports/aging/export.csv', 'livio-aging.csv');
-
-    expect(click).toHaveBeenCalledOnce();
-    expect(link.download).toBe('livio-aging.csv');
-    expect(revoke).toHaveBeenCalledWith('blob:report');
-    const [, init] = fetchMock.mock.calls[0]!;
-    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer access-token-for-test');
+    vi.useFakeTimers();
+    try {
+      await downloadApiFile('/reports/aging/export.csv', 'livio-aging.csv');
+      expect(append).toHaveBeenCalledWith(link);
+      expect(click).toHaveBeenCalledOnce();
+      expect(link.download).toBe('livio-aging.csv');
+      expect(revoke).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+      await vi.runAllTimersAsync();
+      expect(remove).toHaveBeenCalledOnce();
+      expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:report');
+      const [, init] = fetchMock.mock.calls[0]!;
+      expect(new Headers(init.headers).get('Authorization')).toBe('Bearer access-token-for-test');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it('releases the temporary link and blob if the browser refuses the download click', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('synthetic csv', { status: 200 })),
+    );
+    const remove = vi.fn();
+    const link = {
+      href: '',
+      download: '',
+      rel: '',
+      hidden: false,
+      remove,
+      click: () => {
+        throw new Error('Download unavailable');
+      },
+    };
+    vi.stubGlobal('document', { createElement: () => link, body: { append: vi.fn() } });
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:failed-report');
+    const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    const { downloadApiFile } = await import('./api');
+    await expect(downloadApiFile('/reports/aging/export.csv', 'report.csv')).rejects.toThrow(
+      'Download unavailable',
+    );
+    expect(remove).toHaveBeenCalledOnce();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith('blob:failed-report');
   });
 });

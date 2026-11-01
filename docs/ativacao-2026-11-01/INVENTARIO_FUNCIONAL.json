@@ -9621,6 +9621,16 @@
       ]
     },
     {
+      "file": "apps/web/e2e/document-maintenance.e2e.ts",
+      "titles": ["office settings, signature revocation and document versions at ${width}px"]
+    },
+    {
+      "file": "apps/web/e2e/expense-secondary.e2e.ts",
+      "titles": [
+        "expense policy, filters, history, editing, rejection and cancellation at ${width}px"
+      ]
+    },
+    {
       "file": "apps/web/e2e/finance-payment.e2e.ts",
       "titles": ["payment form finds a client installment and submits the exact decimal amount"]
     },
@@ -9671,6 +9681,10 @@
         "the install prompt is retained and the service worker is served",
         "push alerts can be enabled and disabled for this browser"
       ]
+    },
+    {
+      "file": "apps/web/e2e/receipt-decisions.e2e.ts",
+      "titles": ["receipt review decisions, cancellation and retry at ${width}px"]
     },
     {
       "file": "apps/web/e2e/signature-link.e2e.ts",
