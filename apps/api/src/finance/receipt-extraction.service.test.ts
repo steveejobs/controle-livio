@@ -1,6 +1,6 @@
 import { createCanvas } from '@napi-rs/canvas';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ReceiptExtractionService } from './receipt-extraction.service';
 
 describe('leitura local de comprovantes sintéticos', () => {
@@ -62,6 +62,26 @@ describe('leitura local de comprovantes sintéticos', () => {
     await expect(new ReceiptExtractionService().extract(oversized, 'image/png')).rejects.toThrow(
       'limite seguro para OCR',
     );
+  });
+
+  it('rejeita OCR acima do limite em vez de truncar o texto', async () => {
+    const fakeWorker = {
+      recognize: vi.fn().mockResolvedValue({ data: { text: 'A'.repeat(40_001) } }),
+      terminate: vi.fn().mockResolvedValue(undefined),
+    };
+    class OversizedOcrService extends ReceiptExtractionService {
+      protected override createOcrWorker() {
+        return Promise.resolve(fakeWorker as never);
+      }
+    }
+
+    const canvas = createCanvas(32, 32);
+    const service = new OversizedOcrService();
+    await expect(service.extract(canvas.toBuffer('image/png'), 'image/png')).rejects.toThrow(
+      'Texto OCR excede o limite seguro de extração.',
+    );
+    expect(fakeWorker.recognize).toHaveBeenCalledOnce();
+    expect(fakeWorker.terminate).toHaveBeenCalledOnce();
   });
 
   it('usa OCR nas páginas de PDF digitalizado sem texto selecionável', async () => {

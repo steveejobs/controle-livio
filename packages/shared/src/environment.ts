@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 4;
+export const MAX_CLIENT_PHOTO_SIZE_MB = MAX_DOCUMENT_UPLOAD_SIZE_MB;
 
 const postgresqlUrl = z
   .string()

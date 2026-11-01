@@ -89,9 +89,10 @@ export class DocumentScannerService {
         if (settled) return;
         settled = true;
         socket.destroy();
-        if (/\bOK\s*$/.test(value)) {
+        const verdict = value.trim();
+        if (/^stream:\s+OK$/.test(verdict)) {
           resolve();
-        } else if (/\bFOUND\s*$/.test(value)) {
+        } else if (/^stream:\s+.+\s+FOUND$/.test(verdict)) {
           reject(
             new UnprocessableEntityException(
               'O arquivo foi bloqueado pela verificação de segurança.',

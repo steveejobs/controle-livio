@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { MAX_CLIENT_PHOTO_SIZE_MB } from '@livio/shared';
 import { useEffect, useState, type ChangeEvent } from 'react';
 import { api, ApiError } from '../../lib/api';
 
@@ -42,10 +43,10 @@ export function ClientPhoto({
     event.currentTarget.value = '';
     if (!file) return;
     if (
-      file.size > 5 * 1024 * 1024 ||
+      file.size > MAX_CLIENT_PHOTO_SIZE_MB * 1024 * 1024 ||
       !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
     ) {
-      setError('Escolha uma foto JPG, PNG ou WebP de até 5 MB.');
+      setError(`Escolha uma foto JPG, PNG ou WebP de até ${MAX_CLIENT_PHOTO_SIZE_MB} MiB.`);
       return;
     }
     setBusy(true);

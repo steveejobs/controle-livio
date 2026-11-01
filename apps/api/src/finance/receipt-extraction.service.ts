@@ -11,10 +11,11 @@ import { interpretReceiptText, type ReceiptFields } from './receipt-interpretati
 
 const requireFromHere = createRequire(__filename);
 const languagePath = dirname(
-  requireFromHere.resolve('@tesseract.js-data/por/4.0.0_best_int/por.traineddata.gz'),
+  require.resolve('@tesseract.js-data/por/4.0.0_best_int/por.traineddata.gz'),
 );
 const maximumPages = 3;
 const maximumPixels = 4_000_000;
+const maximumOcrTextCharacters = 40_000;
 
 function rasterDimensions(buffer: Buffer, mimeType: string) {
   if (mimeType === 'image/png') {
@@ -55,6 +56,14 @@ function rasterDimensions(buffer: Buffer, mimeType: string) {
 @Injectable()
 export class ReceiptExtractionService {
   private active = 0;
+
+  protected createOcrWorker() {
+    return createWorker('por', 1, {
+      langPath: languagePath,
+      gzip: true,
+      cacheMethod: 'none',
+    });
+  }
 
   async extract(
     buffer: Buffer,
@@ -177,11 +186,7 @@ export class ReceiptExtractionService {
     const timedOutError = new ServiceUnavailableException(
       'A leitura do comprovante excedeu o tempo seguro.',
     );
-    const workerTask = createWorker('por', 1, {
-      langPath: languagePath,
-      gzip: true,
-      cacheMethod: 'none',
-    }).then(async (started) => {
+    const workerTask = this.createOcrWorker().then(async (started) => {
       worker = started;
       if (timedOut) {
         await started.terminate();
@@ -199,9 +204,15 @@ export class ReceiptExtractionService {
           }, 15_000);
         }),
       ]);
-      return result.data.text.slice(0, 40_000);
+      if (result.data.text.length > maximumOcrTextCharacters)
+        throw new UnprocessableEntityException('Texto OCR excede o limite seguro de extração.');
+      return result.data.text;
     } catch (error) {
-      if (error instanceof ServiceUnavailableException) throw error;
+      if (
+        error instanceof UnprocessableEntityException ||
+        error instanceof ServiceUnavailableException
+      )
+        throw error;
       throw new ServiceUnavailableException('O serviço de OCR não pôde concluir a leitura.');
     } finally {
       timedOut = true;

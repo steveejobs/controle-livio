@@ -277,12 +277,12 @@ async function screenshotEvidence(page: Page, name: string) {
 }
 
 async function expectOperationFeedback(page: Page, message: string) {
-  const statuses = page.getByRole('status');
+  const feedback = page.getByRole('status').or(page.getByRole('alert'));
   try {
     await expect
       .poll(
         async () =>
-          (await statuses.allTextContents()).filter((text) => text.trim() === message).length,
+          (await feedback.allTextContents()).filter((text) => text.trim() === message).length,
       )
       .toBe(1);
   } catch (error) {
@@ -300,9 +300,9 @@ async function expectOperationFeedback(page: Page, message: string) {
     }
     throw error;
   }
-  const statusTexts = await statuses.allTextContents();
-  const exactIndex = statusTexts.findIndex((text) => text.trim() === message);
-  await expect(statuses.nth(exactIndex)).toHaveText(message);
+  const feedbackTexts = await feedback.allTextContents();
+  const exactIndex = feedbackTexts.findIndex((text) => text.trim() === message);
+  await expect(feedback.nth(exactIndex)).toHaveText(message);
   const trace = currentOperationTrace.get(page);
   if (trace) {
     trace.events.push({
@@ -2873,25 +2873,38 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const oversizedForm = await formWithSubmitButton(page, 'Enviar documento');
       await oversizedForm.getByLabel('Nome do documento').fill(oversizedTitle);
       await oversizedForm.getByLabel('Visibilidade').selectOption('INTERNAL');
-      await oversizedForm.getByLabel('Arquivo').setInputFiles({
+      const oversizedInput = oversizedForm.getByLabel('Arquivo');
+      const oversizedBytes = Buffer.alloc(4 * 1024 * 1024 + 1, 0x41);
+      await oversizedInput.setInputFiles({
         name: `large-${suffix}.pdf`,
         mimeType: 'application/pdf',
-        buffer: Buffer.alloc(4 * 1024 * 1024 + 1, 0x41),
+        buffer: oversizedBytes,
       });
-      const oversizedResponse = await clickUiOperation(page, {
-        operation: 'reject-oversized-document-upload',
-        pathname: '/v1/documents',
-        expectedContentType: 'multipart/form-data',
-        form: oversizedForm,
-        button: oversizedForm.getByRole('button', { name: 'Enviar documento' }),
-        bodyField: { name: 'title', value: oversizedTitle },
+      await expectOperationFeedback(page, 'Erro: O arquivo excede o limite de 4 MiB.');
+      await expect(oversizedInput).toHaveValue('');
+
+      const accessToken = await browserAccessToken(page);
+      expect(accessToken).toBeTruthy();
+      const oversizedResponse = await page.request.post(`${apiBase}/documents`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'X-Organization-Id': organizationA,
+        },
+        multipart: {
+          title: oversizedTitle,
+          visibility: 'INTERNAL',
+          file: {
+            name: `large-${suffix}.pdf`,
+            mimeType: 'application/pdf',
+            buffer: oversizedBytes,
+          },
+        },
       });
       expect(oversizedResponse.status()).toBe(413);
       expect(await oversizedResponse.json()).toMatchObject({
         code: 'payload_too_large',
         message: 'A requisição excede o limite de upload.',
       });
-      await expectOperationFeedback(page, 'Erro: A requisição excede o limite de upload.');
       await expect(page.getByRole('row').filter({ hasText: oversizedTitle })).toHaveCount(0);
 
       if (

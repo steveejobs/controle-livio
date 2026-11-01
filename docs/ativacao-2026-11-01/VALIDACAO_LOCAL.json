@@ -1,0 +1,354 @@
+{
+  "baseRelease": "8ac9dbc35d9246083f66ba80ae72001ebac28e3c",
+  "state": "UNCOMMITTED_LOCAL_CHANGES",
+  "checks": {
+    "unit": { "api": 209, "web": 35, "shared": 20, "total": 264, "status": "PASS" },
+    "lint": "PASS",
+    "typecheck": "PASS",
+    "prismaValidate": "PASS",
+    "apiBuild": "PASS",
+    "webBuild": "PASS",
+    "initialJavaScriptGzipBytes": 252823,
+    "initialJavaScriptLimitBytes": 260000,
+    "integratedPostChange": "NOT_RUN",
+    "hostedPostChange": "NOT_RUN"
+  },
+  "recordedAt": "2026-11-01T12:50:34.588Z",
+  "scope": "Browser with intercepted API, loopback-only public configuration; not hosted runtime or PostgreSQL integration.",
+  "runs": [
+    {
+      "file": ".tmp/functional-final-report.json",
+      "sha256": "219411aa45890de7ef32903cb77e9b5d1aa85390e37dbef664feb05072896e1a",
+      "stats": {
+        "startTime": "2026-11-01T12:44:57.768Z",
+        "duration": 74706.079,
+        "expected": 11,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "cases": [
+        {
+          "file": "administration-reports.e2e.ts",
+          "title": "administrator actions, pipeline stages and all reports at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 7076
+            }
+          ]
+        },
+        {
+          "file": "administration-reports.e2e.ts",
+          "title": "administrator actions, pipeline stages and all reports at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 6603
+            }
+          ]
+        },
+        {
+          "file": "audit-filters.e2e.ts",
+          "title": "audit categories, actor, date validation and clear filters at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 2650
+            }
+          ]
+        },
+        {
+          "file": "audit-filters.e2e.ts",
+          "title": "audit categories, actor, date validation and clear filters at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 2101
+            }
+          ]
+        },
+        {
+          "file": "client-workspace.e2e.ts",
+          "title": "client registration, editing, contact and communication at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 8521
+            }
+          ]
+        },
+        {
+          "file": "client-workspace.e2e.ts",
+          "title": "client registration, editing, contact and communication at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 3924
+            }
+          ]
+        },
+        {
+          "file": "finance-review.e2e.ts",
+          "title": "payment corrections, decisions and adjustment options admin=true at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 13597
+            }
+          ]
+        },
+        {
+          "file": "finance-review.e2e.ts",
+          "title": "payment corrections, decisions and adjustment options admin=false at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 3747
+            }
+          ]
+        },
+        {
+          "file": "finance-review.e2e.ts",
+          "title": "payment corrections, decisions and adjustment options admin=true at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 5076
+            }
+          ]
+        },
+        {
+          "file": "finance-review.e2e.ts",
+          "title": "payment corrections, decisions and adjustment options admin=false at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 4915
+            }
+          ]
+        },
+        {
+          "file": "paginated-lists.e2e.ts",
+          "title": "processes and documents load the next page without hiding earlier records",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 4498
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "file": ".tmp/functional-remaining-report.json",
+      "sha256": "24d6431a61f36fdcc699ed0ea9d3659e4b79e3563b58ce914caa2e721f5f98b4",
+      "stats": {
+        "startTime": "2026-11-01T12:46:48.314Z",
+        "duration": 144500.387,
+        "expected": 16,
+        "skipped": 0,
+        "unexpected": 0,
+        "flaky": 0
+      },
+      "cases": [
+        {
+          "file": "all-modules.e2e.ts",
+          "title": "every administrator module opens at 360px without overflow or accessibility errors",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 25798
+            }
+          ]
+        },
+        {
+          "file": "all-modules.e2e.ts",
+          "title": "every administrator module opens at 1440px without overflow or accessibility errors",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 25036
+            }
+          ]
+        },
+        {
+          "file": "client-pagination.e2e.ts",
+          "title": "clients beyond the first page remain available and search uses the server",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 2595
+            }
+          ]
+        },
+        {
+          "file": "client-portal.e2e.ts",
+          "title": "client portal messages and private document at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 1422
+            }
+          ]
+        },
+        {
+          "file": "client-portal.e2e.ts",
+          "title": "client portal messages and private document at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 1402
+            }
+          ]
+        },
+        {
+          "file": "deadlines-workflow.e2e.ts",
+          "title": "task deadlines, reminder, calendar and notification actions at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 4178
+            }
+          ]
+        },
+        {
+          "file": "deadlines-workflow.e2e.ts",
+          "title": "task deadlines, reminder, calendar and notification actions at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 2346
+            }
+          ]
+        },
+        {
+          "file": "finance-payment.e2e.ts",
+          "title": "payment form finds a client installment and submits the exact decimal amount",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 3922
+            }
+          ]
+        },
+        {
+          "file": "password-fields.e2e.ts",
+          "title": "login password can be shown and hidden with keyboard",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 1691
+            }
+          ]
+        },
+        {
+          "file": "password-fields.e2e.ts",
+          "title": "new password and confirmation each toggle, with six-character minimum",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 6577
+            }
+          ]
+        },
+        {
+          "file": "password-fields.e2e.ts",
+          "title": "password recovery requests the expected redirect and shows a neutral confirmation",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 8840
+            }
+          ]
+        },
+        {
+          "file": "performance-flows.e2e.ts",
+          "title": "mobile navigation, deferred clients and notification refresh",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 10045
+            }
+          ]
+        },
+        {
+          "file": "pwa-install-push.e2e.ts",
+          "title": "the install prompt is retained and the service worker is served",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 3668
+            }
+          ]
+        },
+        {
+          "file": "pwa-install-push.e2e.ts",
+          "title": "push alerts can be enabled and disabled for this browser",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 4377
+            }
+          ]
+        },
+        {
+          "file": "signature-link.e2e.ts",
+          "title": "client signs from an expanded touch-friendly link at 360px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 5242
+            }
+          ]
+        },
+        {
+          "file": "signature-link.e2e.ts",
+          "title": "client signs from an expanded touch-friendly link at 1440px",
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "durationMs": 2335
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "expected": 27,
+  "unexpected": 0,
+  "flaky": 0,
+  "productionSourceSha256": {
+    "packages/shared/src/environment.ts": "fb90f8a601b503256eabde64ac5bb5c2eb79b953942f973ab792a63703fb7a93",
+    "apps/api/src/clients/clients.controller.ts": "60094b2d68e77676687c8a208e84a08b4a8cb70ff61f11bd773feae336f17fe3",
+    "apps/api/src/clients/clients.service.ts": "1c64715f68a77d46dde07371a87bb46e9a89f287115501cc8e82f531ada2a07d",
+    "apps/web/features/clients/client-photo.tsx": "e4e12a093d176aabf2c4db049fa23502f3059efcb9dfe0d36e12b89815c5ea2c"
+  }
+}

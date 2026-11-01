@@ -1,5 +1,15 @@
 # Execução de QA integrado
 
+## Inventário funcional sem execução
+
+`inventory-functional-surface.mjs` usa o parser TypeScript local para listar controles JSX, opções, chamadas da web, rotas e declarações de autorização da API. Não lê `.env`, não conecta serviços e não executa o aplicativo. A presença de um controle ou nome de teste não comprova cobertura: os registros começam com `REQUIRES_REVIEW`. O inventário inclui declarações dinâmicas, não todas as instâncias geradas em execução.
+
+```powershell
+node tools/qa/inventory-functional-surface.mjs --output=docs/ativacao-2026-11-01/INVENTARIO_FUNCIONAL.json
+```
+
+O destino é opcional; sem ele, só imprime contagens. Não sobrescreve arquivo existente sem `--overwrite`. O JSON não deve receber dados de usuários, valores de campos ou segredos. Relacione a execução e suas limitações na matriz de cobertura antes de classificar qualquer função como aprovada.
+
 ## Memória local e testes sequenciais no Windows
 
 `configurar-memoria-windows.ps1` usa CIM e APIs locais do PowerShell para exibir RAM, commit, pagefile, disco e processos. `-Acao Configurar` só propõe pagefile C: de 8–14 GiB quando há pressão de commit, espaço suficiente e nenhum limite maior a preservar; salva os valores originais em `%LOCALAPPDATA%\LivioQA\Pagefile`. Se precisar de elevação, solicita UAC normal e nunca reinicia o computador. `-Acao Testar` executa os testes Vitest com um worker, lint e TypeScript em sequência; build/E2E só iniciam com margem de RAM maior. Os logs transitórios ficam em `%TEMP%` e são removidos ao terminar.

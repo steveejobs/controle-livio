@@ -15,7 +15,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiConsumes } from '@nestjs/swagger';
 import { ApiTags } from '@nestjs/swagger';
-import type { AuthenticatedActor } from '@livio/shared';
+import { MAX_CLIENT_PHOTO_SIZE_MB, type AuthenticatedActor } from '@livio/shared';
 import { CurrentActor } from '../auth/current-actor.decorator';
 import { RequirePermission } from '../auth/require-permission.decorator';
 import { paginationSchema, type PaginationInput } from '../common/schemas';
@@ -66,7 +66,11 @@ export class ClientsController {
 
   @Post(':id/photo')
   @ApiConsumes('multipart/form-data')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  @UseInterceptors(
+    FileInterceptor('file', {
+      limits: { fileSize: MAX_CLIENT_PHOTO_SIZE_MB * 1024 * 1024, files: 1 },
+    }),
+  )
   @RequirePermission('clients:update')
   uploadPhoto(
     @CurrentActor() actor: AuthenticatedActor,

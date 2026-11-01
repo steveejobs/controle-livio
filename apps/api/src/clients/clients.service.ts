@@ -6,7 +6,11 @@ import {
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@livio/db';
-import { calculateOutstandingByCurrency, type AuthenticatedActor } from '@livio/shared';
+import {
+  MAX_CLIENT_PHOTO_SIZE_MB,
+  calculateOutstandingByCurrency,
+  type AuthenticatedActor,
+} from '@livio/shared';
 import { AuditService } from '../common/audit.service';
 import { pageResult, pageWindow, type PaginationInput } from '../common/schemas';
 import { normalizeAndValidateTaxId } from '../common/tax-id';
@@ -72,8 +76,10 @@ export class ClientsService {
       buffer.toString('ascii', 0, 4) === 'RIFF' &&
       buffer.toString('ascii', 8, 12) === 'WEBP';
     const mimeType = jpeg ? 'image/jpeg' : png ? 'image/png' : webp ? 'image/webp' : null;
-    if (!mimeType || buffer.length > 5 * 1024 * 1024)
-      throw new BadRequestException('Use uma foto JPG, PNG ou WebP de até 5 MB.');
+    if (!mimeType || buffer.length > MAX_CLIENT_PHOTO_SIZE_MB * 1024 * 1024)
+      throw new BadRequestException(
+        `Use uma foto JPG, PNG ou WebP de até ${MAX_CLIENT_PHOTO_SIZE_MB} MiB.`,
+      );
     const key = `${actor.organizationId}/clients/${id}/${randomUUID()}.${jpeg ? 'jpg' : png ? 'png' : 'webp'}`;
     await this.storage.upload(key, buffer, mimeType, this.photoBucket);
     try {

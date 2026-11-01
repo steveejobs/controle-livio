@@ -166,6 +166,23 @@ for (const viewport of [
         (request) => request.path === '/v1/admin/access-alerts' && request.method === 'PATCH',
       )?.body,
     ).toMatchObject({ enabled: true, times: ['09:15', '09:00'] });
+    for (let index = 0; index < 3; index += 1)
+      await page.getByRole('button', { name: 'Adicionar horário' }).click();
+    await expect(page.getByRole('button', { name: 'Adicionar horário' })).toBeDisabled();
+    await page.getByRole('button', { name: 'Remover horário 2', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Adicionar horário' })).toBeEnabled();
+    await page.getByRole('button', { name: 'Salvar horários' }).click();
+    await expect
+      .poll(
+        () =>
+          requests.filter((r) => r.path === '/v1/admin/access-alerts' && r.method === 'PATCH')
+            .length,
+      )
+      .toBe(2);
+    expect(
+      requests.filter((r) => r.path === '/v1/admin/access-alerts' && r.method === 'PATCH').at(-1)
+        ?.body,
+    ).toMatchObject({ times: ['09:15', '12:00', '15:00', '18:00'] });
     expect(requests.filter((request) => request.path.endsWith('/reconcile'))).toHaveLength(0);
     await page.getByLabel('Nome completo').fill('Profissional QA');
     await page.getByLabel('E-mail profissional').fill('professional@example.test');
@@ -188,6 +205,15 @@ for (const viewport of [
       requests.find((request) => request.path === '/v1/admin/users' && request.method === 'POST')
         ?.body,
     ).toMatchObject({ roleIds: ['role-lawyer'], email: 'professional@example.test' });
+    await page.getByRole('button', { name: 'Suspender', exact: true }).click();
+    await expect(page.getByText('Usuário suspenso.', { exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Redefinir senha', exact: true })).toHaveCount(0);
+    await page.getByRole('button', { name: 'Reativar', exact: true }).click();
+    await expect(page.getByText('Usuário reativado.', { exact: true })).toBeVisible();
+    expect(requests.filter((r) => r.path.endsWith('/status')).map((r) => r.body?.status)).toEqual([
+      'SUSPENDED',
+      'ACTIVE',
+    ]);
     await page.getByRole('button', { name: 'Atualizar permissões padrão' }).click();
     await expect
       .poll(() => requests.filter((request) => request.path.endsWith('/reconcile')).length)
@@ -225,6 +251,10 @@ for (const viewport of [
       await expect
         .poll(() => requests.some((request) => request.path.startsWith(`/v1/reports/${report}`)))
         .toBe(true);
+      const downloadPromise = page.waitForEvent('download');
+      await page.getByRole('button', { name: 'Exportar CSV' }).click();
+      const download = await downloadPromise;
+      expect(download.suggestedFilename()).toBe(`livio-${report}.csv`);
     }
     await reportSelect.selectOption('receivables-due');
     const downloadPromise = page.waitForEvent('download');

@@ -447,6 +447,18 @@ for (const viewport of [
     const whatsapp = page.getByRole('link', { name: 'Abrir conversa no WhatsApp' });
     await expect(whatsapp).toHaveAttribute('href', /wa\.me\/5598999991234\?text=/);
     await expect(whatsapp).toHaveAttribute('href', /1\.078%2C25/);
+    const photoRequestsBefore = requests.filter(
+      (item) => item.path.endsWith('/photo') && item.method === 'POST',
+    ).length;
+    await page.getByLabel('Selecionar foto do cliente').setInputFiles({
+      name: 'foto-grande.png',
+      mimeType: 'image/png',
+      buffer: Buffer.alloc(4 * 1024 * 1024 + 1),
+    });
+    await expect(page.getByRole('alert').filter({ hasText: 'até 4 MiB' })).toBeVisible();
+    expect(
+      requests.filter((item) => item.path.endsWith('/photo') && item.method === 'POST'),
+    ).toHaveLength(photoRequestsBefore);
     await page.getByLabel('Selecionar foto do cliente').setInputFiles({
       name: 'cliente.png',
       mimeType: 'image/png',

@@ -27,9 +27,17 @@ test('processes and documents load the next page without hiding earlier records'
       };
     } else if (pathname === '/v1/matters') {
       if (url.searchParams.has('search')) {
+        const search = url.searchParams.get('search');
+        if (search === 'Falha') {
+          await route.fulfill({ status: 503, headers, json: { message: 'Busca indisponível' } });
+          return;
+        }
         body = {
-          total: 1,
-          items: [{ id: 'matter-special', reference: 'P-ESPECIAL', title: 'Processo Especial' }],
+          total: search === 'Vazio' ? 0 : 1,
+          items:
+            search === 'Vazio'
+              ? []
+              : [{ id: 'matter-special', reference: 'P-ESPECIAL', title: 'Processo Especial' }],
         };
       } else {
         if (pageNumber === 2) {
@@ -97,12 +105,23 @@ test('processes and documents load the next page without hiding earlier records'
   await expect(page.getByText('Documento 26')).toBeVisible();
   await expect(page.getByRole('cell', { name: 'Documento 1', exact: true })).toBeVisible();
   const search = page.getByRole('combobox', { name: 'Busca global' });
+  await search.fill('Falha');
+  await expect(page.getByText('Não foi possível buscar. Tente novamente.')).toBeVisible();
+  await search.fill('Vazio');
+  await expect(page.getByText('Nenhum resultado encontrado.')).toBeVisible();
   await search.fill('Especial');
   await expect(
     page.getByRole('option', { name: 'Processo: P-ESPECIAL - Processo Especial' }),
   ).toBeVisible();
-  await search.press('ArrowDown');
+  await search.press('ArrowUp');
   await expect(search).toHaveAttribute('aria-activedescendant', /-0$/);
+  await search.press('Escape');
+  await expect(search).toHaveAttribute('aria-expanded', 'false');
+  await search.fill('Especial novamente');
+  await expect(
+    page.getByRole('option', { name: 'Processo: P-ESPECIAL - Processo Especial' }),
+  ).toBeVisible();
+  await search.press('ArrowDown');
   await search.press('Enter');
   await expect(page.getByRole('heading', { name: 'Processos' })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);

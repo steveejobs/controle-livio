@@ -1,7 +1,7 @@
 'use client';
 
 import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { formatDate } from '../shared/format';
 import { ClientSelectField } from '../shared/client-select-field';
@@ -9,6 +9,7 @@ import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 import { DocumentTemplateEditor } from './document-template-editor';
 import { normalizeWhatsAppPhone } from '../clients/whatsapp-collection';
+import { getDocumentUploadSizeError } from '../shared/document-upload-limit';
 
 type Client = { id: string; displayName: string };
 type DocumentItem = {
@@ -128,6 +129,14 @@ export function Documents({
     event.preventDefault();
     const target = event.currentTarget;
     const source = new FormData(target);
+    const file = source.get('file');
+    if (file instanceof File) {
+      const sizeError = getDocumentUploadSizeError(file.size);
+      if (sizeError) {
+        setFeedback(`Erro: ${sizeError}`);
+        return;
+      }
+    }
     const payload = new FormData();
     for (const name of ['file', 'title', 'category', 'visibility', 'clientId']) {
       const value = source.get(name);
@@ -175,12 +184,32 @@ export function Documents({
     event.preventDefault();
     const target = event.currentTarget;
     const payload = new FormData(target);
+    const file = payload.get('file');
+    if (file instanceof File) {
+      const sizeError = getDocumentUploadSizeError(file.size);
+      if (sizeError) {
+        setFeedback(`Erro: ${sizeError}`);
+        return;
+      }
+    }
     void perform(
       () => api(`/documents/${id}/versions`, { method: 'POST', body: payload }),
       'Nova versão adicionada.',
     ).then((ok) => {
       if (ok) setVersionFor(undefined);
     });
+  };
+
+  const validateSelectedDocument = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    if (!file) return;
+    const sizeError = getDocumentUploadSizeError(file.size);
+    if (sizeError) {
+      event.currentTarget.value = '';
+      setFeedback(`Erro: ${sizeError}`);
+    } else {
+      setFeedback(undefined);
+    }
   };
 
   const open = async (id: string) => {
@@ -250,7 +279,7 @@ export function Documents({
       </header>
       {feedback && (
         <div
-          role="status"
+          role={feedback.startsWith('Erro:') ? 'alert' : 'status'}
           className={feedback.startsWith('Erro:') ? 'notice notice-error' : 'notice notice-success'}
         >
           {feedback}
@@ -396,12 +425,13 @@ export function Documents({
             </div>
           )}
           <label className="form-wide">
-            Arquivo (PDF, DOCX, PNG ou JPG; até {MAX_DOCUMENT_UPLOAD_SIZE_MB} MB)
+            Arquivo (PDF, DOCX, PNG ou JPG; até {MAX_DOCUMENT_UPLOAD_SIZE_MB} MiB)
             <input
               required
               type="file"
               name="file"
               accept="application/pdf,image/png,image/jpeg,.docx"
+              onChange={validateSelectedDocument}
             />
           </label>
           <button className="primary form-wide" disabled={busy}>
@@ -503,6 +533,7 @@ export function Documents({
                           type="file"
                           name="file"
                           accept="application/pdf,image/png,image/jpeg,.docx"
+                          onChange={validateSelectedDocument}
                         />
                         <button className="secondary" disabled={busy}>
                           Enviar
