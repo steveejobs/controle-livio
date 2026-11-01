@@ -2985,7 +2985,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           if (recoveryResponse.status() === 201) {
             const document = (await recoveryResponse.json()) as { id: string; title: string };
             expect(document.title).toBe(recoveryTitle);
-            await expectOperationFeedback(page, 'Documento enviado com seguranÃ§a.');
+            await expectOperationFeedback(page, 'Documento enviado com segurança.');
             await expect(page.getByRole('row').filter({ hasText: recoveryTitle })).toBeVisible();
             const persistedResponse = await browserApi(page, '/documents?page=1&pageSize=100');
             assertStatus(persistedResponse, 200, 'confirm upload after ClamAV recovery');

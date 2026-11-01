@@ -44,8 +44,21 @@ export class ApiExceptionFilter implements ExceptionFilter {
       // Keep correlation and classification without serializing untrusted error data.
       const databaseCode =
         exception instanceof Prisma.PrismaClientKnownRequestError ? exception.code : undefined;
+      const rawDatabaseState =
+        exception instanceof Prisma.PrismaClientKnownRequestError
+          ? exception.meta?.code
+          : undefined;
+      const databaseState =
+        typeof rawDatabaseState === 'string' && /^[A-Z0-9]{5}$/.test(rawDatabaseState)
+          ? rawDatabaseState
+          : undefined;
       request.log?.error(
-        { requestId, statusCode: status, ...(databaseCode ? { databaseCode } : {}) },
+        {
+          requestId,
+          statusCode: status,
+          ...(databaseCode ? { databaseCode } : {}),
+          ...(databaseState ? { databaseState } : {}),
+        },
         'Falha não tratada',
       );
     }

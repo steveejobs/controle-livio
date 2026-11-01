@@ -581,39 +581,49 @@ describe('FinanceService transacional', () => {
     },
   );
 
-  it('repete conflito serializável e evita duplicação concorrente', async () => {
-    const input = {
-      clientId: 'client-a',
-      reference: 'PIX-2',
-      amount: '50.00',
-      currency: 'BRL',
-      paidAt: new Date('2026-08-01'),
-      method: 'PIX',
-      allocations: [],
-    };
-    const existing = {
-      id: 'payment-b',
-      amount: new Prisma.Decimal('50'),
-      idempotencyHash: sha256(JSON.stringify(input)),
-      allocations: [],
-    };
-    const conflict = new Prisma.PrismaClientKnownRequestError('serialization conflict', {
-      code: 'P2034',
-      clientVersion: '6.19.3',
-    });
-    const transaction = { payment: { findUnique: vi.fn().mockResolvedValue(existing) } };
-    const prisma = {
-      $transaction: vi
-        .fn()
-        .mockRejectedValueOnce(conflict)
-        .mockImplementation(async (operation: (tx: unknown) => unknown) => operation(transaction)),
-    };
-    const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
-    await expect(service.createPayment(actor, 'concurrent-key', input)).resolves.toMatchObject({
-      idempotent: true,
-    });
-    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
-  });
+  it.each([
+    ['P2034', undefined],
+    ['P2010', '40001'],
+    ['P2010', '40P01'],
+  ])(
+    'repete conflito serializável %s/%s e evita duplicação concorrente',
+    async (code, sqlState) => {
+      const input = {
+        clientId: 'client-a',
+        reference: 'PIX-2',
+        amount: '50.00',
+        currency: 'BRL',
+        paidAt: new Date('2026-08-01'),
+        method: 'PIX',
+        allocations: [],
+      };
+      const existing = {
+        id: 'payment-b',
+        amount: new Prisma.Decimal('50'),
+        idempotencyHash: sha256(JSON.stringify(input)),
+        allocations: [],
+      };
+      const conflict = new Prisma.PrismaClientKnownRequestError('serialization conflict', {
+        code,
+        clientVersion: '6.19.3',
+        ...(sqlState ? { meta: { code: sqlState } } : {}),
+      });
+      const transaction = { payment: { findUnique: vi.fn().mockResolvedValue(existing) } };
+      const prisma = {
+        $transaction: vi
+          .fn()
+          .mockRejectedValueOnce(conflict)
+          .mockImplementation(async (operation: (tx: unknown) => unknown) =>
+            operation(transaction),
+          ),
+      };
+      const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+      await expect(service.createPayment(actor, 'concurrent-key', input)).resolves.toMatchObject({
+        idempotent: true,
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('envia IDs UUID tipados para o bloqueio de parcelas do pagamento', async () => {
     const installmentId = '00000000-0000-4000-8000-000000000001';
