@@ -1,5 +1,6 @@
 import { createConnection } from 'node:net';
 import {
+  Inject,
   Injectable,
   ServiceUnavailableException,
   UnprocessableEntityException,
@@ -32,6 +33,7 @@ function ocrContainsEicarSignature(ocrText: Buffer): boolean {
 export class DocumentScannerService {
   constructor(
     private readonly config: ConfigService<ApiEnvironment, true>,
+    @Inject(PdfContentInspectionService)
     private readonly pdfInspector = new PdfContentInspectionService(),
   ) {}
 
