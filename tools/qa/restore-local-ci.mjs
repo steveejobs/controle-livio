@@ -155,7 +155,6 @@ const restoreArguments = (target, restoreList, archive) => [
   target,
   '--exit-on-error',
   '--no-owner',
-  ...excludedSchedulerSchemas.flatMap((schema) => ['--exclude-schema', schema]),
   '--use-list',
   restoreList,
   archive,
@@ -281,10 +280,8 @@ assert(
 );
 assert(restorePlanFixture.includes('--no-owner'), 'Restore must use the disposable runner owner');
 assert(
-  restorePlanFixture.includes('--exclude-schema') &&
-    restorePlanFixture.includes('cron') &&
-    restorePlanFixture.includes('net'),
-  'Restore must exclude both scheduler schemas using pg_restore schema filters',
+  !restorePlanFixture.includes('--exclude-schema'),
+  'The curated TOC must retain non-scheduler grants during the restore',
 );
 assert.deepEqual(
   dockerExecArguments('supabase_db_livio-legal-crm', restorePlanFixture),
@@ -385,7 +382,7 @@ assert.equal(
   0,
   `pg_restore --exclude-schema left entries for absent scheduler schemas: ${JSON.stringify(tocEvidence.schemaReferencesRemainingAfterNativeFilter)}`,
 );
-const toc = filterUnsupportedTocEntries(schemaFilteredToc, tocOwners).join('\n');
+const toc = filterUnsupportedTocEntries(sourceToc, tocOwners).join('\n');
 writeFileSync(join(evidenceDirectory, 'schema-filtered-archive-toc.txt'), `${toc}\n`);
 const residualUnsupportedReferences = toc
   .split('\n')
@@ -451,12 +448,12 @@ assert.equal(
   'The number of scheduler default ACL rows excluded differs from the expected archive inventory',
 );
 const effectiveRestoreArgs = restoreArguments(target, restoreList, archive);
-for (const requiredFlag of ['--no-owner', '--exclude-schema', '--use-list'])
+for (const requiredFlag of ['--no-owner', '--use-list'])
   assert(effectiveRestoreArgs.includes(requiredFlag), `Restore plan is missing ${requiredFlag}`);
 assert(!effectiveRestoreArgs.includes('--no-acl'), 'Restore must preserve source ACL statements');
 assert(
-  excludedSchedulerSchemas.every((schema) => effectiveRestoreArgs.includes(schema)),
-  'Restore plan must exclude cron and net schemas using pg_restore native filters',
+  !effectiveRestoreArgs.includes('--exclude-schema'),
+  'The curated restore list must be the only object filter so non-scheduler grants remain',
 );
 writeCheckpoint({
   targetDatabase: target,
