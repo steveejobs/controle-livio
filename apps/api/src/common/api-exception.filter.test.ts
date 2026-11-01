@@ -1,8 +1,31 @@
-import type { ArgumentsHost } from '@nestjs/common';
+import { PayloadTooLargeException, type ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiExceptionFilter, sanitizeRequestPath } from './api-exception.filter';
 
 describe('API error path sanitization', () => {
+  it('normalizes the Multer upload limit response', () => {
+    const json = vi.fn();
+    const response = { status: vi.fn().mockReturnValue({ json }) };
+    const host = {
+      switchToHttp: () => ({
+        getRequest: () => ({
+          originalUrl: '/v1/documents',
+          headers: {},
+          id: 'upload-limit',
+        }),
+        getResponse: () => response,
+      }),
+    } as unknown as ArgumentsHost;
+    new ApiExceptionFilter().catch(new PayloadTooLargeException('File too large'), host);
+    expect(response.status).toHaveBeenCalledWith(413);
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        code: 'payload_too_large',
+        message: 'A requisição excede o limite de upload.',
+      }),
+    );
+  });
+
   it('never copies exception secrets or financial payloads into logs or the response', () => {
     const error = vi.fn();
     const json = vi.fn();

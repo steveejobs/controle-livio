@@ -42,13 +42,19 @@ export class ApiExceptionFilter implements ExceptionFilter {
     if (status >= 500) {
       // Exceptions may embed signed URLs, SQL parameters and financial payloads.
       // Keep correlation and classification without serializing untrusted error data.
-      request.log?.error({ requestId, statusCode: status }, 'Falha não tratada');
+      const databaseCode =
+        exception instanceof Prisma.PrismaClientKnownRequestError ? exception.code : undefined;
+      request.log?.error(
+        { requestId, statusCode: status, ...(databaseCode ? { databaseCode } : {}) },
+        'Falha não tratada',
+      );
     }
     response.status(status).json(body);
   }
 
   private messageFor(status: number, payload: string | object | undefined): string {
     if (status >= 500) return 'Ocorreu um erro interno';
+    if (status === HttpStatus.PAYLOAD_TOO_LARGE) return 'A requisição excede o limite de upload.';
     if (typeof payload === 'string') return payload;
     if (payload && 'message' in payload) {
       const message = payload.message;
