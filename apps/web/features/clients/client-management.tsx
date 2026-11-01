@@ -6,6 +6,8 @@ import { formatDate } from '../shared/format';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 import { ClientDetail } from './client-detail';
+import { IdentificationCapture } from './identification-capture';
+import type { IdentificationData } from './identification-reader';
 import type { Client } from './client.types';
 import { formatTaxIdField, type ClientType } from './tax-id-format';
 
@@ -24,10 +26,16 @@ export function ClientManagement({
   const [showForm, setShowForm] = useState(false);
   const [guidedClientId, setGuidedClientId] = useState<string>();
   const [submitError, setSubmitError] = useState<string>();
+  const [scanNotice, setScanNotice] = useState<string>();
   const [saving, setSaving] = useState(false);
   const [clientType, setClientType] = useState<ClientType>('PERSON');
   const [taxId, setTaxId] = useState('');
   const [autoDetectedCompany, setAutoDetectedCompany] = useState(false);
+  const [displayName, setDisplayName] = useState('');
+  const [identityDocument, setIdentityDocument] = useState('');
+  const [birthDate, setBirthDate] = useState('');
+  const [pendingIdentityFile, setPendingIdentityFile] = useState<File>();
+  const [clientNotice, setClientNotice] = useState<string>();
   useEffect(() => {
     const timer = window.setTimeout(() => setQuery(search.trim()), 300);
     return () => window.clearTimeout(timer);
@@ -39,6 +47,7 @@ export function ClientManagement({
 
   const selectClient = (id?: string) => {
     setSelected(id);
+    setClientNotice(undefined);
     onSelectedClientChange?.(id);
   };
 
@@ -51,6 +60,7 @@ export function ClientManagement({
         permissions={permissions}
         startGuidedOnboarding={selected === guidedClientId}
         onGuidedOnboardingComplete={() => setGuidedClientId(undefined)}
+        initialFeedback={clientNotice}
       />
     );
 
@@ -59,6 +69,17 @@ export function ClientManagement({
     setSaving(true);
     setSubmitError(undefined);
     const form = new FormData(event.currentTarget);
+    const fields = ['nationality', 'civilStatus', 'occupation', 'identityDocument', 'birthDate'];
+    const legalIdentity = Object.fromEntries(
+      fields
+        .map((field) => [field, String(form.get(`legalIdentity.${field}`) || '').trim()])
+        .filter(([, value]) => value),
+    );
+    const representativeName = String(form.get('legalRepresentative.name') || '').trim();
+    const representativeTaxId = String(form.get('legalRepresentative.taxId') || '').replace(
+      /\D/g,
+      '',
+    );
     try {
       const client = await api<Client>('/clients', {
         method: 'POST',
@@ -70,6 +91,12 @@ export function ClientManagement({
           email: form.get('email') || undefined,
           phone: form.get('phone') || undefined,
           source: form.get('source') || undefined,
+          customFields: {
+            ...(Object.keys(legalIdentity).length ? { legalIdentity } : {}),
+            ...(representativeName || representativeTaxId
+              ? { legalRepresentative: { name: representativeName, taxId: representativeTaxId } }
+              : {}),
+          },
           address: [
             'street',
             'number',
@@ -91,10 +118,30 @@ export function ClientManagement({
             : undefined,
         }),
       });
+      let documentNotice: string | undefined;
+      if (pendingIdentityFile) {
+        try {
+          const document = new FormData();
+          document.append('file', pendingIdentityFile);
+          document.append(
+            'title',
+            `Documento de identificação · ${String(form.get('displayName'))}`,
+          );
+          document.append('category', 'IDENTIFICACAO');
+          document.append('visibility', 'INTERNAL');
+          document.append('clientId', client.id);
+          await api('/documents', { method: 'POST', body: document });
+        } catch {
+          documentNotice =
+            'Cliente cadastrado, mas não foi possível salvar a imagem do documento. Abra a ficha e envie o arquivo novamente.';
+        }
+      }
+      setPendingIdentityFile(undefined);
       setShowForm(false);
       reload();
       setGuidedClientId(client.id);
       selectClient(client.id);
+      setClientNotice(documentNotice);
     } catch (caught) {
       setSubmitError(
         caught instanceof ApiError ? caught.message : 'Não foi possível cadastrar o cliente.',
@@ -102,6 +149,21 @@ export function ClientManagement({
     } finally {
       setSaving(false);
     }
+  };
+
+  const useIdentification = (identified: IdentificationData, file: File) => {
+    if (identified.name) setDisplayName(identified.name);
+    if (identified.cpf) {
+      setClientType('PERSON');
+      setAutoDetectedCompany(false);
+      setTaxId(formatTaxIdField(identified.cpf, 'PERSON'));
+    }
+    if (identified.rg) {
+      setIdentityDocument([identified.rg, identified.issuingAuthority].filter(Boolean).join(' · '));
+    }
+    if (identified.birthDate) setBirthDate(identified.birthDate);
+    setPendingIdentityFile(file);
+    setScanNotice('Confira os dados preenchidos antes de concluir o cadastro.');
   };
 
   return (
@@ -113,7 +175,23 @@ export function ClientManagement({
           <span>Cadastro, pesquisa e controle completo do histórico de cada cliente.</span>
         </div>
         {canCreate && (
-          <button className="primary" onClick={() => setShowForm((value) => !value)}>
+          <button
+            className="primary"
+            onClick={() => {
+              if (!showForm) {
+                setDisplayName('');
+                setTaxId('');
+                setIdentityDocument('');
+                setBirthDate('');
+                setPendingIdentityFile(undefined);
+                setSubmitError(undefined);
+                setScanNotice(undefined);
+                setClientNotice(undefined);
+                setClientType('PERSON');
+              }
+              setShowForm((value) => !value);
+            }}
+          >
             {showForm ? 'Fechar cadastro' : 'Novo cliente'}
           </button>
         )}
@@ -133,6 +211,10 @@ export function ClientManagement({
                     setClientType(nextType);
                     setAutoDetectedCompany(false);
                     setTaxId((value) => formatTaxIdField(value, nextType));
+                    if (nextType === 'COMPANY') {
+                      setPendingIdentityFile(undefined);
+                      setScanNotice(undefined);
+                    }
                   }}
                 >
                   <option value="PERSON">Conta individual (pessoa física)</option>
@@ -141,7 +223,14 @@ export function ClientManagement({
               </label>
               <label>
                 {clientType === 'COMPANY' ? 'Nome da empresa' : 'Nome completo'}
-                <input name="displayName" required minLength={2} autoComplete="name" />
+                <input
+                  name="displayName"
+                  required
+                  minLength={2}
+                  autoComplete="name"
+                  value={displayName}
+                  onChange={(event) => setDisplayName(event.target.value)}
+                />
               </label>
               {clientType === 'COMPANY' && (
                 <label>
@@ -178,8 +267,98 @@ export function ClientManagement({
                 Os separadores são inseridos automaticamente. Ao informar mais de 11 dígitos, o
                 cadastro muda para pessoa jurídica.
               </p>
+              {clientType === 'PERSON' ? (
+                <>
+                  {permissions.includes('documents:create') && (
+                    <IdentificationCapture
+                      onImageSelected={setPendingIdentityFile}
+                      onUseData={useIdentification}
+                    />
+                  )}
+                  <details className="optional-fields form-wide">
+                    <summary>Qualificação para documentos</summary>
+                    <p className="section-note">
+                      Esses dados completam a procuração e são opcionais no cadastro.
+                    </p>
+                    <div className="form-grid">
+                      <label>
+                        Nacionalidade
+                        <input name="legalIdentity.nationality" autoComplete="country-name" />
+                      </label>
+                      <label>
+                        Estado civil
+                        <input name="legalIdentity.civilStatus" />
+                      </label>
+                      <label>
+                        Profissão
+                        <input name="legalIdentity.occupation" />
+                      </label>
+                      <label>
+                        RG e órgão expedidor
+                        <input
+                          name="legalIdentity.identityDocument"
+                          value={identityDocument}
+                          onChange={(event) => setIdentityDocument(event.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Data de nascimento
+                        <input
+                          name="legalIdentity.birthDate"
+                          type="date"
+                          value={birthDate}
+                          onChange={(event) => setBirthDate(event.target.value)}
+                        />
+                      </label>
+                    </div>
+                  </details>
+                  {pendingIdentityFile && (
+                    <p className="section-note form-wide" role="status">
+                      A imagem será salva na ficha do cliente após concluir o cadastro.
+                    </p>
+                  )}
+                  {scanNotice && (
+                    <p className="section-note form-wide" role="status">
+                      {scanNotice}
+                    </p>
+                  )}
+                </>
+              ) : (
+                <details className="optional-fields form-wide">
+                  <summary>Representante legal para documentos</summary>
+                  <p className="section-note">
+                    Informe quem assinará os documentos em nome da empresa.
+                  </p>
+                  <div className="form-grid">
+                    <label>
+                      Nome do representante
+                      <input name="legalRepresentative.name" autoComplete="name" />
+                    </label>
+                    <label>
+                      CPF do representante
+                      <input
+                        name="legalRepresentative.taxId"
+                        inputMode="numeric"
+                        placeholder="000.000.000-00"
+                        maxLength={14}
+                        onChange={(event) => {
+                          event.currentTarget.value = formatTaxIdField(
+                            event.currentTarget.value,
+                            'PERSON',
+                          );
+                        }}
+                      />
+                    </label>
+                  </div>
+                </details>
+              )}
             </div>
           </fieldset>
+          {scanNotice && (
+            <p className="section-note form-wide" role="status">
+              {scanNotice}
+            </p>
+          )}
           <fieldset className="form-wide onboarding-section">
             <legend>Contato</legend>
             <div className="form-grid">

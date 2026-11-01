@@ -27,6 +27,7 @@ import {
   type PushSubscriptionInput,
 } from './push.schemas';
 import { ZodValidationPipe } from '../common/zod-validation.pipe';
+import { ScheduledDispatchService } from './scheduled-dispatch.service';
 
 @Controller('notifications')
 export class NotificationsController {
@@ -34,6 +35,7 @@ export class NotificationsController {
     private readonly notifications: NotificationsService,
     private readonly pushNotifications: PushNotificationsService,
     private readonly config: ConfigService<ApiEnvironment, true>,
+    private readonly scheduledDispatch: ScheduledDispatchService,
   ) {}
 
   @Get('push/config')
@@ -49,6 +51,12 @@ export class NotificationsController {
     @Body(new ZodValidationPipe(pushSubscriptionSchema)) input: PushSubscriptionInput,
   ) {
     return this.pushNotifications.subscribe(actor, input);
+  }
+
+  @Post('push/test')
+  @RequirePermission('notifications:update')
+  testPush(@CurrentActor() actor: AuthenticatedActor) {
+    return this.pushNotifications.test(actor);
   }
 
   @Delete('push-subscriptions')
@@ -71,6 +79,28 @@ export class NotificationsController {
       throw new UnauthorizedException('Credencial da rotina inválida');
     }
     return this.notifications.reconcileAllFinancialAlerts();
+  }
+
+  @Get('hearing-alerts/cron')
+  @Public()
+  hearingAlertsCron(@Headers('authorization') authorization?: string) {
+    const secret = this.config.get('CRON_SECRET', { infer: true });
+    if (!secret) throw new ServiceUnavailableException('Rotina automática não configurada');
+    const expected = Buffer.from(`Bearer ${secret}`);
+    const received = Buffer.from(authorization ?? '');
+    if (received.length !== expected.length || !timingSafeEqual(received, expected)) {
+      throw new UnauthorizedException('Credencial da rotina inválida');
+    }
+    return this.notifications.reconcileHearingReminders();
+  }
+
+  @Get('dispatch/cron')
+  @Public()
+  dispatchCron(
+    @Headers('x-livio-scheduled-at') timestamp?: string,
+    @Headers('x-livio-signature') signature?: string,
+  ) {
+    return this.scheduledDispatch.run(timestamp, signature);
   }
 
   @Get('access-alerts/cron')

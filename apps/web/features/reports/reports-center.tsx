@@ -6,12 +6,22 @@ import { formatMoney } from '../shared/format';
 import { useApiData } from '../shared/use-api-data';
 
 type ReportResult = { basis: string; rows: Array<Record<string, unknown>> };
-const rangedReports = new Set(['receivables-due', 'received', 'accrual']);
+const rangedReports = new Set([
+  'receivables-due',
+  'received',
+  'accrual',
+  'cash-flow',
+  'cash-flow-by-client',
+]);
 const initialFrom = `${new Date().getFullYear()}-01-01`;
 const initialTo = `${new Date().getFullYear() + 1}-01-01`;
 
-function cell(value: unknown, key: string) {
-  if (typeof value === 'string' && /amount|balance/.test(key)) return formatMoney(value);
+function cell(value: unknown, key: string, currency?: string) {
+  if (
+    typeof value === 'string' &&
+    /(amount|balance|expenses|receivables|net_cash|projected_net)/.test(key)
+  )
+    return formatMoney(value, currency ?? 'BRL');
   if (value === null || value === undefined) return '—';
   return String(value);
 }
@@ -66,6 +76,8 @@ export function ReportsCenter({
             <option value="overdue">Títulos vencidos</option>
             <option value="aging">Faixas de atraso</option>
             <option value="cash-forecast">Previsão de caixa</option>
+            <option value="cash-flow">Fluxo de caixa real e projetado</option>
+            <option value="cash-flow-by-client">Caixa por cliente e processo</option>
             <option value="partial-payments">Pagamentos parciais</option>
             <option value="active-contracts">Contratos ativos</option>
             <option value="revenue-by-lawyer">Receita por advogado</option>
@@ -121,7 +133,13 @@ export function ReportsCenter({
               {data?.rows.map((row, index) => (
                 <tr key={index}>
                   {headers.map((header) => (
-                    <td key={header}>{cell(row[header], header)}</td>
+                    <td key={header}>
+                      {cell(
+                        row[header],
+                        header,
+                        typeof row.currency === 'string' ? row.currency : undefined,
+                      )}
+                    </td>
                   ))}
                 </tr>
               ))}

@@ -1,5 +1,10 @@
 import { Prisma } from '@livio/db';
-import { ForbiddenException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
 import type { AuthenticatedActor } from '@livio/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { sha256 } from '../common/security';
@@ -13,6 +18,33 @@ const actor: AuthenticatedActor = {
 };
 
 describe('FinanceService transacional', () => {
+  it.each(['listContracts', 'listReceivables', 'listPayments'] as const)(
+    '%s preserva o cliente do portal ao receber filtro de outro cliente',
+    async (method) => {
+      const findMany = vi.fn().mockResolvedValue([]);
+      const count = vi.fn().mockResolvedValue(0);
+      const model = { findMany, count };
+      const prisma = {
+        contract: model,
+        receivable: model,
+        payment: model,
+        $transaction: vi.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+      };
+      const service = new FinanceService(prisma as never, {} as never);
+      await service[method](
+        { ...actor, clientId: 'client-a' },
+        { clientId: 'client-b', page: 1, pageSize: 25 },
+      );
+      expect(findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: actor.organizationId,
+            clientId: 'client-a',
+          }),
+        }),
+      );
+    },
+  );
   it('salva os serviços selecionados e mantém o primeiro como principal para relatórios', async () => {
     const created = { id: 'contract-a' };
     const create = vi.fn().mockResolvedValue(created);
@@ -38,6 +70,120 @@ describe('FinanceService transacional', () => {
       serviceName: 'Acompanhamento em delegacia',
       terms: { services: ['Acompanhamento em delegacia', 'Habeas corpus'] },
     });
+  });
+
+  it('cria audiência agendada e alertas configurados na mesma transação do contrato', async () => {
+    const startsAt = new Date('2030-05-21T13:00:00.000Z');
+    const event = { id: 'hearing-a', startsAt };
+    const createEvent = vi.fn().mockResolvedValue(event);
+    const createNotification = vi.fn().mockResolvedValue({});
+    const contractCreate = vi.fn().mockResolvedValue({ id: 'contract-hearing' });
+    const transaction = {
+      contract: { create: contractCreate },
+      calendarEvent: { create: createEvent },
+      notification: { create: createNotification },
+    };
+    const prisma = {
+      client: { findFirst: vi.fn().mockResolvedValue({ id: 'client-a' }) },
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(transaction)),
+    };
+    const audit = { record: vi.fn().mockResolvedValue(undefined) };
+    const service = new FinanceService(prisma as never, audit as never);
+
+    await service.createContract(actor, {
+      clientId: 'client-a',
+      number: 'CTR-HEARING',
+      title: 'Defesa criminal',
+      feeModel: 'FIXED',
+      currency: 'BRL',
+      serviceNames: ['Acompanhamento em delegacia'],
+      hearings: [
+        {
+          startsAt,
+          reminderMinutes: [45, 10],
+        },
+      ],
+    });
+
+    expect(createEvent).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        clientId: 'client-a',
+        title: 'Audiência · Defesa criminal',
+        type: 'HEARING',
+        status: 'SCHEDULED',
+        startsAt,
+        endsAt: new Date(startsAt.getTime() + 60 * 60_000),
+      }),
+    });
+    expect(createNotification).toHaveBeenCalledTimes(2);
+    expect(createNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          status: 'PENDING',
+          title: 'Audiência em 45 min',
+          link: 'calendar:event:hearing-a',
+          scheduledAt: new Date(startsAt.getTime() - 45 * 60_000),
+          metadata: expect.objectContaining({
+            source: 'HEARING_REMINDER',
+            eventId: 'hearing-a',
+            minutesBefore: 45,
+          }),
+        }),
+      }),
+    );
+    expect(audit.record).toHaveBeenCalledWith(
+      transaction,
+      expect.objectContaining({ resource: 'calendar_event', resourceId: 'hearing-a' }),
+    );
+  });
+
+  it('vincula a cobrança selecionada ao contrato com o mesmo valor sem perder auditoria', async () => {
+    const created = { id: 'contract-b' };
+    const contractCreate = vi.fn().mockResolvedValue(created);
+    const receivableFind = vi.fn().mockResolvedValue({
+      id: 'receivable-b',
+      contractId: null,
+      matterId: null,
+      originalAmount: new Prisma.Decimal('1200.00'),
+      currency: 'BRL',
+      status: 'OPEN',
+    });
+    const receivableUpdate = vi.fn().mockResolvedValue({
+      id: 'receivable-b',
+      reference: 'HON-2',
+      contractId: created.id,
+    });
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      receivable: { findFirst: receivableFind, update: receivableUpdate },
+      contract: { create: contractCreate },
+    };
+    const audit = { record: vi.fn().mockResolvedValue(undefined) };
+    const prisma = {
+      client: { findFirst: vi.fn().mockResolvedValue({ id: 'client-a' }) },
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(transaction)),
+    };
+    const service = new FinanceService(prisma as never, audit as never);
+
+    await expect(
+      service.createContract(actor, {
+        clientId: 'client-a',
+        number: 'CTR-2',
+        title: 'Defesa criminal',
+        feeModel: 'FIXED',
+        fixedAmount: '1200.00',
+        currency: 'BRL',
+        serviceNames: ['Acompanhamento em delegacia'],
+        receivableId: 'receivable-b',
+      }),
+    ).resolves.toBe(created);
+
+    expect(transaction.$queryRaw).toHaveBeenCalledOnce();
+    expect(receivableUpdate).toHaveBeenCalledWith({
+      where: { id: 'receivable-b' },
+      data: { contractId: 'contract-b' },
+    });
+    expect(audit.record).toHaveBeenCalledTimes(2);
   });
 
   it('cria parcelas cuja soma decimal corresponde ao recebível e audita', async () => {
@@ -95,39 +241,389 @@ describe('FinanceService transacional', () => {
     });
   });
 
-  it('repete conflito serializável e evita duplicação concorrente', async () => {
-    const input = {
-      clientId: 'client-a',
-      reference: 'PIX-2',
-      amount: '50.00',
-      currency: 'BRL',
-      paidAt: new Date('2026-08-01'),
-      method: 'PIX',
-      allocations: [],
+  it('reserva chaves de comprovante para a confirmação financeira auditada', async () => {
+    const prisma = { $transaction: vi.fn() };
+    const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+    await expect(
+      service.createPayment(actor, 'receipt:forged', {
+        clientId: 'client-a',
+        reference: 'PIX-FORJADO',
+        amount: '10.00',
+        currency: 'BRL',
+        paidAt: new Date('2026-10-30T12:00:00.000Z'),
+        method: 'PIX',
+        allocations: [],
+      }),
+    ).rejects.toThrow('Prefixo idempotente reservado');
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('mantém o recebível parcial até quitar a última parcela e bloqueia repetição e excesso', async () => {
+    const receivableId = '00000000-0000-4000-8000-000000000020';
+    const firstId = '00000000-0000-4000-8000-000000000021';
+    const secondId = '00000000-0000-4000-8000-000000000022';
+    const thirdId = '00000000-0000-4000-8000-000000000023';
+    const installments = new Map([
+      [
+        firstId,
+        {
+          id: firstId,
+          receivableId,
+          amount: new Prisma.Decimal('33.34'),
+          currency: 'BRL',
+          dueDate: new Date('2030-09-01'),
+          status: 'OPEN',
+        },
+      ],
+      [
+        secondId,
+        {
+          id: secondId,
+          receivableId,
+          amount: new Prisma.Decimal('33.33'),
+          currency: 'BRL',
+          dueDate: new Date('2030-10-01'),
+          status: 'OPEN',
+        },
+      ],
+      [
+        thirdId,
+        {
+          id: thirdId,
+          receivableId,
+          amount: new Prisma.Decimal('33.33'),
+          currency: 'BRL',
+          dueDate: new Date('2030-11-01'),
+          status: 'OPEN',
+        },
+      ],
+    ]);
+    const payments = new Map<
+      string,
+      {
+        id: string;
+        idempotencyKey: string;
+        idempotencyHash: string;
+        amount: Prisma.Decimal;
+        allocations: { installmentId: string; amount: Prisma.Decimal }[];
+      }
+    >();
+    const receivable: { status: string } = { status: 'OPEN' };
+    const findUnique = vi.fn(
+      async ({ where }: { where: { organizationId_idempotencyKey: { idempotencyKey: string } } }) =>
+        payments.get(where.organizationId_idempotencyKey.idempotencyKey) ?? null,
+    );
+    const createPayment = vi.fn(
+      async (args: {
+        data: {
+          idempotencyKey: string;
+          idempotencyHash: string;
+          amount: Prisma.Decimal;
+          allocations: { create: { installmentId: string; amount: Prisma.Decimal }[] };
+        };
+      }) => {
+        const payment = {
+          id: `payment-${payments.size + 1}`,
+          idempotencyKey: args.data.idempotencyKey,
+          idempotencyHash: args.data.idempotencyHash,
+          amount: args.data.amount,
+          allocations: args.data.allocations.create,
+        };
+        payments.set(payment.idempotencyKey, payment);
+        return payment;
+      },
+    );
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      payment: { findUnique, create: createPayment },
+      receivable: {
+        findFirst: vi.fn(async () => ({ status: receivable.status })),
+        updateMany: vi.fn(async ({ data }: { data: { status: string } }) => {
+          receivable.status = data.status;
+          return { count: 1 };
+        }),
+      },
+      receivableInstallment: {
+        findMany: vi.fn(
+          async ({ where }: { where: { id?: { in: string[] }; receivableId?: string } }) => {
+            if (where.receivableId) {
+              return [...installments.values()].map(({ status }) => ({ status }));
+            }
+            return (where.id?.in ?? []).map((id) => {
+              const installment = installments.get(id)!;
+              const allocations = [...payments.values()].flatMap((payment) =>
+                payment.allocations
+                  .filter((allocation) => allocation.installmentId === id)
+                  .map(({ amount }) => ({ amount })),
+              );
+              return {
+                ...installment,
+                receivable: { id: receivableId, clientId: 'client-a' },
+                allocations,
+                adjustments: [],
+              };
+            });
+          },
+        ),
+        update: vi.fn(
+          async ({ where, data }: { where: { id: string }; data: { status: string } }) => {
+            const installment = installments.get(where.id)!;
+            installment.status = data.status;
+            return installment;
+          },
+        ),
+      },
     };
-    const existing = {
-      id: 'payment-b',
-      amount: new Prisma.Decimal('50'),
-      idempotencyHash: sha256(JSON.stringify(input)),
-      allocations: [],
-    };
-    const conflict = new Prisma.PrismaClientKnownRequestError('serialization conflict', {
-      code: 'P2034',
-      clientVersion: '6.19.3',
-    });
-    const transaction = { payment: { findUnique: vi.fn().mockResolvedValue(existing) } };
     const prisma = {
-      $transaction: vi
-        .fn()
-        .mockRejectedValueOnce(conflict)
-        .mockImplementation(async (operation: (tx: unknown) => unknown) => operation(transaction)),
+      $transaction: vi.fn(async (operation: (tx: unknown) => unknown) => operation(transaction)),
     };
     const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
-    await expect(service.createPayment(actor, 'concurrent-key', input)).resolves.toMatchObject({
-      idempotent: true,
-    });
-    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    const submit = (idempotencyKey: string, installmentId: string, amount: string) =>
+      service.createPayment(actor, idempotencyKey, {
+        clientId: 'client-a',
+        reference: `QA-${idempotencyKey}`,
+        amount,
+        currency: 'BRL',
+        paidAt: new Date('2026-10-30T12:00:00.000Z'),
+        method: 'PIX',
+        allocations: [{ installmentId, amount }],
+      });
+    const outstanding = () =>
+      [...installments.values()].reduce((total, installment) => {
+        const paid = [...payments.values()]
+          .flatMap((payment) => payment.allocations)
+          .filter(({ installmentId }) => installmentId === installment.id)
+          .reduce((sum, allocation) => sum.plus(allocation.amount), new Prisma.Decimal(0));
+        return total.plus(installment.amount.minus(paid));
+      }, new Prisma.Decimal(0));
+
+    expect(receivable.status).toBe('OPEN');
+    await submit('partial-first', firstId, '10.00');
+    expect(installments.get(firstId)?.status).toBe('PARTIALLY_PAID');
+    expect(receivable.status).toBe('PARTIALLY_PAID');
+    expect(outstanding().toFixed(2)).toBe('90.00');
+
+    await expect(submit('partial-first', firstId, '11.00')).rejects.toBeInstanceOf(
+      ConflictException,
+    );
+    await expect(submit('excess-first', firstId, '23.35')).rejects.toBeInstanceOf(
+      BadRequestException,
+    );
+    expect(outstanding().toFixed(2)).toBe('90.00');
+
+    await submit('complete-first', firstId, '23.34');
+    expect(installments.get(firstId)?.status).toBe('PAID');
+    expect(installments.get(secondId)?.status).toBe('OPEN');
+    expect(installments.get(thirdId)?.status).toBe('OPEN');
+    expect(receivable.status).toBe('PARTIALLY_PAID');
+    expect(outstanding().toFixed(2)).toBe('66.66');
+
+    await submit('complete-second', secondId, '33.33');
+    expect(receivable.status).toBe('PARTIALLY_PAID');
+    await submit('complete-third', thirdId, '33.33');
+    expect(installments.get(secondId)?.status).toBe('PAID');
+    expect(installments.get(thirdId)?.status).toBe('PAID');
+    expect(receivable.status).toBe('PAID');
+    expect(outstanding().toFixed(2)).toBe('0.00');
   });
+
+  it.each([
+    { firstAmount: '70.00', secondAmount: '40.00' },
+    { firstAmount: '40.00', secondAmount: '70.00' },
+  ])(
+    'impede pagamentos acima do saldo com chaves idempotentes distintas em qualquer ordem',
+    async ({ firstAmount, secondAmount }) => {
+      const installmentId = '00000000-0000-4000-8000-000000000011';
+      const storedPayments: {
+        id: string;
+        idempotencyKey: string;
+        idempotencyHash: string;
+        amount: Prisma.Decimal;
+        allocations: { amount: Prisma.Decimal }[];
+      }[] = [];
+      const findUnique = vi.fn(
+        async ({
+          where,
+        }: {
+          where: { organizationId_idempotencyKey: { idempotencyKey: string } };
+        }) =>
+          storedPayments.find(
+            ({ idempotencyKey }) =>
+              idempotencyKey === where.organizationId_idempotencyKey.idempotencyKey,
+          ) ?? null,
+      );
+      const createPayment = vi.fn(
+        async (args: {
+          data: {
+            idempotencyKey: string;
+            idempotencyHash: string;
+            amount: Prisma.Decimal;
+            allocations: { create: { amount: Prisma.Decimal }[] };
+          };
+        }) => {
+          const payment = {
+            id: `payment-${storedPayments.length + 1}`,
+            idempotencyKey: args.data.idempotencyKey,
+            idempotencyHash: args.data.idempotencyHash,
+            amount: args.data.amount,
+            allocations: args.data.allocations.create,
+          };
+          storedPayments.push(payment);
+          return payment;
+        },
+      );
+      const receivable = { status: 'OPEN' };
+      const installment = { status: 'OPEN' };
+      const updateReceivable = vi.fn(
+        async ({
+          data,
+        }: {
+          where: { id: string; organizationId: string };
+          data: { status: string };
+        }) => {
+          receivable.status = data.status;
+          return { count: 1 };
+        },
+      );
+      const transaction = {
+        $queryRaw: vi.fn().mockResolvedValue([]),
+        payment: { findUnique, create: createPayment },
+        receivable: {
+          findFirst: vi.fn(async () => ({ status: receivable.status })),
+          updateMany: updateReceivable,
+        },
+        receivableInstallment: {
+          findMany: vi.fn(async ({ where }: { where: { receivableId?: string } }) =>
+            where.receivableId
+              ? [{ status: installment.status }]
+              : [
+                  {
+                    id: installmentId,
+                    amount: new Prisma.Decimal('100.00'),
+                    currency: 'BRL',
+                    status: installment.status,
+                    dueDate: new Date('2030-01-01T00:00:00.000Z'),
+                    receivable: { id: 'receivable-a', clientId: 'client-a' },
+                    allocations: storedPayments.flatMap(({ allocations }) => allocations),
+                    adjustments: [],
+                  },
+                ],
+          ),
+          update: vi.fn(async ({ data }: { data: { status: string } }) => {
+            installment.status = data.status;
+            return installment;
+          }),
+        },
+      };
+      let transactionQueue: Promise<unknown> = Promise.resolve();
+      const prisma = {
+        $transaction: vi.fn((operation: (tx: unknown) => Promise<unknown>) => {
+          const current = transactionQueue.then(() => operation(transaction));
+          transactionQueue = current.then(
+            () => undefined,
+            () => undefined,
+          );
+          return current;
+        }),
+      };
+      const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+      const makeInput = (reference: string, amount: string) => ({
+        clientId: 'client-a',
+        reference,
+        amount,
+        currency: 'BRL',
+        paidAt: new Date('2026-08-01'),
+        method: 'PIX',
+        allocations: [{ installmentId, amount }],
+      });
+
+      const results = await Promise.allSettled([
+        service.createPayment(
+          actor,
+          'distinct-key-first',
+          makeInput('PIX-DISTINCT-FIRST', firstAmount),
+        ),
+        service.createPayment(
+          actor,
+          'distinct-key-second',
+          makeInput('PIX-DISTINCT-SECOND', secondAmount),
+        ),
+      ]);
+
+      expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+      const rejection = results.find(({ status }) => status === 'rejected');
+      expect(rejection).toMatchObject({
+        status: 'rejected',
+        reason: expect.any(BadRequestException),
+      });
+      const allocated = storedPayments
+        .flatMap(({ allocations }) => allocations)
+        .reduce((sum, { amount }) => sum.plus(amount), new Prisma.Decimal(0));
+      expect(allocated.lessThanOrEqualTo('100.00')).toBe(true);
+      expect(allocated.toFixed(2)).toBe(new Prisma.Decimal(firstAmount).toFixed(2));
+      expect(installment.status).toBe('PARTIALLY_PAID');
+      expect(receivable.status).toBe('PARTIALLY_PAID');
+      expect(new Prisma.Decimal('100.00').minus(allocated).toFixed(2)).toBe(
+        new Prisma.Decimal('100.00').minus(firstAmount).toFixed(2),
+      );
+      expect(findUnique).toHaveBeenCalledTimes(2);
+      expect(createPayment).toHaveBeenCalledTimes(1);
+      expect(updateReceivable).toHaveBeenCalledWith({
+        where: { id: 'receivable-a', organizationId: actor.organizationId },
+        data: { status: 'PARTIALLY_PAID' },
+      });
+      const requestedKeys = findUnique.mock.calls.map(
+        ([{ where }]) => where.organizationId_idempotencyKey.idempotencyKey,
+      );
+      expect(new Set(requestedKeys)).toEqual(
+        new Set(['distinct-key-first', 'distinct-key-second']),
+      );
+    },
+  );
+
+  it.each([
+    ['P2034', undefined],
+    ['P2010', '40001'],
+    ['P2010', '40P01'],
+  ])(
+    'repete conflito serializável %s/%s e evita duplicação concorrente',
+    async (code, sqlState) => {
+      const input = {
+        clientId: 'client-a',
+        reference: 'PIX-2',
+        amount: '50.00',
+        currency: 'BRL',
+        paidAt: new Date('2026-08-01'),
+        method: 'PIX',
+        allocations: [],
+      };
+      const existing = {
+        id: 'payment-b',
+        amount: new Prisma.Decimal('50'),
+        idempotencyHash: sha256(JSON.stringify(input)),
+        allocations: [],
+      };
+      const conflict = new Prisma.PrismaClientKnownRequestError('serialization conflict', {
+        code,
+        clientVersion: '6.19.3',
+        ...(sqlState ? { meta: { code: sqlState } } : {}),
+      });
+      const transaction = { payment: { findUnique: vi.fn().mockResolvedValue(existing) } };
+      const prisma = {
+        $transaction: vi
+          .fn()
+          .mockRejectedValueOnce(conflict)
+          .mockImplementation(async (operation: (tx: unknown) => unknown) =>
+            operation(transaction),
+          ),
+      };
+      const service = new FinanceService(prisma as never, { record: vi.fn() } as never);
+      await expect(service.createPayment(actor, 'concurrent-key', input)).resolves.toMatchObject({
+        idempotent: true,
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it('envia IDs UUID tipados para o bloqueio de parcelas do pagamento', async () => {
     const installmentId = '00000000-0000-4000-8000-000000000001';
@@ -138,19 +634,27 @@ describe('FinanceService transacional', () => {
         findUnique: vi.fn().mockResolvedValue(null),
         create: vi.fn().mockResolvedValue({ id: 'payment-c', allocations: [] }),
       },
+      receivable: {
+        findFirst: vi.fn().mockResolvedValue({ status: 'OPEN' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       receivableInstallment: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: installmentId,
-            amount: new Prisma.Decimal('50.00'),
-            currency: 'BRL',
-            dueDate: new Date('2026-08-01'),
-            status: 'OPEN',
-            allocations: [],
-            adjustments: [],
-            receivable: { clientId: 'client-a' },
-          },
-        ]),
+        findMany: vi.fn(async ({ where }: { where: { receivableId?: string } }) =>
+          where.receivableId
+            ? [{ status: 'PAID' }]
+            : [
+                {
+                  id: installmentId,
+                  amount: new Prisma.Decimal('50.00'),
+                  currency: 'BRL',
+                  dueDate: new Date('2026-08-01'),
+                  status: 'OPEN',
+                  allocations: [],
+                  adjustments: [],
+                  receivable: { id: 'receivable-c', clientId: 'client-a' },
+                },
+              ],
+        ),
         update: vi.fn(),
       },
     };
@@ -171,6 +675,10 @@ describe('FinanceService transacional', () => {
 
     expect(queryRaw.mock.calls[0]![0].sql).toContain('id IN (?::uuid)');
     expect(queryRaw.mock.calls[0]![0].values).toContain(installmentId);
+    expect(transaction.receivable.updateMany).toHaveBeenCalledWith({
+      where: { id: 'receivable-c', organizationId: actor.organizationId },
+      data: { status: 'PAID' },
+    });
   });
 
   it('estorna sem apagar o pagamento, com controle otimista e auditoria', async () => {
@@ -315,6 +823,10 @@ describe('FinanceService transacional', () => {
         findFirst: vi.fn().mockResolvedValue(request),
         update: vi.fn().mockResolvedValue(reviewedRequest),
       },
+      receivable: {
+        findFirst: vi.fn().mockResolvedValue({ status: 'OPEN' }),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+      },
       payment: {
         findFirst: vi.fn().mockResolvedValue(payment),
         updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -324,18 +836,22 @@ describe('FinanceService transacional', () => {
       paymentAllocation: { updateMany: vi.fn() },
       paymentReversal: { create: vi.fn().mockResolvedValue({ id: 'reversal-b' }) },
       receivableInstallment: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: installmentId,
-            amount: new Prisma.Decimal('200.00'),
-            currency: 'BRL',
-            dueDate: new Date('2027-01-01'),
-            status: 'OPEN',
-            receivable: { clientId: 'client-a' },
-            allocations: [],
-            adjustments: [],
-          },
-        ]),
+        findMany: vi.fn(async ({ where }: { where: { receivableId?: string } }) =>
+          where.receivableId
+            ? [{ status: 'PARTIALLY_PAID' }]
+            : [
+                {
+                  id: installmentId,
+                  amount: new Prisma.Decimal('200.00'),
+                  currency: 'BRL',
+                  dueDate: new Date('2027-01-01'),
+                  status: 'OPEN',
+                  receivable: { id: 'receivable-b', clientId: 'client-a' },
+                  allocations: [],
+                  adjustments: [],
+                },
+              ],
+        ),
         update: vi.fn(),
       },
       notification: { upsert: vi.fn() },
@@ -362,6 +878,10 @@ describe('FinanceService transacional', () => {
       }),
     );
     expect(transaction.paymentReversal.create).toHaveBeenCalledOnce();
+    expect(transaction.receivable.updateMany).toHaveBeenCalledWith({
+      where: { id: 'receivable-b', organizationId: actor.organizationId },
+      data: { status: 'PARTIALLY_PAID' },
+    });
     expect(transaction.payment.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -447,5 +967,434 @@ describe('FinanceService transacional', () => {
       [actor.userId],
       expect.objectContaining({ title: 'Correção de pagamento recusada' }),
     );
+  });
+});
+
+describe('FinanceService ciclo de despesas', () => {
+  function fixture(
+    status: 'DRAFT' | 'APPROVED' = 'DRAFT',
+    approvalRequired = true,
+    otherApprovers = 1,
+    dueDate: Date | null = new Date('2026-11-20T00:00:00.000Z'),
+  ) {
+    let current = {
+      id: 'expense-a',
+      organizationId: actor.organizationId,
+      clientId: null as string | null,
+      matterId: null as string | null,
+      responsibleUserId: null as string | null,
+      description: 'Custas sintéticas',
+      category: 'Custas',
+      status,
+      amount: new Prisma.Decimal('10.2500'),
+      currency: 'BRL',
+      incurredAt: new Date('2026-10-20T00:00:00.000Z'),
+      dueDate,
+      paidAt: null as Date | null,
+      reimbursable: false,
+      approvedById: null as string | null,
+      approvedAt: null as Date | null,
+      submittedAt: null as Date | null,
+      rejectedById: null as string | null,
+      rejectedAt: null as Date | null,
+      rejectionReason: null as string | null,
+      client: null,
+      matter: null,
+      responsibleUser: null,
+      documents: [],
+    };
+    const transaction = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      organization: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValue({ settings: { expenseApprovalRequired: approvalRequired } }),
+      },
+      organizationMember: { count: vi.fn().mockResolvedValue(otherApprovers) },
+      client: { findFirst: vi.fn().mockResolvedValue(null) },
+      matter: { findFirst: vi.fn().mockResolvedValue(null) },
+      user: { findFirst: vi.fn().mockResolvedValue(null) },
+      auditLog: { findFirst: vi.fn().mockResolvedValue({ actorUserId: 'creator' }) },
+      expense: {
+        findFirst: vi
+          .fn()
+          .mockImplementation(
+            async (args: { where: { id: string; organizationId: string; clientId?: string } }) => {
+              if (
+                args.where.id !== current.id ||
+                args.where.organizationId !== current.organizationId ||
+                (args.where.clientId && args.where.clientId !== current.clientId)
+              )
+                return null;
+              return { ...current };
+            },
+          ),
+        updateMany: vi
+          .fn()
+          .mockImplementation(
+            async (args: {
+              where: { status?: string | { in: string[] } };
+              data: Record<string, unknown>;
+            }) => {
+              const condition = args.where.status;
+              const matches =
+                condition === undefined ||
+                (typeof condition === 'string'
+                  ? current.status === condition
+                  : condition.in.includes(current.status));
+              if (!matches) return { count: 0 };
+              current = { ...current, ...args.data } as typeof current;
+              return { count: 1 };
+            },
+          ),
+      },
+    };
+    const prisma = {
+      $transaction: vi.fn(
+        async (
+          operation: (tx: unknown) => unknown,
+          options?: { maxWait?: number; timeout?: number },
+        ) => {
+          void options;
+          return operation(transaction);
+        },
+      ),
+    };
+    const audit = { record: vi.fn().mockResolvedValue(undefined) };
+    return {
+      service: new FinanceService(prisma as never, audit as never),
+      transaction,
+      audit,
+      prisma,
+      getExpense: () => current,
+    };
+  }
+
+  it('resume despesas sem somar moedas diferentes e preserva Decimal', async () => {
+    const groups = [
+      {
+        status: 'PENDING_APPROVAL',
+        currency: 'BRL',
+        _count: { _all: 1 },
+        _sum: { amount: new Prisma.Decimal('10.2500') },
+      },
+      {
+        status: 'PAID',
+        currency: 'USD',
+        _count: { _all: 1 },
+        _sum: { amount: new Prisma.Decimal('3.1250') },
+      },
+    ];
+    const groupBy = vi
+      .fn()
+      .mockResolvedValueOnce(groups)
+      .mockResolvedValueOnce([
+        {
+          currency: 'BRL',
+          _count: { _all: 1 },
+          _sum: { amount: new Prisma.Decimal('10.2500') },
+        },
+      ]);
+    const service = new FinanceService({ expense: { groupBy } } as never, {} as never);
+
+    await expect(service.expenseSummary(actor, {})).resolves.toEqual({
+      currencies: [
+        {
+          currency: 'BRL',
+          pendingApproval: { count: 1, amount: '10.2500' },
+          pendingPayment: { count: 0, amount: '0.0000' },
+          overdue: { count: 1, amount: '10.2500' },
+          paid: { count: 0, amount: '0.0000' },
+        },
+        {
+          currency: 'USD',
+          pendingApproval: { count: 0, amount: '0.0000' },
+          pendingPayment: { count: 0, amount: '0.0000' },
+          overdue: { count: 0, amount: '0.0000' },
+          paid: { count: 1, amount: '3.1250' },
+        },
+      ],
+    });
+    expect(groupBy).toHaveBeenCalledTimes(2);
+    expect(groupBy.mock.calls[0]?.[0]).toMatchObject({
+      by: ['status', 'currency'],
+      where: { organizationId: actor.organizationId },
+    });
+  });
+
+  it('submete para aprovação, registra quitação integral exata e audita cada transição', async () => {
+    const { service, audit, getExpense, prisma } = fixture();
+    const creator = { ...actor, userId: 'creator', permissions: ['expenses:update'] };
+    const reviewer = {
+      ...actor,
+      userId: 'reviewer',
+      isAdministrator: true,
+      permissions: ['expenses:approve'],
+    };
+
+    await expect(service.submitExpense(creator, 'expense-a')).resolves.toMatchObject({
+      status: 'PENDING_APPROVAL',
+    });
+    expect(prisma.$transaction.mock.calls[0]?.[1]).toEqual({
+      maxWait: 10_000,
+      timeout: 15_000,
+    });
+    await expect(service.decideExpense(reviewer, 'expense-a', 'APPROVE')).resolves.toMatchObject({
+      status: 'APPROVED',
+    });
+    await expect(
+      service.payExpense(creator, 'expense-a', {
+        amount: '10.2500',
+        paidAt: new Date('2026-11-20T00:00:00.000Z'),
+        method: 'PIX',
+      }),
+    ).resolves.toMatchObject({ status: 'PAID', amount: new Prisma.Decimal('10.2500') });
+    expect(getExpense().status).toBe('PAID');
+    expect(audit.record).toHaveBeenCalledTimes(3);
+  });
+
+  it('impede impasse do único aprovador e permite confirmação explícita sem aprovação', async () => {
+    const approvalRequired = fixture('DRAFT', true, 0);
+    const soleAdministrator = {
+      ...actor,
+      userId: 'creator',
+      isAdministrator: true,
+      permissions: ['expenses:update', 'expenses:approve'],
+    };
+
+    await expect(
+      approvalRequired.service.submitExpense(soleAdministrator, 'expense-a'),
+    ).rejects.toThrow(ConflictException);
+    expect(approvalRequired.getExpense().status).toBe('DRAFT');
+    expect(approvalRequired.audit.record).not.toHaveBeenCalled();
+
+    const approvalDisabled = fixture('DRAFT', false, 0);
+    await expect(
+      approvalDisabled.service.submitExpense(soleAdministrator, 'expense-a'),
+    ).resolves.toMatchObject({ status: 'APPROVED' });
+    expect(approvalDisabled.getExpense().approvedById).toBeNull();
+    expect(approvalDisabled.audit.record).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'UPDATE',
+        metadata: { transition: 'CONFIRM', approvalRequired: false },
+      }),
+    );
+  });
+
+  it('não envia despesa legada sem vencimento e mantém isolamento entre organizações', async () => {
+    const legacy = fixture('DRAFT', true, 1, null);
+    await expect(legacy.service.submitExpense(actor, 'expense-a')).rejects.toThrow(
+      BadRequestException,
+    );
+    expect(legacy.getExpense().status).toBe('DRAFT');
+
+    const isolated = fixture('DRAFT');
+    await expect(
+      isolated.service.cancelExpense({ ...actor, organizationId: 'org-b' }, 'expense-a'),
+    ).rejects.toThrow(NotFoundException);
+    expect(isolated.transaction.expense.updateMany).not.toHaveBeenCalled();
+    expect(isolated.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('impede autoaprovação e rejeita pagamento parcial sem mudar o status', async () => {
+    const pending = fixture();
+    const creator = { ...actor, userId: 'creator' };
+    await pending.service.submitExpense(creator, 'expense-a');
+    await expect(pending.service.decideExpense(creator, 'expense-a', 'APPROVE')).rejects.toThrow(
+      ForbiddenException,
+    );
+
+    const approved = fixture('APPROVED');
+    await expect(
+      approved.service.payExpense(actor, 'expense-a', {
+        amount: '10.2499',
+        paidAt: new Date(),
+        method: 'PIX',
+      }),
+    ).rejects.toThrow(BadRequestException);
+    expect(approved.getExpense().status).toBe('APPROVED');
+    expect(approved.audit.record).not.toHaveBeenCalled();
+  });
+
+  it('registra rejeição com responsável e bloqueia pagamento antes de aprovação', async () => {
+    const pending = fixture();
+    const creator = { ...actor, userId: 'creator' };
+    const reviewer = {
+      ...actor,
+      userId: 'reviewer',
+      permissions: ['expenses:approve'],
+    };
+    await pending.service.submitExpense(creator, 'expense-a');
+
+    await expect(
+      pending.service.payExpense(creator, 'expense-a', {
+        amount: '10.2500',
+        paidAt: new Date('2026-11-20T00:00:00.000Z'),
+        method: 'PIX',
+      }),
+    ).rejects.toThrow(ConflictException);
+    await expect(
+      pending.service.decideExpense(reviewer, 'expense-a', 'REJECT', 'Falta comprovante'),
+    ).resolves.toMatchObject({ status: 'REJECTED', rejectedById: reviewer.userId });
+    expect(pending.audit.record).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'UPDATE',
+        metadata: { transition: 'REJECT', reason: 'Falta comprovante' },
+      }),
+    );
+    await expect(
+      pending.service.payExpense(creator, 'expense-a', {
+        amount: '10.2500',
+        paidAt: new Date('2026-11-20T00:00:00.000Z'),
+        method: 'PIX',
+      }),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('duas tentativas concorrentes de quitação integral produzem uma única transição', async () => {
+    const { service, getExpense } = fixture('APPROVED');
+    const input = {
+      amount: '10.2500',
+      paidAt: new Date('2026-11-20T00:00:00.000Z'),
+      method: 'PIX',
+    };
+    const results = await Promise.allSettled([
+      service.payExpense(actor, 'expense-a', input),
+      service.payExpense(actor, 'expense-a', input),
+    ]);
+    expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(({ status }) => status === 'rejected')).toHaveLength(1);
+    expect(getExpense().status).toBe('PAID');
+  });
+
+  it('não permite editar despesa paga ou cancelar após a quitação', async () => {
+    const { service } = fixture('APPROVED');
+    await service.payExpense(actor, 'expense-a', {
+      amount: '10.2500',
+      paidAt: new Date(),
+      method: 'PIX',
+    });
+    await expect(
+      service.updateExpense(actor, 'expense-a', { description: 'Alteração' }),
+    ).rejects.toThrow(ConflictException);
+    await expect(service.cancelExpense(actor, 'expense-a')).rejects.toThrow(ConflictException);
+  });
+
+  it('confere que o aprovador pertence ao escritório, está ativo e não é o criador', async () => {
+    const soleAdministrator = { ...actor, userId: 'only-admin' };
+    const pending = fixture('DRAFT', true, 0);
+    await expect(pending.service.submitExpense(soleAdministrator, 'expense-a')).rejects.toThrow(
+      ConflictException,
+    );
+    expect(pending.transaction.organizationMember.count).toHaveBeenCalledWith({
+      where: {
+        organizationId: actor.organizationId,
+        userId: { not: 'only-admin' },
+        status: 'ACTIVE',
+        user: { status: 'ACTIVE', deletedAt: null },
+        roles: {
+          some: {
+            role: {
+              permissions: {
+                some: {
+                  permission: {
+                    organizationId: actor.organizationId,
+                    resource: 'expenses',
+                    action: 'approve',
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it('expõe apenas nomes de campos no histórico e aplica escopo de escritório/cliente', async () => {
+    const event = {
+      id: 'audit-a',
+      actorUserId: 'reviewer-a',
+      action: 'UPDATE',
+      before: { amount: '10.2500', description: 'Antes' },
+      after: { amount: '10.2500', description: 'Depois' },
+      metadata: { transition: 'REJECT', reason: 'valor privado' },
+      createdAt: new Date('2026-10-27T12:00:00.000Z'),
+    };
+    const findFirst = vi.fn().mockResolvedValue({ id: 'expense-a' });
+    const findMany = vi.fn().mockResolvedValue([event]);
+    const count = vi.fn().mockResolvedValue(1);
+    const members = vi
+      .fn()
+      .mockResolvedValue([{ userId: 'reviewer-a', user: { fullName: 'Revisor sintético' } }]);
+    const transaction = {
+      expense: { findFirst },
+      auditLog: { findMany, count },
+      organizationMember: { findMany: members },
+    };
+    const prisma = {
+      ...transaction,
+      $transaction: vi.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+    };
+    const service = new FinanceService(prisma as never, {} as never);
+    const portalActor = { ...actor, clientId: 'client-a', permissions: ['expenses:view'] };
+
+    await expect(
+      service.expenseHistory(portalActor, 'expense-a', { page: 1, pageSize: 10 }),
+    ).resolves.toEqual({
+      items: [
+        {
+          id: 'audit-a',
+          action: 'UPDATE',
+          transition: 'REJECT',
+          occurredAt: event.createdAt,
+          actorName: 'Revisor sintético',
+          changedFields: ['description'],
+        },
+      ],
+      total: 1,
+    });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: 'expense-a', organizationId: actor.organizationId, clientId: 'client-a' },
+      select: { id: true },
+    });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: actor.organizationId,
+          resource: 'expense',
+          resourceId: 'expense-a',
+        },
+      }),
+    );
+    expect(members).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: actor.organizationId, userId: { in: ['reviewer-a'] } },
+      }),
+    );
+  });
+
+  it('retorna comprovantes somente com permissão e, no portal, somente os visíveis ao cliente', async () => {
+    const findMany = vi.fn().mockResolvedValue([]);
+    const prisma = {
+      expense: { findMany, count: vi.fn().mockResolvedValue(0) },
+      $transaction: vi.fn((operations: Promise<unknown>[]) => Promise.all(operations)),
+    };
+    const service = new FinanceService(prisma as never, {} as never);
+    const query = { page: 1, pageSize: 10, period: 'dueDate' as const };
+
+    await service.listExpenses({ ...actor, permissions: [] }, query);
+    expect(findMany.mock.calls[0]?.[0].include).not.toHaveProperty('documents');
+
+    await service.listExpenses(
+      { ...actor, clientId: 'client-a', permissions: ['documents:view'] },
+      query,
+    );
+    expect(findMany.mock.calls[1]?.[0].include.documents).toEqual({
+      where: { deletedAt: null, visibility: 'CLIENT', clientId: 'client-a' },
+      select: { id: true, title: true, visibility: true },
+    });
   });
 });

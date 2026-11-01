@@ -37,6 +37,12 @@ export class AdminController {
   ) {
     return this.admin.setUserStatus(actor, id, input);
   }
+  @Post('users/:id/recovery-link')
+  @RequirePermission('users:manage')
+  @RequireAdministrator()
+  recoveryLink(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
+    return this.admin.createRecoveryLink(actor, id);
+  }
   @Get('roles') @RequirePermission('roles:view') roles(@CurrentActor() actor: AuthenticatedActor) {
     return this.admin.listRoles(actor);
   }

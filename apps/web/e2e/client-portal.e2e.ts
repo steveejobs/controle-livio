@@ -29,7 +29,9 @@ for (const viewport of [
       const method = request.method();
       const submitted = request.postDataJSON() as Record<string, unknown> | null;
       let body: unknown;
-      if (path === '/v1/auth/me') {
+      if (path === '/v1/audit-logs/module-views' && method === 'POST') {
+        body = { recorded: true };
+      } else if (path === '/v1/auth/me') {
         body = {
           user: {
             id: 'qa-client',
@@ -89,7 +91,11 @@ for (const viewport of [
     await page.getByRole('button', { name: 'Enviar mensagem' }).click();
     await expect(page.getByText('Mensagem enviada à equipe.')).toBeVisible();
     await expect(page.getByText('Mensagem de resposta QA')).toBeVisible();
-    expect(requests.find((request) => request.method === 'POST')?.body).toMatchObject({
+    expect(
+      requests.find(
+        (request) => request.path === '/v1/client-messages' && request.method === 'POST',
+      )?.body,
+    ).toMatchObject({
       clientId: 'client-1',
       body: 'Mensagem de resposta QA',
     });

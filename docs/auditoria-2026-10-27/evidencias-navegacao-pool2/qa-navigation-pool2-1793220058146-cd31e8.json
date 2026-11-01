@@ -1,0 +1,770 @@
+{
+  "runId": "1793220058146-cd31e8",
+  "startedAt": "2026-10-28T20:40:58.186Z",
+  "status": "FAIL",
+  "scope": "navigation real somente leitura de negócio; autenticação sintética, rate limit e telemetry geram registros técnicos",
+  "preflight": {
+    "sharedProjectConnectedToProduction": true,
+    "authSignupDisabled": true,
+    "externalCredentialsPresentInApiProcess": false,
+    "pushSubscribersInQaOrganization": 0,
+    "oneApiProcess": true,
+    "newOrganizationCreated": false,
+    "newBusinessRecordsCreated": false,
+    "identityLogin": "existing active synthetic administrator via one-time Supabase Auth link generated server-side; no email sent"
+  },
+  "project": {
+    "ref": "ioebcdpyrszokdyaoaqv",
+    "localDatabaseHost": "aws-0-us-east-2.pooler.supabase.com",
+    "localDatabasePort": "6543",
+    "localPoolerMode": "Supavisor transaction pooler",
+    "apiConnectionLimit": 2,
+    "poolTimeoutSeconds": 10,
+    "businessTables": {
+      "clients": 3,
+      "client_contacts": 1,
+      "matters": 1,
+      "contracts": 1,
+      "receivables": 4,
+      "installments": 7,
+      "payments": 3,
+      "payment_allocations": 3,
+      "expenses": 2,
+      "documents": 2,
+      "document_versions": 3,
+      "tasks": 2,
+      "calendar_events": 2,
+      "notifications": 7,
+      "client_messages": 3,
+      "matter_stage_history": 2
+    },
+    "technicalCountsBefore": {
+      "audit_logs": 50,
+      "activity_events": 3,
+      "rate_limit_rows": 1,
+      "admin_read_counter": 0,
+      "admin_write_counter": 1,
+      "admin_read_current_window": 0,
+      "admin_write_current_window": 0
+    },
+    "technicalCountsAfter": {
+      "audit_logs": 50,
+      "activity_events": 8,
+      "rate_limit_rows": 2,
+      "admin_read_counter": 5,
+      "admin_write_counter": 5,
+      "admin_read_current_window": 5,
+      "admin_write_current_window": 5
+    },
+    "databaseLimits": {
+      "database": "postgres",
+      "serverVersion": "17.11",
+      "maxConnections": 60,
+      "reservedConnections": 3,
+      "visibleConnectionsBefore": 8,
+      "activeConnectionsBefore": 2,
+      "visibleConnectionsAfter": 10,
+      "activeConnectionsAfter": 1
+    },
+    "accountRole": "administrator",
+    "accountAndOrganizationSynthetic": true,
+    "existingOrganizationReused": true,
+    "newOrganizationCreated": false,
+    "newBusinessRecordsCreated": false,
+    "browserAuthTransport": {
+      "status": 401
+    },
+    "initialPageState": {}
+  },
+  "scenarios": [
+    {
+      "name": "1_sessao",
+      "status": "FAIL",
+      "fatalReason": "POST de telemetria client-views não foi observado ao abrir a ficha.",
+      "durationMs": 17021,
+      "sessionCount": 1,
+      "requestCount": 5,
+      "requestDurationMs": {
+        "samples": 5,
+        "p50Ms": 3100,
+        "p95Ms": 3477,
+        "maxMs": 3477
+      },
+      "httpStatusCounts": {
+        "200": 2,
+        "201": 3
+      },
+      "pendingRequestsAtEnd": 0,
+      "maxOutstandingBrowserRequests": 2,
+      "abortedRequests": 0,
+      "networkFailures": 0,
+      "p2024Count": 0,
+      "maxPoolWaiting": 1,
+      "maxPoolBusy": 2,
+      "maxPoolOpen": 2,
+      "poolWaitHistogramDeltaMs": 0.03789999999980864,
+      "prismaQueryEvents": 63,
+      "prismaQueryDurationMs": {
+        "samples": 63,
+        "p50Ms": 176,
+        "p95Ms": 534,
+        "maxMs": 546
+      },
+      "serverTimingMs": {
+        "authClaims": {
+          "samples": 5,
+          "p50Ms": 4,
+          "p95Ms": 7,
+          "maxMs": 7
+        },
+        "membershipPrismaRoundtrip": {
+          "samples": 5,
+          "p50Ms": 1089,
+          "p95Ms": 1194,
+          "maxMs": 1194
+        },
+        "rateLimitPrismaRoundtrip": {
+          "samples": 5,
+          "p50Ms": 894,
+          "p95Ms": 935,
+          "maxMs": 935
+        },
+        "permissionGuard": {
+          "samples": 5,
+          "p50Ms": 0,
+          "p95Ms": 0,
+          "maxMs": 0
+        },
+        "handler": {
+          "samples": 5,
+          "p50Ms": 1075,
+          "p95Ms": 1514,
+          "maxMs": 1514
+        }
+      },
+      "requestsByRoute": {
+        "POST /v1/audit-logs/module-views": {
+          "count": 3,
+          "statuses": {
+            "201": 3
+          },
+          "durationMs": {
+            "samples": 3,
+            "p50Ms": 3007,
+            "p95Ms": 3100,
+            "maxMs": 3100
+          }
+        },
+        "GET /v1/clients": {
+          "count": 1,
+          "statuses": {
+            "200": 1
+          },
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 3474,
+            "p95Ms": 3474,
+            "maxMs": 3474
+          }
+        },
+        "GET /v1/clients/:id/overview": {
+          "count": 1,
+          "statuses": {
+            "200": 1
+          },
+          "durationMs": {
+            "samples": 1,
+            "p50Ms": 3477,
+            "p95Ms": 3477,
+            "maxMs": 3477
+          }
+        }
+      },
+      "steps": [
+        {
+          "module": "Clientes",
+          "durationMs": 4590,
+          "pendingAfterModule": 0
+        },
+        {
+          "module": "Visão geral",
+          "durationMs": 4180,
+          "pendingAfterModule": 0
+        },
+        {
+          "module": "Clientes",
+          "durationMs": 3521,
+          "pendingAfterModule": 0
+        }
+      ]
+    }
+  ],
+  "artifacts": {
+    "apiLog": "docs\\auditoria-2026-10-27\\evidencias-navegacao-pool2\\qa-navigation-api-1793220058146-cd31e8.log",
+    "webLog": "docs\\auditoria-2026-10-27\\evidencias-navegacao-pool2\\qa-navigation-web-1793220058146-cd31e8.log"
+  },
+  "preexistingBusinessDataPreserved": true,
+  "businessTablesAfter": {
+    "clients": 3,
+    "client_contacts": 1,
+    "matters": 1,
+    "contracts": 1,
+    "receivables": 4,
+    "installments": 7,
+    "payments": 3,
+    "payment_allocations": 3,
+    "expenses": 2,
+    "documents": 2,
+    "document_versions": 3,
+    "tasks": 2,
+    "calendar_events": 2,
+    "notifications": 7,
+    "client_messages": 3,
+    "matter_stage_history": 2
+  },
+  "apiDiagnostics": {
+    "p2024Count": 0,
+    "apiResponseCount": 15,
+    "apiResponseMs": {
+      "samples": 15,
+      "p50Ms": 3052,
+      "p95Ms": 5802,
+      "maxMs": 5802
+    },
+    "prismaQueryCount": 138,
+    "prismaQueryShapes": [
+      {
+        "signature": "BEGIN:a8402858d4f1",
+        "operation": "BEGIN",
+        "tables": [],
+        "count": 32,
+        "durationMs": {
+          "samples": 32,
+          "p50Ms": 172,
+          "p95Ms": 206,
+          "maxMs": 250
+        }
+      },
+      {
+        "signature": "OTHER:5d3e388117c3",
+        "operation": "OTHER",
+        "tables": [],
+        "count": 32,
+        "durationMs": {
+          "samples": 32,
+          "p50Ms": 172,
+          "p95Ms": 195,
+          "maxMs": 204
+        }
+      },
+      {
+        "signature": "SELECT:e004ebd5b553",
+        "operation": "SELECT",
+        "tables": [],
+        "count": 5,
+        "durationMs": {
+          "samples": 5,
+          "p50Ms": 200,
+          "p95Ms": 342,
+          "maxMs": 342
+        }
+      },
+      {
+        "signature": "COMMIT:79663c1d3b43",
+        "operation": "COMMIT",
+        "tables": [],
+        "count": 32,
+        "durationMs": {
+          "samples": 32,
+          "p50Ms": 172,
+          "p95Ms": 190,
+          "maxMs": 190
+        }
+      },
+      {
+        "signature": "SELECT:8d0dc51f66da",
+        "operation": "SELECT",
+        "tables": [
+          "organization_members",
+          "organizations",
+          "users",
+          "organization_member_roles",
+          "roles",
+          "role_permissions",
+          "permissions"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 525,
+          "p95Ms": 525,
+          "maxMs": 525
+        }
+      },
+      {
+        "signature": "INSERT:9a5ed9bd3646",
+        "operation": "INSERT",
+        "tables": [
+          "api_rate_limits"
+        ],
+        "count": 10,
+        "durationMs": {
+          "samples": 10,
+          "p50Ms": 345,
+          "p95Ms": 373,
+          "maxMs": 373
+        }
+      },
+      {
+        "signature": "INSERT:c5cd04ad83df",
+        "operation": "INSERT",
+        "tables": [
+          "activity_events"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 362,
+          "p95Ms": 362,
+          "maxMs": 362
+        }
+      },
+      {
+        "signature": "UPDATE:2dda98aa6274",
+        "operation": "UPDATE",
+        "tables": [
+          "users"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 346,
+          "p95Ms": 346,
+          "maxMs": 346
+        }
+      },
+      {
+        "signature": "SELECT:3b8307798f5a",
+        "operation": "SELECT",
+        "tables": [
+          "organization_members",
+          "organizations",
+          "users",
+          "organization_member_roles",
+          "roles",
+          "role_permissions",
+          "permissions"
+        ],
+        "count": 9,
+        "durationMs": {
+          "samples": 9,
+          "p50Ms": 533,
+          "p95Ms": 546,
+          "maxMs": 546
+        }
+      },
+      {
+        "signature": "SELECT:d1131eac80e9",
+        "operation": "SELECT",
+        "tables": [
+          "organization_members",
+          "profiles",
+          "organizations"
+        ],
+        "count": 2,
+        "durationMs": {
+          "samples": 2,
+          "p50Ms": 346,
+          "p95Ms": 383,
+          "maxMs": 383
+        }
+      },
+      {
+        "signature": "SELECT:db85b7c5e9f5",
+        "operation": "SELECT",
+        "tables": [
+          "clients"
+        ],
+        "count": 2,
+        "durationMs": {
+          "samples": 2,
+          "p50Ms": 344,
+          "p95Ms": 349,
+          "maxMs": 349
+        }
+      },
+      {
+        "signature": "SELECT:6b13aab96042",
+        "operation": "SELECT",
+        "tables": [
+          "matters"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 364,
+          "p95Ms": 364,
+          "maxMs": 364
+        }
+      },
+      {
+        "signature": "INSERT:082ec346a088",
+        "operation": "INSERT",
+        "tables": [
+          "activity_events"
+        ],
+        "count": 4,
+        "durationMs": {
+          "samples": 4,
+          "p50Ms": 352,
+          "p95Ms": 387,
+          "maxMs": 387
+        }
+      },
+      {
+        "signature": "SELECT:ce8c37156c53",
+        "operation": "SELECT",
+        "tables": [
+          "receivables"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 357,
+          "p95Ms": 357,
+          "maxMs": 357
+        }
+      },
+      {
+        "signature": "SELECT:dac24886257e",
+        "operation": "SELECT",
+        "tables": [
+          "tasks"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 350,
+          "p95Ms": 350,
+          "maxMs": 350
+        }
+      },
+      {
+        "signature": "WITH:1177c639876b",
+        "operation": "WITH",
+        "tables": [
+          "receivable_installments",
+          "installments_in_period",
+          "bounds",
+          "payment_allocations",
+          "payments",
+          "financial_adjustments",
+          "paid",
+          "adjustments",
+          "buckets",
+          "totals"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 413,
+          "p95Ms": 413,
+          "maxMs": 413
+        }
+      },
+      {
+        "signature": "SELECT:300c2b0e0f7a",
+        "operation": "SELECT",
+        "tables": [
+          "clients",
+          "client_contacts"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 348,
+          "p95Ms": 348,
+          "maxMs": 348
+        }
+      },
+      {
+        "signature": "SELECT:7f3152717e18",
+        "operation": "SELECT",
+        "tables": [
+          "clients",
+          "client_contacts",
+          "matters",
+          "pipeline_stages",
+          "contracts",
+          "receivables",
+          "receivable_installments",
+          "payment_allocations",
+          "payments",
+          "financial_adjustments",
+          "documents",
+          "tasks",
+          "calendar_events",
+          "internal_notes",
+          "client_messages"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 383,
+          "p95Ms": 383,
+          "maxMs": 383
+        }
+      },
+      {
+        "signature": "SELECT:7ed9acfc7a66",
+        "operation": "SELECT",
+        "tables": [
+          "activity_events"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 346,
+          "p95Ms": 346,
+          "maxMs": 346
+        }
+      }
+    ],
+    "poolSamples": 104,
+    "maxPoolWaiting": 3,
+    "maxPoolBusy": 2,
+    "maxPoolOpen": 2
+  },
+  "finishedAt": "2026-10-28T20:42:49.152Z",
+  "httpRequests": [
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/health/ready",
+      "durationMs": 1701,
+      "status": 200,
+      "serverTiming": {
+        "permissionGuard": 0.1,
+        "handler": 1208.6
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 219,
+      "status": 401,
+      "serverTiming": {}
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 218,
+      "status": 401,
+      "serverTiming": {}
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 229,
+      "status": 401,
+      "serverTiming": {}
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 2782,
+      "status": 200,
+      "serverTiming": {
+        "authClaims": 4,
+        "membershipPrismaRoundtrip": 1026.2,
+        "rateLimitPrismaRoundtrip": 844.2,
+        "permissionGuard": 0.3,
+        "handler": 874.9
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 6622,
+      "status": 200,
+      "serverTiming": {
+        "authClaims": 1,
+        "membershipPrismaRoundtrip": 846.2,
+        "rateLimitPrismaRoundtrip": 1875.1,
+        "permissionGuard": 0.1,
+        "handler": 1109.8
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "POST",
+      "route": "/v1/audit-logs/module-views",
+      "durationMs": 5115,
+      "status": 201,
+      "serverTiming": {
+        "authClaims": 20.3,
+        "membershipPrismaRoundtrip": 2486.3,
+        "rateLimitPrismaRoundtrip": 1541.4,
+        "permissionGuard": 0,
+        "handler": 916
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/dashboard/summary",
+      "durationMs": 5970,
+      "status": 200,
+      "serverTiming": {
+        "authClaims": 1.4,
+        "membershipPrismaRoundtrip": 1443.1,
+        "rateLimitPrismaRoundtrip": 1729.6,
+        "permissionGuard": 0,
+        "handler": 2622.7
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "1_sessao",
+      "module": "Clientes",
+      "method": "POST",
+      "route": "/v1/audit-logs/module-views",
+      "durationMs": 3100,
+      "status": 201,
+      "serverTiming": {
+        "authClaims": 4,
+        "membershipPrismaRoundtrip": 1079.9,
+        "rateLimitPrismaRoundtrip": 916.3,
+        "permissionGuard": 0.2,
+        "handler": 861.1
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "1_sessao",
+      "module": "Clientes",
+      "method": "GET",
+      "route": "/v1/clients",
+      "durationMs": 3474,
+      "status": 200,
+      "serverTiming": {
+        "authClaims": 7.4,
+        "membershipPrismaRoundtrip": 1088.5,
+        "rateLimitPrismaRoundtrip": 837.8,
+        "permissionGuard": 0,
+        "handler": 1465.4
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "1_sessao",
+      "module": "Visão geral",
+      "method": "POST",
+      "route": "/v1/audit-logs/module-views",
+      "durationMs": 2766,
+      "status": 201,
+      "serverTiming": {
+        "authClaims": 1.8,
+        "membershipPrismaRoundtrip": 1194.1,
+        "rateLimitPrismaRoundtrip": 935.3,
+        "permissionGuard": 0.1,
+        "handler": 900.5
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "1_sessao",
+      "module": "Clientes",
+      "method": "POST",
+      "route": "/v1/audit-logs/module-views",
+      "durationMs": 3007,
+      "status": 201,
+      "serverTiming": {
+        "authClaims": 1.9,
+        "membershipPrismaRoundtrip": 1092.3,
+        "rateLimitPrismaRoundtrip": 874.9,
+        "permissionGuard": 0.1,
+        "handler": 1075.2
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "1_sessao",
+      "module": "Clientes",
+      "method": "GET",
+      "route": "/v1/clients/:id/overview",
+      "durationMs": 3477,
+      "status": 200,
+      "serverTiming": {
+        "authClaims": 3.9,
+        "membershipPrismaRoundtrip": 1048.1,
+        "rateLimitPrismaRoundtrip": 894.1,
+        "permissionGuard": 0.1,
+        "handler": 1514
+      }
+    }
+  ],
+  "pageErrorCount": 0,
+  "browserConsoleDiagnostics": [
+    "BROWSER_CONSOLE_ERROR",
+    "CSP_CONNECT_SRC"
+  ],
+  "webResourceFailures": [],
+  "loginDiagnostics": {
+    "localApiRequests": 8,
+    "durationMs": {
+      "samples": 8,
+      "p50Ms": 1701,
+      "p95Ms": 6622,
+      "maxMs": 6622
+    },
+    "routes": {
+      "/v1/health/ready": {
+        "count": 1,
+        "statuses": {
+          "200": 1
+        }
+      },
+      "/v1/auth/me": {
+        "count": 5,
+        "statuses": {
+          "200": 2,
+          "401": 3
+        }
+      },
+      "/v1/audit-logs/module-views": {
+        "count": 1,
+        "statuses": {
+          "201": 1
+        }
+      },
+      "/v1/dashboard/summary": {
+        "count": 1,
+        "statuses": {
+          "200": 1
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,87 @@
+{
+  "runId": "1793213732368-764ffb",
+  "projectRef": "ioebcdpyrszokdyaoaqv",
+  "databaseHost": "aws-0-us-east-2.pooler.supabase.com",
+  "databasePort": "6543",
+  "pooler": "Supabase transaction mode",
+  "workload": "3 concorrentes × 3 lotes de SELECT pg_sleep(80 ms), sem acesso a tabelas de negócio",
+  "status": "FAIL",
+  "scenarios": [
+    {
+      "connectionLimit": 1,
+      "poolTimeoutSeconds": 10,
+      "concurrency": 3,
+      "batches": 3,
+      "samples": 0,
+      "latencyMs": {
+        "p50": null,
+        "p95": null,
+        "max": null
+      },
+      "errors": [
+        "P2010",
+        "P2010",
+        "P2010"
+      ],
+      "maxPoolMetrics": {
+        "waiters": 2,
+        "busyConnections": 1,
+        "openConnections": 1
+      },
+      "waitHistogramDelta": {
+        "count": 3,
+        "sumMs": 2961.247,
+        "buckets": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            5,
+            0
+          ],
+          [
+            10,
+            0
+          ],
+          [
+            50,
+            0
+          ],
+          [
+            100,
+            0
+          ],
+          [
+            500,
+            0
+          ],
+          [
+            1000,
+            1
+          ],
+          [
+            5000,
+            1
+          ],
+          [
+            50000,
+            0
+          ]
+        ]
+      },
+      "databaseCapacity": {
+        "max_connections": 60,
+        "reserved_connections": 3,
+        "visible_connections": 8,
+        "active_connections": 1
+      },
+      "readOnly": true
+    }
+  ],
+  "interrupted": true
+}

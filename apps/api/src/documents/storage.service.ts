@@ -17,8 +17,8 @@ export class StorageService {
     );
   }
 
-  async upload(key: string, buffer: Buffer, mimeType: string): Promise<void> {
-    const { error } = await this.client.storage.from(this.bucket).upload(key, buffer, {
+  async upload(key: string, buffer: Buffer, mimeType: string, bucket = this.bucket): Promise<void> {
+    const { error } = await this.client.storage.from(bucket).upload(key, buffer, {
       contentType: mimeType,
       cacheControl: '3600',
       upsert: false,
@@ -26,16 +26,22 @@ export class StorageService {
     if (error) throw new ServiceUnavailableException('Falha ao armazenar documento privado');
   }
 
-  async signedUrl(key: string, expiresInSeconds = 300): Promise<string> {
+  async signedUrl(key: string, expiresInSeconds = 300, bucket = this.bucket): Promise<string> {
     const { data, error } = await this.client.storage
-      .from(this.bucket)
+      .from(bucket)
       .createSignedUrl(key, expiresInSeconds);
     if (error || !data.signedUrl)
       throw new ServiceUnavailableException('Falha ao assinar acesso ao documento');
     return data.signedUrl;
   }
 
-  async remove(key: string): Promise<void> {
-    await this.client.storage.from(this.bucket).remove([key]);
+  async download(key: string, bucket = this.bucket): Promise<Buffer> {
+    const { data, error } = await this.client.storage.from(bucket).download(key);
+    if (error || !data) throw new ServiceUnavailableException('Falha ao ler o documento privado');
+    return Buffer.from(await data.arrayBuffer());
+  }
+
+  async remove(key: string, bucket = this.bucket): Promise<void> {
+    await this.client.storage.from(bucket).remove([key]);
   }
 }

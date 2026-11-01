@@ -8,9 +8,15 @@ test('clients beyond the first page remain available and search uses the server'
   await page.route('**/v1/**', async (route) => {
     const url = new URL(route.request().url());
     let body: unknown;
-    if (url.pathname === '/v1/auth/me') {
+    if (url.pathname === '/v1/audit-logs/module-views') {
+      body = { recorded: true };
+    } else if (url.pathname === '/v1/auth/me') {
       body = {
-        user: { id: 'client-admin', email: 'qa@example.test', permissions: ['clients:view'] },
+        user: {
+          id: 'client-admin',
+          email: 'qa@example.test',
+          permissions: ['clients:view', 'audit:view'],
+        },
         organization: { name: 'Organização QA' },
       };
     } else if (url.pathname === '/v1/clients') {
@@ -44,6 +50,9 @@ test('clients beyond the first page remain available and search uses the server'
 
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Clientes' })).toBeVisible();
+  await expect(
+    page.locator('#primary-navigation').getByRole('button', { name: 'Atividades', exact: true }),
+  ).toHaveCount(0);
   await expect(page.getByRole('cell', { name: 'Cliente 25' })).toBeVisible();
   await page.getByRole('button', { name: 'Carregar mais' }).click();
   await expect(page.getByRole('cell', { name: 'Cliente 26' })).toBeVisible();

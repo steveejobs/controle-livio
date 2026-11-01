@@ -3,17 +3,20 @@
 import { useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { useApiData } from '../shared/use-api-data';
+import { HearingReminderOptions } from './hearing-reminder-options';
 
 type CalendarEvent = {
   id: string;
   title: string;
   description?: string;
   type: 'HEARING' | 'MEETING' | 'LEGAL_DEADLINE' | 'APPOINTMENT' | 'OTHER';
+  status?: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED';
   startsAt: string;
   endsAt: string;
   timezone: string;
   location?: string;
   allDay: boolean;
+  reminderMinutes?: number[];
   recurrenceRule?: string;
 };
 
@@ -43,6 +46,8 @@ function EventForm({
   onCancel: () => void;
   onSave: (payload: Record<string, unknown>) => Promise<void>;
 }) {
+  const [eventType, setEventType] = useState<CalendarEvent['type']>(event?.type ?? 'MEETING');
+  const [reminderMinutes, setReminderMinutes] = useState(event?.reminderMinutes ?? [60, 30, 10]);
   const submit = (formEvent: FormEvent<HTMLFormElement>) => {
     formEvent.preventDefault();
     const form = new FormData(formEvent.currentTarget);
@@ -50,7 +55,7 @@ function EventForm({
     void onSave({
       title: form.get('title'),
       description: form.get('description') || undefined,
-      type: form.get('type'),
+      type: eventType,
       startsAt: new Date(String(form.get('startsAt'))).toISOString(),
       endsAt: new Date(String(form.get('endsAt'))).toISOString(),
       timezone: 'America/Sao_Paulo',
@@ -58,6 +63,8 @@ function EventForm({
       allDay: form.get('allDay') === 'on',
       attendees: [],
       recurrenceRule: recurrence || undefined,
+      ...(eventType === 'HEARING' ? { reminderMinutes } : {}),
+      ...(event ? { status: form.get('status') } : {}),
     });
   };
   return (
@@ -68,7 +75,11 @@ function EventForm({
       </label>
       <label>
         Tipo de compromisso
-        <select name="type" defaultValue={event?.type ?? 'MEETING'}>
+        <select
+          name="type"
+          value={eventType}
+          onChange={(change) => setEventType(change.target.value as CalendarEvent['type'])}
+        >
           {eventTypes.map(([value, label]) => (
             <option key={value} value={value}>
               {label}
@@ -76,6 +87,19 @@ function EventForm({
           ))}
         </select>
       </label>
+      {eventType === 'HEARING' && (
+        <HearingReminderOptions value={reminderMinutes} onChange={setReminderMinutes} />
+      )}
+      {event && (
+        <label>
+          Situação
+          <select name="status" defaultValue={event.status ?? 'SCHEDULED'}>
+            <option value="SCHEDULED">Agendada</option>
+            <option value="COMPLETED">Realizada</option>
+            <option value="CANCELLED">Cancelada</option>
+          </select>
+        </label>
+      )}
       <label>
         Início
         <input
@@ -176,7 +200,10 @@ export function Calendar({ permissions }: { permissions: readonly string[] }) {
         <div>
           <p>Organização</p>
           <h1>Agenda</h1>
-          <span>Cadastre audiências, reuniões, prazos e compromissos no horário de Brasília.</span>
+          <span>
+            Audiências do contrato entram como agendadas. O responsável recebe os avisos
+            configurados.
+          </span>
         </div>
         {canCreate && (
           <button className="primary" onClick={() => setEditing('new')}>
@@ -199,6 +226,7 @@ export function Calendar({ permissions }: { permissions: readonly string[] }) {
       )}
       {editing && (
         <EventForm
+          key={editing === 'new' ? 'new' : editing.id}
           event={editing === 'new' ? undefined : editing}
           busy={busy}
           onCancel={() => setEditing(undefined)}
@@ -220,6 +248,7 @@ export function Calendar({ permissions }: { permissions: readonly string[] }) {
               <p>
                 {eventTypes.find(([value]) => value === event.type)?.[1] ?? event.type}
                 {event.location ? ` · ${event.location}` : ''}
+                {` · ${!event.status || event.status === 'SCHEDULED' ? 'Agendada' : event.status === 'COMPLETED' ? 'Realizada' : 'Cancelada'}`}
               </p>
               {event.description && <small>{event.description}</small>}
               {event.recurrenceRule && <small>Recorrente: {event.recurrenceRule}</small>}

@@ -117,3 +117,21 @@ vazio, alvo confortável e funcionamento a 360 px.
 - A lista inclui atividades criminais comuns e mantém o primeiro serviço marcado como classificação
   principal dos relatórios atuais. A seleção e o cadastro novo são cobertos em E2E nos viewports de
   360 e 1440 px.
+
+## Modelos e atividades administrativas em 2026-10-21
+
+- O editor de modelos fica dentro do módulo Documentos e separado da emissão. O usuário escolhe o tipo
+  de documento, edita o texto, insere dados por rótulos legíveis agrupados por cliente/escritório/
+  contrato e confere uma prévia antes de salvar. As descrições estão visíveis e acessíveis por teclado;
+  os marcadores técnicos não precisam ser digitados.
+- A validação impede erros previsíveis de variável e conserva os dados essenciais. Mensagens de
+  salvamento indicam que alterações valem para futuras emissões, mantendo documentos existentes. O
+  editor mostra alterações pendentes e pede confirmação antes de descartá-las ao trocar de modelo.
+- A página **Atividades do sistema** substitui os logs técnicos por descrições de ação, pessoa,
+  horário e campos afetados. Filtros por tipo, usuário, texto e data deixam o histórico direto de
+  consultar; valores antigos e novos não aparecem na interface.
+- A cobertura com Playwright/axe verifica os fluxos em 360 e 1440 px, inclusive editor, prévia,
+  salvamento, restauração, leitura das atividades, navegação entre áreas e ausência de overflow.
+
+Essa verificação combina inspeção de formulários e regressão automatizada; não substitui teste de uso
+com pessoas da equipe nem comprova, sozinha, que todo fluxo de trabalho futuro será intuitivo.

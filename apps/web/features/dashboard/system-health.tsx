@@ -11,7 +11,7 @@ export function SystemHealth() {
   useEffect(() => {
     const controller = new AbortController();
     const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/v1';
-    fetch(`${apiUrl}/health/live`, { signal: controller.signal, cache: 'no-store' })
+    fetch(`${apiUrl}/health/ready`, { signal: controller.signal, cache: 'no-store' })
       .then((response) => setState(response.ok ? 'online' : 'offline'))
       .catch(() => setState('offline'));
     return () => controller.abort();

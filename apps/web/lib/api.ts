@@ -13,6 +13,7 @@ type InFlightRead = {
 const inFlightReads = new Map<string, InFlightRead>();
 const CACHE_TTL_MS = 15_000;
 const MAX_CACHE_ENTRIES = 80;
+const nonInvalidatingWritePaths = new Set(['/audit-logs/module-views', '/audit-logs/client-views']);
 let readVersion = 0;
 
 function invalidateReads(abortInFlight = false) {
@@ -128,6 +129,8 @@ export async function api<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const method = init.method?.toUpperCase() ?? 'GET';
+  const invalidatesReadCache =
+    method !== 'GET' && !nonInvalidatingWritePaths.has(path.split('?')[0] ?? path);
   const { data: sessionData } = await createSupabaseBrowserClient().auth.getSession();
   const accessToken = sessionData.session?.access_token ?? null;
   const cacheKey = `${accessToken ?? 'anonymous'}:${window.localStorage.getItem('livio:organization-id') ?? 'default'}:${path}`;
@@ -162,11 +165,9 @@ export async function api<T>(
     return subscribeToRead<T>(entry, signal);
   }
 
-  if (method !== 'GET') invalidateReads();
+  if (invalidatesReadCache) invalidateReads();
   const body = await sendAndParse<T>(path, init, signal, accessToken);
-  if (method !== 'GET') {
-    invalidateReads();
-  }
+  if (invalidatesReadCache) invalidateReads();
   return body;
 }
 

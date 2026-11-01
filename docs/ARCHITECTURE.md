@@ -40,3 +40,11 @@ O ambiente é validado por Zod no boot. A API expõe liveness e readiness; readi
 API e web não mantêm sessão em memória e podem escalar horizontalmente. Jobs futuros devem usar outbox transacional. Rate limit distribuído, antivírus assíncrono e telemetria continuam planejados. RLS e policies Supabase são versionados em `supabase/migrations`; veja `SUPABASE_ARCHITECTURE.md`.
 
 Na web, tema e motion permanecem centralizados em `apps/web/theme`; esta etapa não acopla domínio do backend ao frontend.
+
+## Atividades e modelos
+
+`audit_logs` registra alterações de negócio no mesmo transaction client. `activity_events` registra
+autenticação, áreas abertas e fichas de cliente consultadas. A API une essas fontes para a tela
+administrativa, traduz campos sem expor valores pessoais e limita toda consulta ao tenant ativo. Os
+textos de modelos de documento usam `organizations.settings.legalDocuments.templates`, sem tabela ou
+migration adicional.

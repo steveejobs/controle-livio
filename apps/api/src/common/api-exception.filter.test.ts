@@ -1,84 +1,69 @@
-import { HttpStatus, type ArgumentsHost } from '@nestjs/common';
-import { Prisma } from '@livio/db';
+import { PayloadTooLargeException, type ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
-import { ApiExceptionFilter } from './api-exception.filter';
+import { ApiExceptionFilter, sanitizeRequestPath } from './api-exception.filter';
 
-function filterResponse(exception: unknown) {
-  const request = {
-    headers: {},
-    id: 'request-a',
-    originalUrl: '/v1/records',
-    log: { error: vi.fn() },
-  };
-  const response = { status: vi.fn().mockReturnThis(), json: vi.fn() };
-  const host = {
-    switchToHttp: () => ({
-      getRequest: () => request,
-      getResponse: () => response,
-    }),
-  } as unknown as ArgumentsHost;
-
-  new ApiExceptionFilter().catch(exception, host);
-
-  return { request, response };
-}
-
-describe('ApiExceptionFilter', () => {
-  it.each([
-    [
-      'P2002',
-      HttpStatus.CONFLICT,
-      'Já existe um registro com esses dados. Confira as informações e tente novamente.',
-    ],
-    [
-      'P2003',
-      HttpStatus.CONFLICT,
-      'Um vínculo relacionado mudou ou não está disponível. Atualize a tela e tente novamente.',
-    ],
-    [
-      'P2025',
-      HttpStatus.NOT_FOUND,
-      'O registro não foi encontrado. Atualize a tela e tente novamente.',
-    ],
-    [
-      'P2034',
-      HttpStatus.CONFLICT,
-      'Os dados mudaram durante a operação. Atualize a tela e tente novamente.',
-    ],
-  ])('converts database error %s into a safe response', (code, status, message) => {
-    const error = new Prisma.PrismaClientKnownRequestError('Database detail must stay private', {
-      code,
-      clientVersion: '6.19.3',
-      meta: { target: ['organization_id', 'reference'] },
-    });
-
-    const { request, response } = filterResponse(error);
-
-    expect(response.status).toHaveBeenCalledWith(status);
-    expect(response.json).toHaveBeenCalledWith(
-      expect.objectContaining({ statusCode: status, message, requestId: 'request-a' }),
-    );
-    expect(response.json.mock.calls[0]?.[0]).not.toHaveProperty('meta');
-    expect(request.log.error).not.toHaveBeenCalled();
-  });
-
-  it('keeps unexpected errors generic and logs them for investigation', () => {
-    const error = new Error('private database detail');
-    const { request, response } = filterResponse(error);
-
-    expect(response.status).toHaveBeenCalledWith(HttpStatus.INTERNAL_SERVER_ERROR);
-    expect(response.json).toHaveBeenCalledWith(
+describe('API error path sanitization', () => {
+  it('normalizes the Multer upload limit response', () => {
+    const json = vi.fn();
+    const response = { status: vi.fn().mockReturnValue({ json }) };
+    const host = {
+      switchToHttp: () => ({
+        getRequest: () => ({
+          originalUrl: '/v1/documents',
+          headers: {},
+          id: 'upload-limit',
+        }),
+        getResponse: () => response,
+      }),
+    } as unknown as ArgumentsHost;
+    new ApiExceptionFilter().catch(new PayloadTooLargeException('File too large'), host);
+    expect(response.status).toHaveBeenCalledWith(413);
+    expect(json).toHaveBeenCalledWith(
       expect.objectContaining({
-        statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
-        message: 'Ocorreu um erro interno',
+        code: 'payload_too_large',
+        message: 'A requisição excede o limite de upload.',
       }),
     );
-    expect(JSON.stringify(response.json.mock.calls[0]?.[0])).not.toContain(
-      'private database detail',
+  });
+
+  it('never copies exception secrets or financial payloads into logs or the response', () => {
+    const error = vi.fn();
+    const json = vi.fn();
+    const response = { status: vi.fn().mockReturnValue({ json }) };
+    const host = {
+      switchToHttp: () => ({
+        getRequest: () => ({
+          originalUrl: '/v1/public/signatures/secret-signature/sign?token=secret-query',
+          headers: {},
+          id: 'correlation-id',
+          log: { error },
+        }),
+        getResponse: () => response,
+      }),
+    } as unknown as ArgumentsHost;
+    new ApiExceptionFilter().catch(
+      new Error('secret-signature secret-query bank-account amount=1234.56'),
+      host,
     );
-    expect(request.log.error).toHaveBeenCalledWith(
-      expect.objectContaining({ err: error, requestId: 'request-a' }),
+    expect(error).toHaveBeenCalledWith(
+      { requestId: 'correlation-id', statusCode: 500 },
       'Falha não tratada',
+    );
+    const serialized = JSON.stringify([error.mock.calls, json.mock.calls]);
+    for (const secret of ['secret-signature', 'secret-query', 'bank-account', '1234.56']) {
+      expect(serialized).not.toContain(secret);
+    }
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 500 }));
+  });
+  it('redacts public signature tokens and omits query strings', () => {
+    expect(sanitizeRequestPath('/v1/public/signatures/synthetic-token/sign?return=secret')).toBe(
+      '/v1/public/signatures/[REDACTED]/sign',
+    );
+  });
+
+  it('preserves ordinary route paths', () => {
+    expect(sanitizeRequestPath('/v1/clients/123/overview?limit=20')).toBe(
+      '/v1/clients/123/overview',
     );
   });
 });

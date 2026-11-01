@@ -92,6 +92,11 @@ Para a API:
   `us-east-2` do projeto Supabase atual.
 - Cron diário: `GET /v1/notifications/cron` às 11:00 UTC (08:00 em Brasília), autenticado
   automaticamente por `Authorization: Bearer $CRON_SECRET`. Sem o segredo, a rota falha fechada.
+- Alertas de audiência, acesso e tarefa: `pg_cron` no projeto Supabase chama
+  `GET /v1/notifications/dispatch/cron` a cada minuto. A chamada inclui apenas timestamp e HMAC de
+  curta duração; `CRON_SECRET` fica no Vault e na API. A fila do `pg_net` não recebe o segredo.
+  A ativação é feita após o deploy com `tools/notifications/configure-scheduler.mjs --activate`.
+  Push depende de VAPID, permissão e inscrição ativa em cada navegador.
 
 Enquanto os aliases `vercel.app` forem usados, `controle-livio.vercel.app` identifica o projeto da
 API e `controle-livio-web.vercel.app` identifica a web. A raiz `/` da API possui redirecionamento
@@ -126,20 +131,22 @@ O workflow `Quality` também sobe Supabase descartável e executa `test:supabase
 login, refresh, recuperação de senha, troca de organização, CRUD essencial, exportação CSV, upload e
 download de documentos, isolamento entre organizações e layout a 360 px.
 
-Não publique enquanto scanner antimalware, rate limit distribuído, telemetria/alertas, custom SMTP e
-ensaio de restauração ainda forem requisitos pendentes para o uso real pretendido.
+O ambiente Supabase `ioebcdpyrszokdyaoaqv` foi confirmado como desenvolvimento/homologação. Publicar
+uma versão de homologação não é aprovação para uso com dados reais. A promoção para uso real ainda exige
+scanner antimalware, SMTP/domínio para entrega de e-mail, observabilidade e ensaio de restauração.
 
 ## Pendências operacionais verificadas em 2026-10-20
 
-- **E-mail:** ainda não há provedor SMTP. O navegador testa o pedido de recuperação e seu redirect com
-  resposta simulada, mas convite, recebimento e recuperação real não foram comprovados. Configurar um
-  provedor, validar domínio/remetente e testar entrega com uma conta de homologação antes de abrir acesso.
+- **E-mail:** o escritório ainda não tem domínio nem provedor SMTP. Convites e recuperação por links
+  gerados pelo Administrador, aceitação e definição de senha foram comprovados no Supabase Auth real;
+  envio automático por e-mail depende do provedor. Configurar domínio/remetente e testar entrega com
+  uma conta de homologação antes de abrir acesso.
 - **Métricas:** a web inclui o cliente Vercel Speed Insights. Ativar o recurso no projeto web após revisar
   o plano e os custos, publicar a versão testada e acompanhar Web Vitals e erros por rota. Sem essa
   ativação e tráfego real não há p95 de usuários.
-- **Proteção de arquivos e API:** o scanner de malware e um store compartilhado para rate limit ainda
-  não foram provisionados. Definir provedores e credenciais server-side, tratar falhas sem liberar arquivo
-  não verificado e testar limites com duas instâncias antes de uso real.
+- **Proteção de arquivos e API:** o rate limit da API usa contador compartilhado no Postgres. O scanner
+  de malware ainda não foi provisionado; definir provedor, falhar fechado para arquivo não verificado e
+  testar upload seguro antes de uso real.
 - **Recuperação:** não há Docker, `pg_dump` ou scanner local nesta estação; nenhum ensaio de restauração
   foi executado. Criar projeto de restauração isolado, obter backup verificável do Database e cópia
   separada dos objetos Storage, restaurar ambos nesse destino e conferir Auth, memberships, 39 tabelas,

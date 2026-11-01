@@ -1,2 +1,2 @@
-export { Prisma, PrismaClient } from '@prisma/client';
+export { AuditAction, Prisma, PrismaClient } from '@prisma/client';
 export type { Organization, User } from '@prisma/client';

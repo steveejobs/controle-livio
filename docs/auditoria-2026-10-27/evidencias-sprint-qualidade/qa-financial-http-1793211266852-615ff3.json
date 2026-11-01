@@ -1,0 +1,212 @@
+{
+  "runId": "1793211266852-615ff3",
+  "startedAt": "2026-10-28T18:14:26.882Z",
+  "scope": "synthetic browser-only",
+  "preflight": {
+    "projectRef": "ioebcdpyrszokdyaoaqv",
+    "destinations": {
+      "authHost": "ioebcdpyrszokdyaoaqv.supabase.co",
+      "storageHost": "ioebcdpyrszokdyaoaqv.supabase.co",
+      "databaseHost": "aws-0-us-east-2.pooler.supabase.com",
+      "directDatabaseHost": "aws-0-us-east-2.pooler.supabase.com",
+      "database": "postgres",
+      "databaseIdentityMatches": true
+    },
+    "sharedProjectProductionConnected": true,
+    "ownerAuthorizedSyntheticWrites": true,
+    "publicSignupDisabled": true,
+    "externalCredentialsPresent": false,
+    "pushSubscriptions": 0,
+    "privateStorageBuckets": [
+      "client-photos",
+      "document-signatures",
+      "legal-documents"
+    ],
+    "rlsTablesProtected": "13/13",
+    "scheduler": {
+      "active": true,
+      "scope": "job ativo; QA não cria agenda ou notificações vencidas"
+    },
+    "existingDataModified": false
+  },
+  "checks": {
+    "overview_http_performance_timing": {
+      "status": "PASS",
+      "stage": "authenticated HTTP overview; Auth, membership, rate limit, permission, handler and total latency",
+      "evidence": {
+        "samples": 13,
+        "concurrency": 1,
+        "coldMs": 3162,
+        "warmHttp": {
+          "samples": 10,
+          "p50Ms": 2517,
+          "p95Ms": 2672,
+          "maxMs": 2672
+        },
+        "concurrent2Ms": [
+          4435,
+          5300
+        ],
+        "allHttp": {
+          "samples": 13,
+          "p50Ms": 2538,
+          "p95Ms": 5300,
+          "maxMs": 5300
+        },
+        "serverTimingMs": {
+          "authClaims": {
+            "samples": 13,
+            "p50Ms": 2,
+            "p95Ms": 371,
+            "maxMs": 371
+          },
+          "membershipPrismaRoundtrip": {
+            "samples": 13,
+            "p50Ms": 835,
+            "p95Ms": 1674,
+            "maxMs": 1674
+          },
+          "rateLimitPrismaRoundtrip": {
+            "samples": 13,
+            "p50Ms": 826,
+            "p95Ms": 1826,
+            "maxMs": 1826
+          },
+          "permissionGuard": {
+            "samples": 13,
+            "p50Ms": 0,
+            "p95Ms": 0,
+            "maxMs": 0
+          },
+          "handler": {
+            "samples": 13,
+            "p50Ms": 846,
+            "p95Ms": 1805,
+            "maxMs": 1805
+          }
+        },
+        "serverResponseTimeMs": {
+          "samples": 13,
+          "p50Ms": 2531,
+          "p95Ms": 5291,
+          "maxMs": 5291
+        },
+        "prismaQueryCount": {
+          "samples": 13,
+          "p50Ms": 13,
+          "p95Ms": 24,
+          "maxMs": 24
+        },
+        "rateLimitActive": true,
+        "stableWindow": "2026-10-28T18:15:00.000Z",
+        "caveat": "Prisma stage timings are client roundtrips and include pool acquisition, network and SQL; these cannot be separated by this HTTP harness.",
+        "prismaQueryCountByRequest": [
+          13,
+          12,
+          12,
+          12,
+          11,
+          12,
+          13,
+          13,
+          13,
+          12,
+          13,
+          20,
+          24
+        ],
+        "prismaQueryRoundtripMs": {
+          "samples": 180,
+          "p50Ms": 164,
+          "p95Ms": 337,
+          "maxMs": 368
+        },
+        "apiResponseTimeSamples": 13,
+        "prismaQueryEventsMatched": 180,
+        "queryBreakdownLimitation": "Prisma query events measure client roundtrips; pool acquisition, database execution and network are not independently split."
+      }
+    },
+    "frontend_browser_real": {
+      "status": "PASS",
+      "stage": "real Supabase login, local API, module navigation, client portal, 360 px viewport",
+      "evidence": {
+        "adminProfile": "synthetic administrator",
+        "clientProfile": "synthetic client linked to QA client",
+        "clientLoginMs": 17277,
+        "modulesVisited": 15,
+        "moduleNavigationMs": [
+          887,
+          6898,
+          9671,
+          11131,
+          9245,
+          1196,
+          24400,
+          6575,
+          14194,
+          10290,
+          1464,
+          26473,
+          12977,
+          6762,
+          14730
+        ],
+        "browserApiRequests": 53,
+        "browserApi4xx": [
+          {
+            "method": "GET",
+            "path": "/auth/me",
+            "status": 401
+          },
+          {
+            "method": "GET",
+            "path": "/auth/me",
+            "status": 401
+          },
+          {
+            "method": "GET",
+            "path": "/auth/me",
+            "status": 401
+          },
+          {
+            "method": "GET",
+            "path": "/auth/me",
+            "status": 401
+          }
+        ],
+        "browserApi5xx": 0,
+        "portalAdminNavigationBlocked": true,
+        "noHorizontalOverflowAt360px": true,
+        "mobileActivityFilterControlWidths": [
+          294,
+          294,
+          294,
+          294,
+          294
+        ],
+        "logoutVisibleAndReachable": true,
+        "screenshots": [
+          "docs\\auditoria-2026-10-27\\evidencias-sprint-qualidade\\qa-browser-1793211266852-615ff3-administrator.png",
+          "docs\\auditoria-2026-10-27\\evidencias-sprint-qualidade\\qa-browser-1793211266852-615ff3-portal.png"
+        ]
+      }
+    }
+  },
+  "cleanup": {
+    "organizationsArchived": 1,
+    "membershipsSuspended": 3,
+    "usersSuspended": 3,
+    "authUsersBanned": 3,
+    "syntheticProfilesRetained": 3,
+    "retainedSyntheticAuditAndRateLimitEvidence": true,
+    "apiStopRequested": true,
+    "webStopRequested": true
+  },
+  "finishedAt": "2026-10-28T18:20:16.197Z",
+  "status": "PASS",
+  "limitations": [
+    "Pagamento parcial, estorno, reembolso processado e conciliação de despesas permanecem indisponíveis.",
+    "O comprovante sintético permanece no Storage privado associado à organização QA arquivada; nenhum objeto preexistente foi alterado.",
+    "Históricos de auditoria e contadores de rate limit QA são retidos; somente organizações QA, memberships, usuários e contas Auth deste run são encerrados/suspensos."
+  ]
+}

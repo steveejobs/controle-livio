@@ -1,0 +1,301 @@
+{
+  "runId": "1793218556358-f24c38",
+  "startedAt": "2026-10-28T20:15:56.399Z",
+  "status": "BLOCKED",
+  "scope": "navigation real somente leitura de negócio; autenticação sintética, rate limit e telemetry geram registros técnicos",
+  "preflight": {
+    "sharedProjectConnectedToProduction": true,
+    "authSignupDisabled": true,
+    "externalCredentialsPresentInApiProcess": false,
+    "pushSubscribersInQaOrganization": 0,
+    "oneApiProcess": true,
+    "newOrganizationCreated": false,
+    "newBusinessRecordsCreated": false,
+    "identityLogin": "existing active synthetic administrator via one-time Supabase Auth link generated server-side; no email sent"
+  },
+  "project": {
+    "ref": "ioebcdpyrszokdyaoaqv",
+    "localDatabaseHost": "aws-0-us-east-2.pooler.supabase.com",
+    "localDatabasePort": "6543",
+    "localPoolerMode": "Supavisor transaction pooler",
+    "apiConnectionLimit": 2,
+    "poolTimeoutSeconds": 10,
+    "businessTables": {
+      "clients": 3,
+      "client_contacts": 1,
+      "matters": 1,
+      "contracts": 1,
+      "receivables": 4,
+      "installments": 7,
+      "payments": 3,
+      "payment_allocations": 3,
+      "expenses": 2,
+      "documents": 2,
+      "document_versions": 3,
+      "tasks": 2,
+      "calendar_events": 2,
+      "notifications": 7,
+      "client_messages": 3,
+      "matter_stage_history": 2
+    },
+    "technicalCountsBefore": {
+      "audit_logs": 50,
+      "activity_events": 2,
+      "rate_limit_rows": 1,
+      "admin_read_counter": 0,
+      "admin_write_counter": 1,
+      "admin_read_current_window": 0,
+      "admin_write_current_window": 0
+    },
+    "technicalCountsAfter": {
+      "audit_logs": 50,
+      "activity_events": 3,
+      "rate_limit_rows": 1,
+      "admin_read_counter": 0,
+      "admin_write_counter": 1,
+      "admin_read_current_window": 0,
+      "admin_write_current_window": 0
+    },
+    "databaseLimits": {
+      "database": "postgres",
+      "serverVersion": "17.11",
+      "maxConnections": 60,
+      "reservedConnections": 3,
+      "visibleConnectionsBefore": 8,
+      "activeConnectionsBefore": 1,
+      "visibleConnectionsAfter": 10,
+      "activeConnectionsAfter": 1
+    },
+    "accountRole": "administrator",
+    "accountAndOrganizationSynthetic": true,
+    "existingOrganizationReused": true,
+    "newOrganizationCreated": false,
+    "newBusinessRecordsCreated": false,
+    "browserAuthTransport": {
+      "status": 401
+    }
+  },
+  "scenarios": [],
+  "artifacts": {
+    "apiLog": "docs\\auditoria-2026-10-27\\evidencias-navegacao-pool2\\qa-navigation-api-1793218556358-f24c38.log",
+    "webLog": "docs\\auditoria-2026-10-27\\evidencias-navegacao-pool2\\qa-navigation-web-1793218556358-f24c38.log"
+  },
+  "blocker": "expect(locator).toBeVisible() failed\n\nLocator: getByRole('heading', { name: 'Visão geral', exact: true })\nExpected: visible\nTimeout: 15000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" getByRole('heading', { name: 'Visão",
+  "preexistingBusinessDataPreserved": true,
+  "businessTablesAfter": {
+    "clients": 3,
+    "client_contacts": 1,
+    "matters": 1,
+    "contracts": 1,
+    "receivables": 4,
+    "installments": 7,
+    "payments": 3,
+    "payment_allocations": 3,
+    "expenses": 2,
+    "documents": 2,
+    "document_versions": 3,
+    "tasks": 2,
+    "calendar_events": 2,
+    "notifications": 7,
+    "client_messages": 3,
+    "matter_stage_history": 2
+  },
+  "apiDiagnostics": {
+    "p2024Count": 0,
+    "apiResponseCount": 4,
+    "apiResponseMs": {
+      "samples": 4,
+      "p50Ms": 877,
+      "p95Ms": 3968,
+      "maxMs": 3968
+    },
+    "prismaQueryCount": 22,
+    "prismaQueryShapes": [
+      {
+        "signature": "BEGIN:a8402858d4f1",
+        "operation": "BEGIN",
+        "tables": [],
+        "count": 5,
+        "durationMs": {
+          "samples": 5,
+          "p50Ms": 173,
+          "p95Ms": 174,
+          "maxMs": 174
+        }
+      },
+      {
+        "signature": "OTHER:5d3e388117c3",
+        "operation": "OTHER",
+        "tables": [],
+        "count": 5,
+        "durationMs": {
+          "samples": 5,
+          "p50Ms": 174,
+          "p95Ms": 182,
+          "maxMs": 182
+        }
+      },
+      {
+        "signature": "SELECT:e004ebd5b553",
+        "operation": "SELECT",
+        "tables": [],
+        "count": 3,
+        "durationMs": {
+          "samples": 3,
+          "p50Ms": 343,
+          "p95Ms": 348,
+          "maxMs": 348
+        }
+      },
+      {
+        "signature": "COMMIT:79663c1d3b43",
+        "operation": "COMMIT",
+        "tables": [],
+        "count": 5,
+        "durationMs": {
+          "samples": 5,
+          "p50Ms": 171,
+          "p95Ms": 199,
+          "maxMs": 199
+        }
+      },
+      {
+        "signature": "SELECT:8d0dc51f66da",
+        "operation": "SELECT",
+        "tables": [
+          "organization_members",
+          "organizations",
+          "users",
+          "organization_member_roles",
+          "roles",
+          "role_permissions",
+          "permissions"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 585,
+          "p95Ms": 585,
+          "maxMs": 585
+        }
+      },
+      {
+        "signature": "INSERT:9a5ed9bd3646",
+        "operation": "INSERT",
+        "tables": [
+          "api_rate_limits"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 359,
+          "p95Ms": 359,
+          "maxMs": 359
+        }
+      },
+      {
+        "signature": "INSERT:c5cd04ad83df",
+        "operation": "INSERT",
+        "tables": [
+          "activity_events"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 362,
+          "p95Ms": 362,
+          "maxMs": 362
+        }
+      },
+      {
+        "signature": "UPDATE:2dda98aa6274",
+        "operation": "UPDATE",
+        "tables": [
+          "users"
+        ],
+        "count": 1,
+        "durationMs": {
+          "samples": 1,
+          "p50Ms": 346,
+          "p95Ms": 346,
+          "maxMs": 346
+        }
+      }
+    ],
+    "poolSamples": 57,
+    "maxPoolWaiting": 1,
+    "maxPoolBusy": 1,
+    "maxPoolOpen": 1
+  },
+  "finishedAt": "2026-10-28T20:17:24.131Z",
+  "httpRequests": [
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/health/ready",
+      "durationMs": 1463,
+      "status": 200,
+      "serverTiming": {
+        "permissionGuard": 0.2,
+        "handler": 1153.4
+      }
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 134,
+      "status": 401,
+      "serverTiming": {}
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 128,
+      "failure": "NETWORK_ERROR",
+      "failureReason": "net::ERR_FAILED"
+    },
+    {
+      "session": 1,
+      "scenario": "login",
+      "module": "Visão geral",
+      "method": "GET",
+      "route": "/v1/auth/me",
+      "durationMs": 163,
+      "failure": "NETWORK_ERROR",
+      "failureReason": "net::ERR_FAILED"
+    }
+  ],
+  "pageErrorCount": 0,
+  "browserConsoleDiagnostics": [],
+  "loginDiagnostics": {
+    "localApiRequests": 4,
+    "durationMs": {
+      "samples": 4,
+      "p50Ms": 134,
+      "p95Ms": 1463,
+      "maxMs": 1463
+    },
+    "routes": {
+      "/v1/health/ready": {
+        "count": 1,
+        "statuses": {
+          "200": 1
+        }
+      },
+      "/v1/auth/me": {
+        "count": 3,
+        "statuses": {
+          "401": 1
+        }
+      }
+    }
+  }
+}

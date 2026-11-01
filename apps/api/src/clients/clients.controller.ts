@@ -9,7 +9,11 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiConsumes } from '@nestjs/swagger';
 import { ApiTags } from '@nestjs/swagger';
 import type { AuthenticatedActor } from '@livio/shared';
 import { CurrentActor } from '../auth/current-actor.decorator';
@@ -52,6 +56,30 @@ export class ClientsController {
   @RequirePermission('clients:view')
   overview(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
     return this.clients.overview(actor, id);
+  }
+
+  @Get(':id/photo-url')
+  @RequirePermission('clients:view')
+  photoUrl(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
+    return this.clients.photoUrl(actor, id);
+  }
+
+  @Post(':id/photo')
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 5 * 1024 * 1024, files: 1 } }))
+  @RequirePermission('clients:update')
+  uploadPhoto(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    return this.clients.uploadPhoto(actor, id, file);
+  }
+
+  @Delete(':id/photo')
+  @RequirePermission('clients:update')
+  removePhoto(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
+    return this.clients.removePhoto(actor, id);
   }
 
   @Post()

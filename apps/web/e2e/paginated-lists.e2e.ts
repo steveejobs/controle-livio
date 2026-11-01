@@ -14,7 +14,9 @@ test('processes and documents load the next page without hiding earlier records'
     let status = 200;
     let body: unknown;
 
-    if (pathname === '/v1/auth/me') {
+    if (pathname === '/v1/audit-logs/module-views' && request.method() === 'POST') {
+      body = { recorded: true };
+    } else if (pathname === '/v1/auth/me') {
       body = {
         user: {
           id: 'paged-admin',

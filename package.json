@@ -5,7 +5,7 @@
   "description": "Fundação segura e multiempresa para um CRM jurídico.",
   "packageManager": "npm@11.17.0",
   "engines": {
-    "node": ">=22.0.0",
+    "node": "24.x",
     "npm": ">=10.0.0"
   },
   "workspaces": [
@@ -21,7 +21,7 @@
     "dev:api": "npm run build:packages && npm run dev -w @livio/api",
     "dev:web": "npm run build -w @livio/ui && npm run dev -w @livio/web",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "node tools/qa/prettier-check.mjs",
     "lint": "eslint . --max-warnings=0",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run build:packages && npm run typecheck -w @livio/api && npm run typecheck -w @livio/web",
@@ -59,7 +59,8 @@
   },
   "overrides": {
     "@nestjs/swagger": {
-      "js-yaml": "5.2.3"
-    }
+      "js-yaml": "5.4.1"
+    },
+    "multer": "2.5.0"
   }
 }

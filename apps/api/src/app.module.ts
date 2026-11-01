@@ -19,6 +19,9 @@ import { MattersModule } from './matters/matters.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { ReportsModule } from './reports/reports.module';
 import { WorkModule } from './work/work.module';
+import { RequestRateLimitGuard } from './common/request-rate-limit.guard';
+import { REQUEST_LOG_REDACT_PATHS } from './common/request-log-redaction';
+import { RequestTimingInterceptor } from './common/request-timing.interceptor';
 
 function generateRequestId(request: IncomingMessage): string {
   const header = request.headers['x-request-id'];
@@ -38,23 +41,7 @@ function generateRequestId(request: IncomingMessage): string {
       pinoHttp: {
         level: process.env.LOG_LEVEL ?? 'info',
         genReqId: generateRequestId,
-        redact: {
-          paths: [
-            'req.headers.authorization',
-            'req.headers.cookie',
-            'req.headers.forwarded',
-            'req.headers["x-vercel-oidc-token"]',
-            'req.headers["x-vercel-proxy-signature"]',
-            'req.headers["x-vercel-proxy-signature-ts"]',
-            'req.body.password',
-            'req.body.newPassword',
-            'req.body.token',
-            'req.body.refreshToken',
-            'req.body.csrfToken',
-            'res.headers["set-cookie"]',
-          ],
-          censor: '[REDACTED]',
-        },
+        redact: { paths: [...REQUEST_LOG_REDACT_PATHS], censor: '[REDACTED]' },
         customProps: () => ({ service: 'livio-api' }),
       },
     }),
@@ -74,8 +61,10 @@ function generateRequestId(request: IncomingMessage): string {
   ],
   providers: [
     { provide: APP_GUARD, useClass: AuthenticationGuard },
+    { provide: APP_GUARD, useClass: RequestRateLimitGuard },
     { provide: APP_GUARD, useClass: PermissionGuard },
     { provide: APP_INTERCEPTOR, useClass: TenantContextInterceptor },
+    { provide: APP_INTERCEPTOR, useClass: RequestTimingInterceptor },
   ],
 })
 export class AppModule {}

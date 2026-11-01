@@ -30,7 +30,9 @@ FROM (VALUES
   ('a0000000-0000-4000-8000-000000000003'::uuid, 'secretaria.aurora@example.test', 'Secretaria Aurora'),
   ('a0000000-0000-4000-8000-000000000004'::uuid, 'financeiro.aurora@example.test', 'Financeiro Aurora'),
   ('a0000000-0000-4000-8000-000000000005'::uuid, 'cliente.aurora@example.test', 'Cliente Portal Aurora'),
-  ('b0000000-0000-4000-8000-000000000001'::uuid, 'admin.horizonte@example.test', 'Admin Horizonte')
+  ('a0000000-0000-4000-8000-000000000006'::uuid, 'cliente.beta@example.test', 'Cliente Portal Beta'),
+  ('b0000000-0000-4000-8000-000000000001'::uuid, 'admin.horizonte@example.test', 'Admin Horizonte'),
+  ('b0000000-0000-4000-8000-000000000002'::uuid, 'cliente.horizonte@example.test', 'Cliente Portal Horizonte')
 ) AS source(id, email, full_name)
 ON CONFLICT (id) DO NOTHING;
 
@@ -40,7 +42,8 @@ FROM auth.users u
 WHERE u.id IN (
   'a0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000002',
   'a0000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000004',
-  'a0000000-0000-4000-8000-000000000005', 'b0000000-0000-4000-8000-000000000001'
+  'a0000000-0000-4000-8000-000000000005', 'a0000000-0000-4000-8000-000000000006',
+  'b0000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002'
 )
 ON CONFLICT (provider_id, provider) DO NOTHING;
 
@@ -63,7 +66,9 @@ VALUES
   ('a1000000-0000-4000-8000-000000000003', 'a0000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000001', NULL, 'secretaria.aurora@example.test', NULL, 'Secretaria Aurora', 'ACTIVE', now()),
   ('a1000000-0000-4000-8000-000000000004', 'a0000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000001', NULL, 'financeiro.aurora@example.test', NULL, 'Financeiro Aurora', 'ACTIVE', now()),
   ('a1000000-0000-4000-8000-000000000005', 'a0000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000001', 'cliente.aurora@example.test', NULL, 'Cliente Portal Aurora', 'ACTIVE', now()),
-  ('b1000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', NULL, 'admin.horizonte@example.test', NULL, 'Admin Horizonte', 'ACTIVE', now())
+  ('a1000000-0000-4000-8000-000000000006', 'a0000000-0000-4000-8000-000000000006', '10000000-0000-4000-8000-000000000001', '11000000-0000-4000-8000-000000000002', 'cliente.beta@example.test', NULL, 'Cliente Portal Beta', 'ACTIVE', now()),
+  ('b1000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', NULL, 'admin.horizonte@example.test', NULL, 'Admin Horizonte', 'ACTIVE', now()),
+  ('b1000000-0000-4000-8000-000000000002', 'b0000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', '21000000-0000-4000-8000-000000000001', 'cliente.horizonte@example.test', NULL, 'Cliente Portal Horizonte', 'ACTIVE', now())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.organization_members (id, organization_id, profile_id, user_id, client_id, status)
@@ -73,11 +78,13 @@ VALUES
   ('a2000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000003', 'a1000000-0000-4000-8000-000000000003', NULL, 'ACTIVE'),
   ('a2000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000004', 'a1000000-0000-4000-8000-000000000004', NULL, 'ACTIVE'),
   ('a2000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000005', 'a1000000-0000-4000-8000-000000000005', '11000000-0000-4000-8000-000000000001', 'ACTIVE'),
-  ('b2000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', NULL, 'ACTIVE')
+  ('a2000000-0000-4000-8000-000000000006', '10000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000006', 'a1000000-0000-4000-8000-000000000006', '11000000-0000-4000-8000-000000000002', 'ACTIVE'),
+  ('b2000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000001', 'b1000000-0000-4000-8000-000000000001', NULL, 'ACTIVE'),
+  ('b2000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'b0000000-0000-4000-8000-000000000002', 'b1000000-0000-4000-8000-000000000002', '21000000-0000-4000-8000-000000000001', 'ACTIVE')
 ON CONFLICT (id) DO NOTHING;
 
 WITH resources(resource) AS (
-  SELECT unnest(ARRAY['organization','users','roles','clients','matters','pipelines','contracts','receivables','payments','expenses','documents','notes','messages','tasks','calendar','notifications','audit','reports'])
+  SELECT unnest(ARRAY['organization','users','roles','clients','matters','pipelines','contracts','receivables','payments','receipts','expenses','documents','notes','messages','tasks','calendar','notifications','audit','reports'])
 ), actions(action) AS (
   SELECT unnest(ARRAY['view','create','update','delete','export','approve','manage'])
 ), organizations(id) AS (
@@ -95,7 +102,8 @@ VALUES
   ('a3000000-0000-4000-8000-000000000003', '10000000-0000-4000-8000-000000000001', 'secretary', 'Secretaria', true, now()),
   ('a3000000-0000-4000-8000-000000000004', '10000000-0000-4000-8000-000000000001', 'finance', 'Financeiro', true, now()),
   ('a3000000-0000-4000-8000-000000000005', '10000000-0000-4000-8000-000000000001', 'client', 'Cliente', true, now()),
-  ('b3000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'administrator', 'Administrador', true, now())
+  ('b3000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', 'administrator', 'Administrador', true, now()),
+  ('b3000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', 'client', 'Cliente', true, now())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.role_permissions (organization_id, role_id, permission_id)
@@ -105,6 +113,7 @@ WHERE r.key = 'administrator'
    OR (r.key = 'lawyer' AND (
      (p.resource IN ('clients','matters','documents','notes','messages','tasks','calendar') AND p.action IN ('view','create','update','export'))
      OR (p.resource IN ('pipelines','receivables') AND p.action = 'view')
+     OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'contracts' AND p.action IN ('view','create','update'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
      OR (p.resource = 'reports' AND p.action IN ('view','export'))
@@ -112,6 +121,7 @@ WHERE r.key = 'administrator'
    OR (r.key = 'secretary' AND (
      (p.resource IN ('clients','notes','messages','tasks','calendar') AND p.action IN ('view','create','update','export'))
      OR (p.resource IN ('matters','documents') AND p.action IN ('view','create','update'))
+     OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'pipelines' AND p.action = 'view')
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
      OR (p.resource = 'reports' AND p.action IN ('view','export'))
@@ -119,6 +129,7 @@ WHERE r.key = 'administrator'
    OR (r.key = 'finance' AND (
      (p.resource IN ('clients','matters','documents','calendar') AND p.action = 'view')
      OR (p.resource IN ('contracts','receivables','payments','expenses') AND p.action IN ('view','create','update','approve','export'))
+     OR (p.resource = 'receipts' AND p.action IN ('view','create','approve'))
      OR (p.resource = 'messages' AND p.action IN ('view','create'))
      OR (p.resource = 'tasks' AND p.action IN ('view','create','update','export'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
@@ -126,6 +137,7 @@ WHERE r.key = 'administrator'
    ))
    OR (r.key = 'client' AND (
      (p.resource IN ('matters','contracts','receivables','payments','documents','calendar') AND p.action = 'view')
+     OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'messages' AND p.action IN ('view','create'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
    ))
@@ -138,12 +150,104 @@ VALUES
   ('10000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000003','a3000000-0000-4000-8000-000000000003'),
   ('10000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000004','a3000000-0000-4000-8000-000000000004'),
   ('10000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000005','a3000000-0000-4000-8000-000000000005'),
-  ('20000000-0000-4000-8000-000000000001','b2000000-0000-4000-8000-000000000001','b3000000-0000-4000-8000-000000000001')
+  ('10000000-0000-4000-8000-000000000001','a2000000-0000-4000-8000-000000000006','a3000000-0000-4000-8000-000000000005'),
+  ('20000000-0000-4000-8000-000000000001','b2000000-0000-4000-8000-000000000001','b3000000-0000-4000-8000-000000000001'),
+  ('20000000-0000-4000-8000-000000000001','b2000000-0000-4000-8000-000000000002','b3000000-0000-4000-8000-000000000002')
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.user_roles (organization_id, user_id, role_id)
 SELECT omr.organization_id, om.user_id, omr.role_id
 FROM public.organization_member_roles omr JOIN public.organization_members om ON om.id = omr.membership_id
+ON CONFLICT DO NOTHING;
+
+-- Each integrated browser journey gets its own administrator identity so the real
+-- per-user rate limit remains enabled without one synthetic account exhausting it.
+WITH qa_admins(auth_id, email, full_name) AS (
+  VALUES
+    ('a0000000-0000-4000-8000-000000000011'::uuid, 'qa-selector.aurora@example.test', 'QA Seletor Aurora'),
+    ('a0000000-0000-4000-8000-000000000012'::uuid, 'qa-navigation.aurora@example.test', 'QA Navegacao Aurora'),
+    ('a0000000-0000-4000-8000-000000000013'::uuid, 'qa-sessions.aurora@example.test', 'QA Sessoes Aurora'),
+    ('a0000000-0000-4000-8000-000000000014'::uuid, 'qa-client-process.aurora@example.test', 'QA Cliente Processo Aurora'),
+    ('a0000000-0000-4000-8000-000000000015'::uuid, 'qa-finance.aurora@example.test', 'QA Financeiro Aurora'),
+    ('a0000000-0000-4000-8000-000000000016'::uuid, 'qa-expense-approver.aurora@example.test', 'QA Aprovacao Aurora'),
+    ('a0000000-0000-4000-8000-000000000017'::uuid, 'qa-documents.aurora@example.test', 'QA Documentos Aurora'),
+    ('a0000000-0000-4000-8000-000000000018'::uuid, 'qa-tasks.aurora@example.test', 'QA Tarefas Aurora'),
+    ('a0000000-0000-4000-8000-000000000019'::uuid, 'qa-portal.aurora@example.test', 'QA Portal Aurora')
+)
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+  raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+  confirmation_token, recovery_token, email_change, email_change_token_new
+)
+SELECT
+  '00000000-0000-0000-0000-000000000000', auth_id, 'authenticated', 'authenticated',
+  email, admin_auth.encrypted_password, now(),
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  jsonb_build_object('full_name', full_name), now(), now(), '', '', '', ''
+FROM qa_admins
+CROSS JOIN (
+  SELECT encrypted_password FROM auth.users WHERE email = 'admin.aurora@example.test'
+) AS admin_auth
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO auth.identities (provider_id, user_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+SELECT u.id::text, u.id, jsonb_build_object('sub', u.id::text, 'email', u.email), 'email', now(), now(), now()
+FROM auth.users u
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (provider_id, provider) DO NOTHING;
+
+INSERT INTO public.profiles (id, email, full_name)
+SELECT id, email, raw_user_meta_data->>'full_name'
+FROM auth.users WHERE email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, full_name = EXCLUDED.full_name;
+
+INSERT INTO public.users (
+  id, auth_user_id, organization_id, client_id, email, password_hash, full_name, status, updated_at
+)
+SELECT
+  ('a1000000-0000-4000-8000-' || right(u.id::text, 12))::uuid,
+  u.id,
+  '10000000-0000-4000-8000-000000000001',
+  NULL,
+  u.email,
+  NULL,
+  u.raw_user_meta_data->>'full_name',
+  'ACTIVE',
+  now()
+FROM auth.users u
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.organization_members (id, organization_id, profile_id, user_id, client_id, status)
+SELECT
+  ('a2000000-0000-4000-8000-' || right(u.id::text, 12))::uuid,
+  '10000000-0000-4000-8000-000000000001',
+  u.id,
+  ('a1000000-0000-4000-8000-' || right(u.id::text, 12))::uuid,
+  NULL,
+  'ACTIVE'
+FROM auth.users u
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO public.organization_member_roles (organization_id, membership_id, role_id)
+SELECT
+  om.organization_id,
+  om.id,
+  'a3000000-0000-4000-8000-000000000001'
+FROM public.organization_members om
+JOIN auth.users u ON u.id = om.profile_id
+WHERE u.email LIKE 'qa-%.aurora@example.test'
+ON CONFLICT DO NOTHING;
+
+INSERT INTO public.user_roles (organization_id, user_id, role_id)
+SELECT
+  om.organization_id,
+  om.user_id,
+  'a3000000-0000-4000-8000-000000000001'
+FROM public.organization_members om
+JOIN auth.users u ON u.id = om.profile_id
+WHERE u.email LIKE 'qa-%.aurora@example.test'
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.pipelines (id, organization_id, name, kind, updated_at)

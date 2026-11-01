@@ -1,0 +1,1051 @@
+# Banco de dados e modelo de informações
+
+## Fonte e limite da análise
+
+O modelo foi inferido de packages/db/prisma/schema.prisma e das 16 migrações em supabase/migrations. A auditoria não se conectou a Supabase nem consultou tabelas, políticas ou buckets em execução. PROJECT_CONTEXT.md registra aplicações anteriores em ambiente de desenvolvimento/homologação até 2026-10-22; esse estado remoto não foi confirmado novamente. O schema Prisma validado não prova que as migrações SQL estão aplicadas ou que RLS está habilitada no banco alvo.
+
+## Plataforma e características
+
+- PostgreSQL gerenciado por Supabase.
+- Prisma tem 45 models e 25 enums; as migrações SQL definem 45 tabelas no histórico atual.
+- Identificadores UUID, datas/timestamps e relações com integridade referencial.
+- Campos monetários usam Decimal(19,4), e serviços serializam valores monetários sem ponto flutuante binário.
+- organization_id é o escopo de tenancy de dados operacionais; JSON é usado para metadados/configurações.
+- Storage esperado: buckets privados legal-documents, client-photos e document-signatures.
+- RLS e grants controlam acesso via Supabase; chamadas do servidor usam credencial privilegiada para Storage/Auth Admin e precisam aplicar escopo/permissionamento na API.
+
+## Dicionário de entidades
+
+Esta lista cobre todos os models Prisma identificados. Colunas/tipos/nullable/defaults/índices completos estão no schema Prisma indicado; os grupos abaixo descrevem propósito e relações principais, não substituem a definição executável.
+
+| Grupo                  | Entidades                                                                                                                                         | Finalidade e vínculos principais                                                                                                                                                                             |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tenancy e identidade   | Organization, User, Profile, OrganizationMember, OrganizationMemberRole, Role, Permission, UserRole, RolePermission                               | Organização, usuário operacional, perfil ligado à identidade Supabase, membership, papéis e permissões. UserRole é compatibilidade antiga; a autorização atual deriva da membership e papéis da organização. |
+| Sessão legado          | Session, PasswordResetToken                                                                                                                       | Estruturas próprias de sessão/reset preservadas no schema; Supabase Auth é a autenticação efetiva observada. Classificação LEGADO provável.                                                                  |
+| CRM                    | Client, ClientContact                                                                                                                             | Cliente PF/PJ por organização e contatos; raiz de processos, contratos, recebíveis, documentos e portal.                                                                                                     |
+| Comercial e jurídico   | Pipeline, PipelineStage, Matter, MatterParty, MatterStageHistory                                                                                  | Funil/etapas, processo e partes; histórico das mudanças do processo.                                                                                                                                         |
+| Contratos e catálogo   | Contract, ServiceCatalogItem                                                                                                                      | Instrumentos/condições de honorários e serviços cadastráveis; contrato associa cliente/processo e recebíveis.                                                                                                |
+| Financeiro             | Receivable, ReceivableInstallment, Payment, PaymentReversal, PaymentChangeRequest, PaymentAllocation, FinancialAdjustment, Renegotiation, Expense | Dívidas/parcelas, pagamentos e rateios, reversões/correções auditáveis, ajustes, renegociação e despesa.                                                                                                     |
+| Arquivos e assinatura  | Document, DocumentVersion, DocumentSigningRequest                                                                                                 | Documento lógico, versões e pedido de assinatura associado à versão/hash; storage guarda os bytes em bucket privado.                                                                                         |
+| Trabalho e comunicação | InternalNote, ClientMessage, Task, TaskComment, TaskReminder, TaskHistory, CalendarEvent                                                          | Notas só internas, mensagens ao cliente, tarefas e histórico, lembretes e eventos/agenda.                                                                                                                    |
+| Automação              | ScheduledJobState, ApiRateLimit                                                                                                                   | Estado/deduplicação de job e contador de limite por ator/ação.                                                                                                                                               |
+| Notificações           | Notification, WebPushSubscription                                                                                                                 | Alertas persistidos e inscrição push por navegador/dispositivo.                                                                                                                                              |
+| Rastreabilidade        | AuditLog, ActivityEvent                                                                                                                           | Mudanças de negócio e eventos de atividade/visualização.                                                                                                                                                     |
+
+Total: 45 entidades. Os nomes estão em PascalCase no Prisma; os nomes físicos seguem mapeamentos snake_case quando definidos.
+
+## Relações e fluxos de persistência
+
+Organization é raiz de membership, roles, clients, pipelines, matérias, contratos, financeiro, documentos, tarefas, calendário, notificações, logs e rate limits. Client agrupa contatos, matérias, contratos, recebíveis, documentos, tarefas, calendário e mensagens/notas. Matter agrupa partes, mudanças de estágio e ligações a trabalho/documentos. Contract pode originar Receivable e Document. Receivable é dividido em Installments, PaymentAllocation, ajustes e renegociações. Payment relaciona alocações, reversões e pedidos de correção. Document tem versões e pedidos de assinatura.
+
+Os deletes de clientes/processos devem ser lidos junto às relações e soft-delete/archive; não inferir remoção física de um botão de arquivar. Pagamentos são corrigidos por registros compensatórios. FinanceService usa transações serializáveis, retry e locks para operações de saldo; o comportamento de concorrência em PostgreSQL real não foi exercitado nesta auditoria.
+
+## Migrações e divergência
+
+Migrações SQL encontradas (16):
+
+1. 20260807134500_initial_foundation.sql
+2. 20260807170000_finance_document_links.sql
+3. 20260807180000_supabase_auth_rls.sql
+4. 20260809120000_auth_memberships_hardening.sql
+5. 20260812150000_authenticated_table_grants.sql
+6. 20261021150000_access_alerts_and_payment_change_requests.sql
+7. 20261021160000_web_push_subscriptions.sql
+8. 20261021170000_service_catalog.sql
+9. 20261021180000_calendar_reminder_preferences.sql
+10. 20261021190000_shared_api_rate_limits.sql
+11. 20261021200000_notification_scheduler.sql
+12. 20261021210000_scheduler_request_claims.sql
+13. 20261021220000_portal_rls_scope.sql
+14. 20261021230000_portal_write_scope.sql
+15. 20261022200000_client_photos.sql
+16. 20261022213000_document_signing.sql
+
+README.md e documentos antigos descrevem quatro migrações ou schema anterior. As migrações Prisma sob packages/db/prisma/migrations são marcadas ARCHIVED; não misturar fontes nem aplicar automaticamente. Não houve migration dry-run contra remoto nesta auditoria.
+
+## RLS, functions, índices e armazenamento
+
+O histórico SQL habilita RLS/policies/grants para isolamento, usa políticas por organização/membership e inclui lógica de integridade entre tenancy. Encontrou-se contagem literal de 42 declarações de policy, mas policies também podem ser geradas em loops SQL; não é uma contagem confiável de policies ativas. Documentos históricos citam 141 policies em um estado anterior de banco. Não apresentar nenhum desses números como inventário atual do Supabase sem consulta somente leitura ao alvo correto.
+
+Índices e constraints são declarados no schema/migrações; duplicidade de unicidade ou desempenho real não foi avaliado com EXPLAIN/dados. Buckets são privados e URLs assinadas duram aproximadamente cinco minutos conforme código/documentação. Policies de Storage são migration-defined. Nenhum objeto runtime, function, trigger ou extensão foi consultado nesta auditoria.
+
+## Riscos e lacunas de integridade
+
+- NÃO VERIFICADO: migrations aplicadas, policies RLS vivas, grants, buckets e conteúdo no ambiente remoto.
+- UserRole/Session/PasswordResetToken coexistem com Supabase Auth e membership; há risco de confusão se uma implementação futura voltar a usá-los como fonte de autorização.
+- Expense tem campos de ciclo de aprovação/pagamento sem operações correspondentes encontradas no API.
+- CalendarEvent persiste recurrenceRule, mas ocorrência derivada não foi localizada.
+- Verificar que toda nova entidade operacional recebe organization_id, RLS, índice tenant-first quando aplicável e validação do escopo no serviço.
+- Sem acesso ao banco real, dados duplicados órfãos, cardinalidades e divergência do schema aplicado não são observáveis.
+
+## Apêndice — definição de campos Prisma
+
+A listagem abaixo foi extraída do schema local em 2026-10-27. Inclui campos, tipos Prisma, atributos de campo e atributos de modelo; ela não confirma o schema efetivamente aplicado no Supabase.
+
+### Organization
+
+- id String @id @default(uuid()) @db.Uuid
+- legalName String @map("legal_name")
+- slug String @unique @db.VarChar(80)
+- tradeName String? @map("trade_name")
+- taxId String? @map("tax_id")
+- status OrganizationStatus @default(ACTIVE)
+- timezone String @default("America/Sao_Paulo")
+- settings Json @default("{}")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- users User[]
+- memberships OrganizationMember[]
+- memberRoles OrganizationMemberRole[]
+- roles Role[]
+- permissions Permission[]
+- userRoles UserRole[]
+- rolePermissions RolePermission[]
+- sessions Session[]
+- passwordResetTokens PasswordResetToken[]
+- clients Client[]
+- clientContacts ClientContact[]
+- matters Matter[]
+- matterParties MatterParty[]
+- pipelines Pipeline[]
+- pipelineStages PipelineStage[]
+- matterStageHistory MatterStageHistory[]
+- contracts Contract[]
+- serviceCatalogItems ServiceCatalogItem[]
+- receivables Receivable[]
+- installments ReceivableInstallment[]
+- payments Payment[]
+- paymentChangeRequests PaymentChangeRequest[]
+- paymentAllocations PaymentAllocation[]
+- paymentReversals PaymentReversal[]
+- financialAdjustments FinancialAdjustment[]
+- renegotiations Renegotiation[]
+- expenses Expense[]
+- documents Document[]
+- documentVersions DocumentVersion[]
+- documentSigningRequests DocumentSigningRequest[]
+- internalNotes InternalNote[]
+- clientMessages ClientMessage[]
+- tasks Task[]
+- taskComments TaskComment[]
+- taskReminders TaskReminder[]
+- taskHistory TaskHistory[]
+- calendarEvents CalendarEvent[]
+- notifications Notification[]
+- auditLogs AuditLog[]
+- activityEvents ActivityEvent[]
+- webPushSubscriptions WebPushSubscription[]
+- apiRateLimits ApiRateLimit[]
+- @@map("organizations")
+
+### User
+
+- id String @id @default(uuid()) @db.Uuid
+- authUserId String? @map("auth_user_id") @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- email String @db.VarChar(320)
+- passwordHash String? @map("password_hash")
+- fullName String @map("full_name")
+- status UserStatus @default(INVITED)
+- lastLoginAt DateTime? @map("last_login_at") @db.Timestamptz(3)
+- passwordChangedAt DateTime? @map("password_changed_at") @db.Timestamptz(3)
+- failedLoginAttempts Int @default(0) @map("failed_login_attempts")
+- lockedUntil DateTime? @map("locked_until") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- roles UserRole[]
+- sessions Session[]
+- passwordResetTokens PasswordResetToken[]
+- membership OrganizationMember?
+- webPushSubscriptions WebPushSubscription[]
+- @@unique([organizationId, email])
+- @@index([authUserId])
+- @@index([organizationId, status])
+- @@index([organizationId, clientId])
+- @@map("users")
+
+### Profile
+
+- id String @id @db.Uuid
+- email String @db.VarChar(320)
+- fullName String @map("full_name")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- memberships OrganizationMember[]
+- @@map("profiles")
+
+### OrganizationMember
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- profileId String @map("profile_id") @db.Uuid
+- userId String @unique @map("user_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- status UserStatus @default(INVITED)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- profile Profile @relation(fields: [profileId], references: [id], onDelete: Restrict)
+- user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- roles OrganizationMemberRole[] @relation("MembershipRoles")
+- assignedRoles OrganizationMemberRole[] @relation("AssignedMembershipRoles")
+- @@unique([organizationId, profileId])
+- @@index([profileId, status])
+- @@index([organizationId, status])
+- @@index([organizationId, clientId])
+- @@map("organization_members")
+
+### OrganizationMemberRole
+
+- organizationId String @map("organization_id") @db.Uuid
+- membershipId String @map("membership_id") @db.Uuid
+- roleId String @map("role_id") @db.Uuid
+- assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+- assignedByMembershipId String? @map("assigned_by_membership_id") @db.Uuid
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- membership OrganizationMember @relation("MembershipRoles", fields: [membershipId], references: [id], onDelete: Restrict)
+- role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+- assignedBy OrganizationMember? @relation("AssignedMembershipRoles", fields: [assignedByMembershipId], references: [id], onDelete: Restrict)
+- @@id([organizationId, membershipId, roleId])
+- @@index([organizationId, roleId])
+- @@map("organization_member_roles")
+
+### Role
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- key String @db.VarChar(80)
+- name String
+- description String?
+- isSystem Boolean @default(false) @map("is_system")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- users UserRole[]
+- permissions RolePermission[]
+- memberRoles OrganizationMemberRole[]
+- @@unique([organizationId, key])
+- @@index([organizationId])
+- @@map("roles")
+
+### Permission
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- resource String @db.VarChar(80)
+- action String @db.VarChar(40)
+- description String?
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- roles RolePermission[]
+- @@unique([organizationId, resource, action])
+- @@index([organizationId])
+- @@map("permissions")
+
+### UserRole
+
+- organizationId String @map("organization_id") @db.Uuid
+- userId String @map("user_id") @db.Uuid
+- roleId String @map("role_id") @db.Uuid
+- assignedAt DateTime @default(now()) @map("assigned_at") @db.Timestamptz(3)
+- assignedById String? @map("assigned_by_id") @db.Uuid
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+- role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+- @@id([organizationId, userId, roleId])
+- @@index([organizationId, roleId])
+- @@map("user_roles")
+
+### RolePermission
+
+- organizationId String @map("organization_id") @db.Uuid
+- roleId String @map("role_id") @db.Uuid
+- permissionId String @map("permission_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+- permission Permission @relation(fields: [permissionId], references: [id], onDelete: Restrict)
+- @@id([organizationId, roleId, permissionId])
+- @@index([organizationId, permissionId])
+- @@map("role_permissions")
+
+### Session
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- userId String @map("user_id") @db.Uuid
+- tokenHash String @unique @map("token_hash") @db.Char(64)
+- csrfTokenHash String @map("csrf_token_hash") @db.Char(64)
+- expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+- revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+- lastSeenAt DateTime @default(now()) @map("last_seen_at") @db.Timestamptz(3)
+- ipHash String? @map("ip_hash")
+- userAgent String? @map("user_agent") @db.VarChar(500)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+- @@index([organizationId, userId, expiresAt])
+- @@map("sessions")
+
+### PasswordResetToken
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- userId String @map("user_id") @db.Uuid
+- tokenHash String @unique @map("token_hash") @db.Char(64)
+- expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+- usedAt DateTime? @map("used_at") @db.Timestamptz(3)
+- requestedIpHash String? @map("requested_ip_hash") @db.Char(64)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+- @@index([organizationId, userId, expiresAt])
+- @@map("password_reset_tokens")
+
+### Client
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- type ClientType
+- displayName String @map("display_name")
+- legalName String? @map("legal_name")
+- taxIdNormalized String? @map("tax_id_normalized") @db.VarChar(14)
+- email String? @db.VarChar(320)
+- phone String? @db.VarChar(40)
+- photoStorageKey String? @map("photo_storage_key")
+- address Json?
+- source String? @db.VarChar(120)
+- customFields Json @default("{}") @map("custom_fields")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- contacts ClientContact[]
+- matters Matter[]
+- parties MatterParty[]
+- contracts Contract[]
+- receivables Receivable[]
+- payments Payment[]
+- expenses Expense[]
+- documents Document[]
+- internalNotes InternalNote[]
+- clientMessages ClientMessage[]
+- tasks Task[]
+- calendarEvents CalendarEvent[]
+- portalUsers User[]
+- memberships OrganizationMember[]
+- @@unique([organizationId, taxIdNormalized])
+- @@index([organizationId, displayName])
+- @@index([organizationId, deletedAt])
+- @@map("clients")
+
+### ClientContact
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String @map("client_id") @db.Uuid
+- name String
+- role String? @db.VarChar(120)
+- email String? @db.VarChar(320)
+- phone String? @db.VarChar(40)
+- isPrimary Boolean @default(false) @map("is_primary")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- @@index([organizationId, clientId])
+- @@map("client_contacts")
+
+### Pipeline
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- name String
+- kind PipelineKind
+- isActive Boolean @default(true) @map("is_active")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- stages PipelineStage[]
+- matters Matter[]
+- @@unique([organizationId, kind, name])
+- @@index([organizationId, isActive])
+- @@map("pipelines")
+
+### PipelineStage
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- pipelineId String @map("pipeline_id") @db.Uuid
+- name String
+- position Int
+- color String? @db.VarChar(20)
+- isTerminal Boolean @default(false) @map("is_terminal")
+- isActive Boolean @default(true) @map("is_active")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- pipeline Pipeline @relation(fields: [pipelineId], references: [id], onDelete: Restrict)
+- currentMatters Matter[]
+- historyFrom MatterStageHistory[] @relation("HistoryFromStage")
+- historyTo MatterStageHistory[] @relation("HistoryToStage")
+- @@unique([organizationId, pipelineId, position])
+- @@index([organizationId, pipelineId, isActive])
+- @@map("pipeline_stages")
+
+### Matter
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String @map("client_id") @db.Uuid
+- pipelineId String? @map("pipeline_id") @db.Uuid
+- currentStageId String? @map("current_stage_id") @db.Uuid
+- responsibleLawyerId String? @map("responsible_lawyer_id") @db.Uuid
+- responsibleSecretaryId String? @map("responsible_secretary_id") @db.Uuid
+- reference String @db.VarChar(80)
+- title String
+- description String?
+- courtNumberNormalized String? @map("court_number_normalized") @db.VarChar(40)
+- area String? @db.VarChar(120)
+- status MatterStatus @default(LEAD)
+- priority MatterPriority @default(MEDIUM)
+- nextAction String? @map("next_action")
+- nextActionAt DateTime? @map("next_action_at") @db.Timestamptz(3)
+- labels String[] @default([])
+- lostReason String? @map("lost_reason")
+- confidential Boolean @default(false)
+- openedAt DateTime? @map("opened_at") @db.Date
+- closedAt DateTime? @map("closed_at") @db.Date
+- customFields Json @default("{}") @map("custom_fields")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- pipeline Pipeline? @relation(fields: [pipelineId], references: [id], onDelete: Restrict)
+- currentStage PipelineStage? @relation(fields: [currentStageId], references: [id], onDelete: Restrict)
+- parties MatterParty[]
+- stageHistory MatterStageHistory[]
+- contracts Contract[]
+- receivables Receivable[]
+- documents Document[]
+- expenses Expense[]
+- internalNotes InternalNote[]
+- clientMessages ClientMessage[]
+- tasks Task[]
+- calendarEvents CalendarEvent[]
+- @@unique([organizationId, reference])
+- @@index([organizationId, clientId])
+- @@index([organizationId, currentStageId])
+- @@index([organizationId, responsibleLawyerId, status])
+- @@index([organizationId, responsibleSecretaryId, status])
+- @@index([organizationId, courtNumberNormalized])
+- @@index([organizationId, nextActionAt])
+- @@index([organizationId, status, deletedAt])
+- @@map("matters")
+
+### MatterParty
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- matterId String @map("matter_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- name String
+- taxIdNormalized String? @map("tax_id_normalized") @db.VarChar(14)
+- partyRole String @map("party_role") @db.VarChar(120)
+- side String? @db.VarChar(80)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- matter Matter @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- @@index([organizationId, matterId])
+- @@map("matter_parties")
+
+### MatterStageHistory
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- matterId String @map("matter_id") @db.Uuid
+- fromStageId String? @map("from_stage_id") @db.Uuid
+- toStageId String @map("to_stage_id") @db.Uuid
+- movedById String @map("moved_by_id") @db.Uuid
+- reason String?
+- metadata Json @default("{}")
+- movedAt DateTime @default(now()) @map("moved_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- matter Matter @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- fromStage PipelineStage? @relation("HistoryFromStage", fields: [fromStageId], references: [id], onDelete: Restrict)
+- toStage PipelineStage @relation("HistoryToStage", fields: [toStageId], references: [id], onDelete: Restrict)
+- @@index([organizationId, matterId, movedAt])
+- @@map("matter_stage_history")
+
+### Contract
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- number String @db.VarChar(80)
+- title String
+- status ContractStatus @default(DRAFT)
+- feeModel String @map("fee_model") @db.VarChar(80)
+- serviceCode String? @map("service_code") @db.VarChar(80)
+- serviceName String? @map("service_name") @db.VarChar(160)
+- fixedAmount Decimal? @map("fixed_amount") @db.Decimal(19, 4)
+- successRate Decimal? @map("success_rate") @db.Decimal(9, 6)
+- currency String @default("BRL") @db.Char(3)
+- startsAt DateTime? @map("starts_at") @db.Date
+- endsAt DateTime? @map("ends_at") @db.Date
+- approvedById String? @map("approved_by_id") @db.Uuid
+- approvedAt DateTime? @map("approved_at") @db.Timestamptz(3)
+- terms Json @default("{}")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- receivables Receivable[]
+- documents Document[]
+- @@unique([organizationId, number])
+- @@index([organizationId, clientId, status])
+- @@map("contracts")
+
+### ServiceCatalogItem
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- name String @db.VarChar(160)
+- normalizedName String @map("normalized_name") @db.VarChar(160)
+- area String @default("GENERAL") @db.VarChar(20)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- @@unique([organizationId, normalizedName])
+- @@index([organizationId, area, name])
+- @@map("service_catalog_items")
+
+### Receivable
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- contractId String? @map("contract_id") @db.Uuid
+- reference String @db.VarChar(80)
+- description String
+- status ReceivableStatus @default(DRAFT)
+- originalAmount Decimal @map("original_amount") @db.Decimal(19, 4)
+- currency String @default("BRL") @db.Char(3)
+- issueDate DateTime @map("issue_date") @db.Date
+- competenceDate DateTime? @map("competence_date") @db.Date
+- dueDate DateTime @map("due_date") @db.Date
+- cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- contract Contract? @relation(fields: [contractId], references: [id], onDelete: Restrict)
+- installments ReceivableInstallment[]
+- originalRenegotiations Renegotiation[] @relation("OriginalReceivable")
+- resultingRenegotiations Renegotiation[] @relation("ResultingReceivable")
+- @@unique([organizationId, reference])
+- @@index([organizationId, clientId, status])
+- @@index([organizationId, dueDate, status])
+- @@map("receivables")
+
+### ReceivableInstallment
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- receivableId String @map("receivable_id") @db.Uuid
+- sequence Int
+- status InstallmentStatus @default(OPEN)
+- amount Decimal @db.Decimal(19, 4)
+- currency String @default("BRL") @db.Char(3)
+- dueDate DateTime @map("due_date") @db.Date
+- competenceDate DateTime? @map("competence_date") @db.Date
+- version Int @default(1)
+- cancelledAt DateTime? @map("cancelled_at") @db.Timestamptz(3)
+- cancellationReason String? @map("cancellation_reason")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- receivable Receivable @relation(fields: [receivableId], references: [id], onDelete: Restrict)
+- allocations PaymentAllocation[]
+- adjustments FinancialAdjustment[]
+- documents Document[]
+- @@unique([organizationId, receivableId, sequence])
+- @@index([organizationId, dueDate, status])
+- @@map("receivable_installments")
+
+### Payment
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String @map("client_id") @db.Uuid
+- reference String @db.VarChar(100)
+- status PaymentStatus @default(PENDING)
+- amount Decimal @db.Decimal(19, 4)
+- currency String @default("BRL") @db.Char(3)
+- paidAt DateTime @map("paid_at") @db.Timestamptz(3)
+- method String @db.VarChar(80)
+- externalId String? @map("external_id") @db.VarChar(160)
+- idempotencyKey String @map("idempotency_key") @db.VarChar(160)
+- idempotencyHash String @map("idempotency_hash") @db.Char(64)
+- version Int @default(1)
+- confirmedById String? @map("confirmed_by_id") @db.Uuid
+- confirmedAt DateTime? @map("confirmed_at") @db.Timestamptz(3)
+- reversedAt DateTime? @map("reversed_at") @db.Timestamptz(3)
+- metadata Json @default("{}")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- allocations PaymentAllocation[]
+- adjustments FinancialAdjustment[]
+- reversals PaymentReversal[]
+- changeRequests PaymentChangeRequest[]
+- documents Document[]
+- @@unique([organizationId, reference])
+- @@unique([organizationId, externalId])
+- @@unique([organizationId, idempotencyKey])
+- @@index([organizationId, clientId, status])
+- @@map("payments")
+
+### PaymentReversal
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- originalPaymentId String @unique @map("original_payment_id") @db.Uuid
+- amount Decimal @db.Decimal(19, 4)
+- reason String
+- reversedById String @map("reversed_by_id") @db.Uuid
+- reversedAt DateTime @default(now()) @map("reversed_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- originalPayment Payment @relation(fields: [originalPaymentId], references: [id], onDelete: Restrict)
+- @@index([organizationId, reversedAt])
+- @@map("payment_reversals")
+
+### PaymentChangeRequest
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- paymentId String @map("payment_id") @db.Uuid
+- createdById String @map("created_by_id") @db.Uuid
+- proposedData Json @map("proposed_data")
+- reason String
+- status PaymentChangeStatus @default(PENDING)
+- reviewedById String? @map("reviewed_by_id") @db.Uuid
+- reviewedAt DateTime? @map("reviewed_at") @db.Timestamptz(3)
+- reviewNote String? @map("review_note")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+- @@index([organizationId, status, createdAt])
+- @@index([organizationId, paymentId, createdAt])
+- @@map("payment_change_requests")
+
+### PaymentAllocation
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- paymentId String @map("payment_id") @db.Uuid
+- installmentId String @map("installment_id") @db.Uuid
+- amount Decimal @db.Decimal(19, 4)
+- allocatedAt DateTime @default(now()) @map("allocated_at") @db.Timestamptz(3)
+- createdById String @map("created_by_id") @db.Uuid
+- reversedAt DateTime? @map("reversed_at") @db.Timestamptz(3)
+- reversedById String? @map("reversed_by_id") @db.Uuid
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+- installment ReceivableInstallment @relation(fields: [installmentId], references: [id], onDelete: Restrict)
+- @@unique([organizationId, paymentId, installmentId])
+- @@index([organizationId, installmentId])
+- @@map("payment_allocations")
+
+### FinancialAdjustment
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- installmentId String? @map("installment_id") @db.Uuid
+- paymentId String? @map("payment_id") @db.Uuid
+- kind AdjustmentKind
+- amount Decimal @db.Decimal(19, 4)
+- reason String
+- effectiveAt DateTime @map("effective_at") @db.Date
+- approvedById String? @map("approved_by_id") @db.Uuid
+- approvedAt DateTime? @map("approved_at") @db.Timestamptz(3)
+- createdById String @map("created_by_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- installment ReceivableInstallment? @relation(fields: [installmentId], references: [id], onDelete: Restrict)
+- payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+- @@index([organizationId, installmentId])
+- @@index([organizationId, paymentId])
+- @@map("financial_adjustments")
+
+### Renegotiation
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- originalReceivableId String @map("original_receivable_id") @db.Uuid
+- resultingReceivableId String? @map("resulting_receivable_id") @db.Uuid
+- status RenegotiationStatus @default(DRAFT)
+- reason String
+- createdById String @map("created_by_id") @db.Uuid
+- approvedById String? @map("approved_by_id") @db.Uuid
+- approvedAt DateTime? @map("approved_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- originalReceivable Receivable @relation("OriginalReceivable", fields: [originalReceivableId], references: [id], onDelete: Restrict)
+- resultingReceivable Receivable? @relation("ResultingReceivable", fields: [resultingReceivableId], references: [id], onDelete: Restrict)
+- @@index([organizationId, originalReceivableId, status])
+- @@map("renegotiations")
+
+### Expense
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- description String
+- category String @db.VarChar(100)
+- status ExpenseStatus @default(DRAFT)
+- amount Decimal @db.Decimal(19, 4)
+- currency String @default("BRL") @db.Char(3)
+- incurredAt DateTime @map("incurred_at") @db.Date
+- dueDate DateTime? @map("due_date") @db.Date
+- paidAt DateTime? @map("paid_at") @db.Date
+- reimbursable Boolean @default(false)
+- approvedById String? @map("approved_by_id") @db.Uuid
+- approvedAt DateTime? @map("approved_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- documents Document[]
+- @@index([organizationId, status, dueDate])
+- @@index([organizationId, matterId])
+- @@index([organizationId, clientId])
+- @@map("expenses")
+
+### Document
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- contractId String? @map("contract_id") @db.Uuid
+- installmentId String? @map("installment_id") @db.Uuid
+- paymentId String? @map("payment_id") @db.Uuid
+- expenseId String? @map("expense_id") @db.Uuid
+- title String
+- category String? @db.VarChar(120)
+- status DocumentStatus @default(DRAFT)
+- visibility DocumentVisibility @default(INTERNAL)
+- confidential Boolean @default(true)
+- currentVersion Int @default(1) @map("current_version")
+- createdById String @map("created_by_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- contract Contract? @relation(fields: [contractId], references: [id], onDelete: Restrict)
+- installment ReceivableInstallment? @relation(fields: [installmentId], references: [id], onDelete: Restrict)
+- payment Payment? @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+- expense Expense? @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+- versions DocumentVersion[]
+- signingRequests DocumentSigningRequest[] @relation("SourceDocument")
+- signedFromRequests DocumentSigningRequest[] @relation("SignedDocument")
+- @@unique([organizationId, id])
+- @@index([organizationId, matterId, status])
+- @@index([organizationId, contractId])
+- @@index([organizationId, clientId])
+- @@index([organizationId, installmentId])
+- @@index([organizationId, paymentId])
+- @@index([organizationId, expenseId])
+- @@index([organizationId, deletedAt])
+- @@map("documents")
+
+### DocumentVersion
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- documentId String @map("document_id") @db.Uuid
+- version Int
+- storageKey String @map("storage_key")
+- fileName String @map("file_name")
+- mimeType String @map("mime_type") @db.VarChar(160)
+- sizeBytes BigInt @map("size_bytes")
+- sha256 String @db.Char(64)
+- uploadedById String @map("uploaded_by_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- document Document @relation(fields: [documentId], references: [id], onDelete: Restrict)
+- signingRequests DocumentSigningRequest[]
+- @@unique([organizationId, documentId, version])
+- @@unique([organizationId, storageKey])
+- @@index([organizationId, documentId])
+- @@map("document_versions")
+
+### DocumentSigningRequest
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- documentId String @map("document_id") @db.Uuid
+- sourceVersion Int @map("source_version")
+- tokenHash String @unique @map("token_hash") @db.Char(64)
+- status String @default("PENDING") @db.VarChar(20)
+- signerName String @map("signer_name")
+- createdById String @map("created_by_id") @db.Uuid
+- expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+- viewedAt DateTime? @map("viewed_at") @db.Timestamptz(3)
+- signedAt DateTime? @map("signed_at") @db.Timestamptz(3)
+- signatureStorageKey String? @map("signature_storage_key")
+- signatureSha256 String? @map("signature_sha256") @db.Char(64)
+- signedDocumentId String? @map("signed_document_id") @db.Uuid
+- revokedAt DateTime? @map("revoked_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- document Document @relation("SourceDocument", fields: [organizationId, documentId], references: [organizationId, id], onDelete: Restrict)
+- sourceDocumentVersion DocumentVersion @relation(fields: [organizationId, documentId, sourceVersion], references: [organizationId, documentId, version], onDelete: Restrict)
+- signedDocument Document? @relation("SignedDocument", fields: [organizationId, signedDocumentId], references: [organizationId, id], onDelete: Restrict)
+- @@index([organizationId, documentId, createdAt])
+- @@index([organizationId, status, expiresAt])
+- @@map("document_signing_requests")
+
+### InternalNote
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- body String
+- confidential Boolean @default(true)
+- createdById String @map("created_by_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- @@index([organizationId, matterId, createdAt])
+- @@index([organizationId, clientId, createdAt])
+- @@map("internal_notes")
+
+### ClientMessage
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- body String
+- publishedAt DateTime @default(now()) @map("published_at") @db.Timestamptz(3)
+- createdById String @map("created_by_id") @db.Uuid
+- editedAt DateTime? @map("edited_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- @@index([organizationId, clientId, publishedAt])
+- @@index([organizationId, matterId, publishedAt])
+- @@map("client_messages")
+
+### Task
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- title String
+- description String?
+- status TaskStatus @default(OPEN)
+- priority TaskPriority @default(MEDIUM)
+- assigneeId String? @map("assignee_id") @db.Uuid
+- createdById String @map("created_by_id") @db.Uuid
+- dueAt DateTime? @map("due_at") @db.Timestamptz(3)
+- completedAt DateTime? @map("completed_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- deletedAt DateTime? @map("deleted_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- comments TaskComment[]
+- reminders TaskReminder[]
+- history TaskHistory[]
+- @@index([organizationId, assigneeId, status, dueAt])
+- @@index([organizationId, matterId])
+- @@map("tasks")
+
+### TaskComment
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- taskId String @map("task_id") @db.Uuid
+- body String
+- createdById String @map("created_by_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- editedAt DateTime? @map("edited_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+- @@index([organizationId, taskId, createdAt])
+- @@map("task_comments")
+
+### TaskReminder
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- taskId String @map("task_id") @db.Uuid
+- remindAt DateTime @map("remind_at") @db.Timestamptz(3)
+- status ReminderStatus @default(PENDING)
+- sentAt DateTime? @map("sent_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+- @@index([organizationId, remindAt, status])
+- @@map("task_reminders")
+
+### TaskHistory
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- taskId String @map("task_id") @db.Uuid
+- actorUserId String @map("actor_user_id") @db.Uuid
+- action String @db.VarChar(80)
+- before Json?
+- after Json?
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+- @@index([organizationId, taskId, createdAt])
+- @@map("task_history")
+
+### ScheduledJobState
+
+- jobName String @id @map("job_name")
+- lastScheduledAt DateTime @map("last_scheduled_at") @db.Timestamptz(3)
+- lastCompletedAt DateTime? @map("last_completed_at") @db.Timestamptz(3)
+- lastFailedAt DateTime? @map("last_failed_at") @db.Timestamptz(3)
+- @@map("scheduled_job_state")
+
+### ApiRateLimit
+
+- organizationId String @map("organization_id") @db.Uuid
+- keyHash String @map("key_hash") @db.Char(64)
+- windowStartedAt DateTime @map("window_started_at") @db.Timestamptz(3)
+- requestCount Int @map("request_count")
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- @@id([organizationId, keyHash])
+- @@map("api_rate_limits")
+
+### CalendarEvent
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- clientId String? @map("client_id") @db.Uuid
+- matterId String? @map("matter_id") @db.Uuid
+- title String
+- description String?
+- location String?
+- status EventStatus @default(SCHEDULED)
+- type EventType @default(OTHER)
+- startsAt DateTime @map("starts_at") @db.Timestamptz(3)
+- endsAt DateTime @map("ends_at") @db.Timestamptz(3)
+- timezone String @default("America/Sao_Paulo")
+- allDay Boolean @default(false) @map("all_day")
+- attendees Json @default("[]")
+- recurrenceRule String? @map("recurrence_rule") @db.VarChar(500)
+- reminderMinutes Int[] @default([60, 30, 10]) @map("reminder_minutes")
+- createdById String @map("created_by_id") @db.Uuid
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- client Client? @relation(fields: [clientId], references: [id], onDelete: Restrict)
+- matter Matter? @relation(fields: [matterId], references: [id], onDelete: Restrict)
+- @@index([organizationId, startsAt, status])
+- @@index([organizationId, matterId])
+- @@map("calendar_events")
+
+### Notification
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- userId String @map("user_id") @db.Uuid
+- channel NotificationChannel
+- status NotificationStatus @default(PENDING)
+- title String
+- body String
+- link String?
+- metadata Json @default("{}")
+- scheduledAt DateTime? @map("scheduled_at") @db.Timestamptz(3)
+- sentAt DateTime? @map("sent_at") @db.Timestamptz(3)
+- readAt DateTime? @map("read_at") @db.Timestamptz(3)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- @@index([organizationId, userId, status, createdAt])
+- @@map("notifications")
+
+### WebPushSubscription
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- userId String @map("user_id") @db.Uuid
+- endpoint String @unique @db.Text
+- p256dh String @db.VarChar(255)
+- auth String @db.VarChar(255)
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+- @@index([organizationId, userId])
+- @@map("web_push_subscriptions")
+
+### AuditLog
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- actorUserId String? @map("actor_user_id") @db.Uuid
+- actorSessionId String? @map("actor_session_id") @db.Uuid
+- action AuditAction
+- resource String @db.VarChar(100)
+- resourceId String? @map("resource_id") @db.Uuid
+- requestId String? @map("request_id") @db.VarChar(100)
+- ipHash String? @map("ip_hash")
+- userAgent String? @map("user_agent") @db.VarChar(500)
+- before Json?
+- after Json?
+- metadata Json @default("{}")
+- createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- @@index([organizationId, resource, resourceId, createdAt])
+- @@index([organizationId, actorUserId, createdAt])
+- @@map("audit_logs")
+
+### ActivityEvent
+
+- id String @id @default(uuid()) @db.Uuid
+- organizationId String @map("organization_id") @db.Uuid
+- actorUserId String? @map("actor_user_id") @db.Uuid
+- type String @db.VarChar(100)
+- subjectType String @map("subject_type") @db.VarChar(100)
+- subjectId String @map("subject_id") @db.Uuid
+- summary String
+- metadata Json @default("{}")
+- occurredAt DateTime @default(now()) @map("occurred_at") @db.Timestamptz(3)
+- organization Organization @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+- @@index([organizationId, subjectType, subjectId, occurredAt])
+- @@index([organizationId, occurredAt])
+- @@map("activity_events")
