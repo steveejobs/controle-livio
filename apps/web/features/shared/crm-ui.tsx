@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import React, { type ReactNode } from 'react';
 import type { ApiError } from '../../lib/api';
 
 export function Notice({ error, onRetry }: { error?: ApiError; onRetry?: () => void }) {
