@@ -4,7 +4,7 @@
 
 - Código: branch `release/client-handoff-20261101`, PR em rascunho [#2](https://github.com/steveejobs/controle-livio/pull/2). Integra os fluxos de administrador, equipe e cliente com correções de sessão, documentos e recibos.
 - A web pública `controle-livio-web.vercel.app` contém somente o hotfix de acesso. A API pública `controle-livio.vercel.app` continua no deployment estável anterior. Ambas respondem ao health check; isso não equivale à publicação da nova release.
-- O Quality integrado anterior passou em 6/6 cenários focados e 14/14 completos com Supabase e ClamAV descartáveis. Na execução #41294514959 da PR #2, aplicação e restore passaram, mas o navegador falhou por procurar o feedback de erro EICAR em `status` quando a interface o apresenta como `alert`. O teste foi corrigido; a PR reexecutará os gates sobre o pacote exato de entrega.
+- O Quality integrado anterior passou em 6/6 cenários focados e 14/14 completos com Supabase e ClamAV descartáveis. Na execução #41294514959 da PR #2, aplicação e restore passaram, mas o navegador falhou por procurar o feedback de erro EICAR em `status` quando a interface o apresenta como `alert`. Na repetição #41295558861, esse passo passou e o teste seguinte encontrou a proteção de 4 MiB no frontend, que agora impede corretamente a requisição. O teste foi ajustado para verificar a rejeição no navegador e enviar separadamente um multipart autenticado à API para confirmar HTTP 413. A PR reexecutará os gates sobre o pacote exato.
 
 ## Itens que impedem uso operacional
 
