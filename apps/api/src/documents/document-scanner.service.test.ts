@@ -129,6 +129,66 @@ describe('document malware scan', () => {
     expect(inspected.text.toString('ascii')).not.toContain(eicar);
   });
 
+  it('scans a compressed inline-image page stream before deciding the PDF is clean', async () => {
+    const pagePdf = await pdfWithPageContentEicar();
+    const targets = await extractPdfScanTargets(pagePdf);
+    expect(
+      targets.pageContents.some((content) => content.includes(Buffer.from(eicar, 'ascii'))),
+    ).toBe(true);
+    const localScanner = await scanner((file) =>
+      file.subarray(0, 5).toString('ascii') === '%PDF-'
+        ? 'stream: OK\0'
+        : file.includes(Buffer.from(eicar, 'ascii'))
+          ? 'stream: Eicar-Signature FOUND\0'
+          : 'stream: OK\0',
+    );
+    try {
+      const service = new DocumentScannerService(
+        config({
+          SUPABASE_ENVIRONMENT: 'staging',
+          SUPABASE_LOCAL: true,
+          CLAMAV_HOST: '127.0.0.1',
+          CLAMAV_PORT: localScanner.port,
+          CLAMAV_TIMEOUT_MS: 2_000,
+        }),
+      );
+      await expect(service.assertClean(pagePdf, 'application/pdf')).rejects.toBeInstanceOf(
+        UnprocessableEntityException,
+      );
+      expect(localScanner.requests()).toBe(2);
+      expect(localScanner.files()[0]).toEqual(pagePdf);
+      expect(localScanner.files()[1]?.includes(Buffer.from(eicar, 'ascii'))).toBe(true);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        localScanner.server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('accepts a clean PDF after the original scan and PDF inspection', async () => {
+    const document = await PDFDocument.create();
+    document.addPage([300, 144]);
+    const cleanPdf = Buffer.from(await document.save());
+    const localScanner = await scanner('stream: OK\0');
+    try {
+      const service = new DocumentScannerService(
+        config({
+          SUPABASE_ENVIRONMENT: 'staging',
+          SUPABASE_LOCAL: true,
+          CLAMAV_HOST: '127.0.0.1',
+          CLAMAV_PORT: localScanner.port,
+          CLAMAV_TIMEOUT_MS: 2_000,
+        }),
+      );
+      await expect(service.assertClean(cleanPdf, 'application/pdf')).resolves.toBeUndefined();
+      expect(localScanner.files()[0]).toEqual(cleanPdf);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        localScanner.server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
   it('rejects OCR output above the inspection limit instead of truncating its tail', async () => {
     const fakeWorker = {
       recognize: vi.fn().mockResolvedValue({
@@ -221,6 +281,28 @@ describe('document malware scan', () => {
       await expect(
         service.assertClean(Buffer.from('synthetic infected test')),
       ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        localScanner.server.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  it('fails closed when the scanner response is not a valid clean verdict', async () => {
+    const localScanner = await scanner('unexpected response: OK\0');
+    try {
+      const service = new DocumentScannerService(
+        config({
+          SUPABASE_ENVIRONMENT: 'staging',
+          SUPABASE_LOCAL: false,
+          CLAMAV_HOST: '127.0.0.1',
+          CLAMAV_PORT: localScanner.port,
+          CLAMAV_TIMEOUT_MS: 2_000,
+        }),
+      );
+      await expect(
+        service.assertClean(Buffer.from('synthetic malformed response')),
+      ).rejects.toBeInstanceOf(ServiceUnavailableException);
     } finally {
       await new Promise<void>((resolve, reject) =>
         localScanner.server.close((error) => (error ? reject(error) : resolve())),
