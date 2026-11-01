@@ -737,18 +737,23 @@ assert.deepEqual(
   `Restored grants/default ACLs differ after owner mapping: ${JSON.stringify(grantSemanticComparison)}`,
 );
 
-assert.equal(
+const authenticatedTablePrivileges = (database) =>
   sql(
-    target,
-    `SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
-       AND NOT (has_table_privilege('authenticated', c.oid, 'SELECT')
-         AND has_table_privilege('authenticated', c.oid, 'INSERT')
-         AND has_table_privilege('authenticated', c.oid, 'UPDATE')
-         AND has_table_privilege('authenticated', c.oid, 'DELETE'))`,
-  ),
-  '0',
-  'Authenticated application table privileges are incomplete',
+    database,
+    `SELECT COALESCE(string_agg(
+       c.relname || ':' ||
+       has_table_privilege('authenticated', c.oid, 'SELECT')::text || ':' ||
+       has_table_privilege('authenticated', c.oid, 'INSERT')::text || ':' ||
+       has_table_privilege('authenticated', c.oid, 'UPDATE')::text || ':' ||
+       has_table_privilege('authenticated', c.oid, 'DELETE')::text,
+       E'\\n' ORDER BY c.relname), '')
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`,
+  );
+assert.equal(
+  authenticatedTablePrivileges(target),
+  authenticatedTablePrivileges('postgres'),
+  'Restored authenticated table privileges differ from the source',
 );
 assert.equal(
   sql(
