@@ -760,6 +760,22 @@ assert.equal(
     target,
     `SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+       AND (has_table_privilege('anon', c.oid, 'SELECT')
+         OR has_table_privilege('anon', c.oid, 'INSERT')
+         OR has_table_privilege('anon', c.oid, 'UPDATE')
+         OR has_table_privilege('anon', c.oid, 'DELETE')
+         OR has_table_privilege('anon', c.oid, 'TRUNCATE')
+         OR has_table_privilege('anon', c.oid, 'REFERENCES')
+         OR has_table_privilege('anon', c.oid, 'TRIGGER'))`,
+  ),
+  '0',
+  'Anonymous role received a direct application table privilege',
+);
+assert.equal(
+  sql(
+    target,
+    `SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
        AND (has_table_privilege('authenticated', c.oid, 'TRUNCATE')
          OR has_table_privilege('authenticated', c.oid, 'REFERENCES')
          OR has_table_privilege('authenticated', c.oid, 'TRIGGER'))`,
