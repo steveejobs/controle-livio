@@ -992,8 +992,28 @@ const structureSnapshot = (database) =>
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
     ) objects`,
   );
-const sourceStructure = structureSnapshot('postgres').split('\n').filter(Boolean);
-const recoveredStructure = structureSnapshot(target).split('\n').filter(Boolean);
+const reparsedCheckConstraints = new Set([
+  'CONSTRAINT:document_signing_requests:document_signing_requests_status_check',
+  'CONSTRAINT:payment_receipts:payment_receipts_status_check',
+  'CONSTRAINT:service_catalog_items:service_catalog_items_area_check',
+]);
+const normalizeStructureEntry = (entry) => {
+  const constraintName = entry.split(':', 3).join(':');
+  if (!reparsedCheckConstraints.has(constraintName)) return entry;
+  // pg_restore reparses these three varchar-array CHECKs and moves the implicit text cast
+  // from the array to each element. Preserve strict comparison for every other object.
+  return entry
+    .replaceAll('::character varying::text', '::character varying')
+    .replaceAll(']::text[]', ']');
+};
+const sourceStructure = structureSnapshot('postgres')
+  .split('\n')
+  .filter(Boolean)
+  .map(normalizeStructureEntry);
+const recoveredStructure = structureSnapshot(target)
+  .split('\n')
+  .filter(Boolean)
+  .map(normalizeStructureEntry);
 const sourceStructureSet = new Set(sourceStructure);
 const recoveredStructureSet = new Set(recoveredStructure);
 const structureComparison = {
