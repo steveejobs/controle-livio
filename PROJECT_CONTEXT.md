@@ -893,6 +893,7 @@ Referências jurídicas consultadas: [CPC, art. 98](https://planalto.gov.br/cciv
 ## Sprint de fechamento do primeiro escritório — estado local (2026-10-29)
 
 O lote local adiciona formulários E2E reais para processo/responsável, contrato/recebível/pagamentos e documentos, além de isolamento do portal entre clientes e organizações. A API limita upload a 4 MiB, aplica limites multipart/concor­rência, valida magic bytes e exige ClamAV fora da stack local de teste. Vitest, typecheck, lint, Prisma Validate, build API/UI/web e bundle passaram localmente; 204/204 Vitest e 21 cenários mockados passaram em duas execuções (quatro stubs ajustados e repetidos). O audit atualizado mantém três altas na cadeia Prisma/deepmerge-ts e três baixas de ferramentas, sem críticos/moderados; upgrade recomendado é major e segue pendente. Restore histórico, SMTP controlado e ClamAV real não foram homologados. O Playwright integrado/restore para este lote aguarda nova Actions. Nenhum push/deploy/migration/alteração do Supabase compartilhado foi executado; push requer autorização nova.
+
 ## Quality #40962783856 - resultado do commit 48842cb (2026-10-29)
 
 - O commit `48842cb0d336a02c1c66b80ff18813d422bee5f4` foi publicado somente em `validation/gha-ci-20261029`. O job `application` passou: format check, ESLint, TypeScript, Vitest 204/204, Prisma Validate, build API/web, bundle check e Playwright mockado 21/21.
@@ -902,6 +903,7 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - `npm audit --omit=dev` na arvore imutavel do commit reporta tres altas em `prisma@6.19.3` -> `@prisma/config` -> `deepmerge-ts@7.1.5`; o fix sugerido e Prisma 7.10.1 (major). Audit completo reporta tres baixas de ferramentas e zero criticas. A arvore mostra Vitest 4.1.12 sem Tinypool.
 - As duas configuracoes Vercel continuam bloqueando Preview da branch; a consulta apos o push nao encontrou Preview ativo. Nao houve deploy, merge, migration ou acesso/escrita no Supabase compartilhado.
 - Nenhum commit corretivo foi criado ou publicado. A proxima acao e inspecionar o erro do step 8 e repetir somente os testes afetados.
+
 ## CI integrado #40962783856 — diagnóstico local em 2026-10-29
 
 - `gh` 2.103.3 autenticado como `efriten1-ai`, com permissão `write` em `steveejobs/controle-livio`; logs e artefatos foram recuperados em `%TEMP%`.
@@ -949,6 +951,7 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - O filtro TOC passou fixtures locais para ACL de cron/net e retenção de schema, tabela e funcao publicos; `node --check` passou. Nenhum backup ou banco foi acessado.
 - Playwright descobriu os nove cenarios; `--list` nao executa as jornadas. O reteste integrado e o restore em PostgreSQL descartavel continuam pendentes do GitHub Actions.
 - Commit nao publicado. As demais anotacoes e alteracoes locais continuam fora do commit; nao houve push, deploy, migration ou operacao no Supabase compartilhado.
+
 ## Quality #41090840148 — commit 4b8b33e (2026-10-30)
 
 - SHA `4b8b33e9be81e24fd6586563a81ca71e34c57356` foi publicado somente em `validation/gha-ci-20261029`. A [execução #41090840148](https://github.com/steveejobs/controle-livio/actions/runs/41090840148) terminou em falha nos jobs `supabase-isolation` e `synthetic-restore`; `application` passou.
@@ -971,7 +974,6 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - Esta máquina não tem Docker nem Supabase CLI. Nenhuma das jornadas com Supabase/PostgreSQL/Chromium reais, restore descartável ou Auth/RLS/Storage foi executada sobre o novo código. Não há métricas atuais de P2024, pool, requests ou navegação; métricas de execuções antigas não foram reutilizadas. O ClamAV direto aprovado no #41090840148 não prova o fluxo de upload da aplicação.
 - Commit local `77664061392a94fa24906a6eea363d2f4cf17dfc` contém somente `.github/workflows/quality.yml`, `apps/web/e2e/integrated/real-browser.integrated.e2e.ts`, `tools/qa/restore-local-ci.mjs` e `tools/qa/run-integrated-browser-ci.mjs`. Não foi publicado. As demais alterações preexistentes continuam fora do commit.
 - Estado atual: causa raiz dos quatro timeouts ainda pendente de nova execução instrumentada; workflows cliente/processo, financeiro, despesas e documentos permanecem parciais; isolamento do portal segue aprovado no SHA publicado 4b8b33e; restore sintético não comprovado; piloto comercial não pronto. Não houve push, deploy, migration nem operação no Supabase compartilhado.
-
 
 ## Quality #41104994780 ? 2026-10-30
 
@@ -996,6 +998,7 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - Correções preparadas localmente sem commit ou push: os formulários são localizados pelo formulário ancestral do botão de submit; os comboboxes usam nome acessível por prefixo para considerar texto de ajuda; evidências registram opções, UUID selecionado e campo de request correlacionado. O parser TOC agora aceita linhas sem owner e a fixture reproduz as entradas reais de `pg_cron`/`pg_net`, filtrando também comentários de extensão.
 - Checks locais dessas duas correções: TypeScript web, ESLint direcionado, Prettier direcionado, `node --check` e `--check-toc-filter` passaram. Playwright `--list` encontrou nove testes, mas isso é somente descoberta. Não foi possível executar os fluxos integrados ou o restore real nas mudanças locais sem novo push autorizado.
 - Os artefatos do run contêm relatório Playwright focado, snapshots de falha, screenshot de formulário do cliente, traces sanitizados, métricas browser/API/Prisma, ensaio ClamAV e checkpoints/listagens TOC do restore. Nenhum dump foi publicado. Não houve merge, deploy, migration, alteração cloud ou operação no Supabase compartilhado. O workspace continua com alterações locais anteriores preservadas; os dois arquivos corrigidos e este contexto permanecem sem commit. Novo push exige autorização explícita.
+
 ## Correcoes locais de seletores e restore TOC - 2026-10-30
 
 - Commit local `29f96bc4b72beee14add33973d50bb6737ec4629` (pai `f516c691e396e11a764b7e09988485357818b69e`) contem apenas o harness integrado e `tools/qa/restore-local-ci.mjs`; nao houve push.
@@ -1023,6 +1026,7 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - O restore compara cada total financeiro como texto decimal normalizado, sem ponto flutuante, preservando diferenças reais; fixtures cobrem entradas TOC com e sem owner, ACL/default ACL, `COMMENT`, `SECURITY LABEL`, `pg_cron` e `pg_net`.
 - Validações executadas neste estado: financeiro 29/29; documentos/scanner 11/11; TypeScript Playwright; Prettier nos nove arquivos do lote; `node --check` nos scripts de runner/restore; fixtures TOC; descoberta dos nove cenários (descoberta não é execução); `git diff --check`. Docker não está disponível nesta máquina; havia 0,3 GB de RAM livre. Por isso, a suíte completa, lint, builds, Prisma Validate, Playwright integrado, restore PostgreSQL, Auth/RLS/Storage e ClamAV real foram deixados para o runner CI e não são declarados aprovados neste estado.
 - Pendências sem alteração de infraestrutura: reexecutar no GitHub Actions deste SHA local após publicação autorizada; atualizar métricas de pool/navegação; homologar SMTP em caixa de captura e testar expiração de convite/recuperação de senha; planejar restauração histórica isolada de Auth/Storage; executar plano de migração Prisma 6→7 separadamente. Nenhuma migration, operação no Supabase compartilhado, deploy ou push ocorreu.
+
 ## Execucao Quality 41121997188 e correcoes locais - 2026-10-30
 
 - O workflow Quality testou exatamente o SHA 792eb0e2735ff0623b4f471d089d32a2818fd71e. O job application passou: 207 testes Vitest, 21 Playwright mockados, format check, lint, TypeScript, Prisma Validate, builds e bundle check. Auth/RLS/Storage temporarios tambem passaram no job integrado.
@@ -1081,7 +1085,6 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - Validações locais concluídas: Vitest completo 216/216 (API 166, web 30, shared 20); Playwright mockado 21/21; TypeScript API/web; ESLint; Prettier em 307 arquivos versionados; Prisma Validate; builds API/web; bundle check (252.823 bytes gzip); `node --check` nos scripts QA e fixtures `restore-local-ci.mjs --check-toc-filter`.
 - Não houve execução real das dez jornadas integradas, do ClamAV oficial nem do restore PostgreSQL nesta etapa. Métricas novas de Prisma/navegação não foram coletadas. O lote permanece local; sem push, deploy, merge, migration ou acesso ao Supabase compartilhado. A homologação em runner precisa ocorrer depois de revisão e autorização explícita para publicar.
 
-
 ## Local hardening commit after Quality 41129518121 - 2026-10-30
 
 - Commit local 6c84625e6281a3be376e07ca93e07c94f19430f9, filho direto de 8be1be1be3865b1e6e2f8808c5a720ba9c926c21; sem push. Contem 15 arquivos do lote de scanner PDF, restore ACL e isolamento do harness.
@@ -1126,14 +1129,14 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 - Validacoes locais finais: Vitest 246/246 (API 196, web 30, shared 20); Playwright mockado 21/21; TypeScript; ESLint; Prettier (319 arquivos rastreados, PROJECT_CONTEXT local ignorado pelo check); Prisma Validate; build API/web; bundle check 253.020 bytes gzip; fixtures TOC/planejamento de owner e `node --check` passaram. `git diff --check` passou. Prisma avisou que o preview `metrics` esta depreciado.
 - Dependencias externas nao instaladas localmente: Docker, `clamscan`, `clamdscan`, `psql`, `pg_restore` e `qpdf`. Portanto, ClamAV real 1.5.4, restore PostgreSQL completo, Auth/RLS/Storage temporarios e Playwright integrado nao foram executados apos estas correcoes. O workflow existente contem a matriz e jornadas para executar no GitHub Actions; esta etapa nao fez push nem iniciou Actions.
 
-| Estado | Classificacao | Evidencia |
-| --- | --- | --- |
-| `DOCUMENT_WORKFLOW_READY` | PARTIAL | Causa do falso mismatch corrigida; cobertura documental local passou, mas Playwright integrado ainda nao reexecutado. |
-| `PDF_CONTENT_SECURITY_READY` | PARTIAL | PDF.js/OCR, varredura complementar e rejeicao pre-Storage passaram contra TCP sintetico; matriz real ClamAV 1.5.4 pendente. |
-| `CLAMAV_READY` | PARTIAL | Controle e cenarios locais fake passaram; scanner/matriz 1.5.4 do runner ainda precisa ser executada. |
-| `RESTORE_READY` | PARTIAL | Ownership/grants agora tem validacoes explicitas; PostgreSQL nao executado localmente e exclusoes cron/net mantem o resultado planejado como `INCOMPLETE`. |
-| `INTEGRATED_QA_READY` | NO | Auth, RLS, Storage, ClamAV, documentos e restore requerem nova execucao do GitHub Actions, ainda nao iniciada. |
-| `COMMERCIAL_READY` | NO | Bloqueios de integracao, seguranca documental e restore ainda nao foram resolvidos e aprovados juntos. |
+| Estado                       | Classificacao | Evidencia                                                                                                                                                  |
+| ---------------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DOCUMENT_WORKFLOW_READY`    | PARTIAL       | Causa do falso mismatch corrigida; cobertura documental local passou, mas Playwright integrado ainda nao reexecutado.                                      |
+| `PDF_CONTENT_SECURITY_READY` | PARTIAL       | PDF.js/OCR, varredura complementar e rejeicao pre-Storage passaram contra TCP sintetico; matriz real ClamAV 1.5.4 pendente.                                |
+| `CLAMAV_READY`               | PARTIAL       | Controle e cenarios locais fake passaram; scanner/matriz 1.5.4 do runner ainda precisa ser executada.                                                      |
+| `RESTORE_READY`              | PARTIAL       | Ownership/grants agora tem validacoes explicitas; PostgreSQL nao executado localmente e exclusoes cron/net mantem o resultado planejado como `INCOMPLETE`. |
+| `INTEGRATED_QA_READY`        | NO            | Auth, RLS, Storage, ClamAV, documentos e restore requerem nova execucao do GitHub Actions, ainda nao iniciada.                                             |
+| `COMMERCIAL_READY`           | NO            | Bloqueios de integracao, seguranca documental e restore ainda nao foram resolvidos e aprovados juntos.                                                     |
 
 - Nenhuma alteracao foi publicada: sem commit, push, deploy, alteracao em `main`, migration ou operacao em banco compartilhado. Relatorios e artefatos Quality preexistentes foram preservados.
 - Contagem do TOC baixado (preflight estatico, nao restore pos-correcao): 232 ACL rows, incluindo 30 DEFAULT ACL; 16 rows referenciam cron/net (3 DEFAULT ACL), portanto o filtro preserva 216 ACL rows, incluindo 27 DEFAULT ACL. As 16 linhas excluidas estao registradas integralmente pelo script/evidence; jobs e ACLs dos schemas ausentes mantem o estado do restore como `INCOMPLETE`.
@@ -1154,6 +1157,6 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 | `CLAMAV_READY`               | PARTIAL       | Fail-closed e ordem passaram com scanner TCP sintetico; daemon real e matrix ainda pendentes.                                       |
 | `RESTORE_READY`              | PARTIAL       | Contagens e comparacoes rigorosas preparadas; restore real pendente e exclusoes cron/net mantem resultado `INCOMPLETE`.             |
 | `INTEGRATED_QA_READY`        | NO            | Nenhum Quality integrado executado sobre estas correcoes.                                                                           |
-| `COMMERCIAL_READY`           | NO            | Integracao documental, scanner real e restore ainda precisam de aprovacao conjunta.                                                |
+| `COMMERCIAL_READY`           | NO            | Integracao documental, scanner real e restore ainda precisam de aprovacao conjunta.                                                 |
 
 - Nenhum commit, push, deploy, alteracao em `main`, migration ou operacao em banco compartilhado ocorreu. A branch e o SHA de referencia continuam sem alteracao; mudancas locais e artefatos preexistentes foram preservados.
