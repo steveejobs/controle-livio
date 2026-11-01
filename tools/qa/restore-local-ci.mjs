@@ -992,9 +992,25 @@ const structureSnapshot = (database) =>
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
     ) objects`,
   );
-assert.equal(
-  structureSnapshot(target),
-  structureSnapshot('postgres'),
+const sourceStructure = structureSnapshot('postgres').split('\n').filter(Boolean);
+const recoveredStructure = structureSnapshot(target).split('\n').filter(Boolean);
+const sourceStructureSet = new Set(sourceStructure);
+const recoveredStructureSet = new Set(recoveredStructure);
+const structureComparison = {
+  sourceEntries: sourceStructure.length,
+  recoveredEntries: recoveredStructure.length,
+  missing: sourceStructure.filter((entry) => !recoveredStructureSet.has(entry)),
+  unexpected: recoveredStructure.filter((entry) => !sourceStructureSet.has(entry)),
+};
+writeCheckpoint({ structureComparison });
+assert.deepEqual(
+  structureComparison,
+  {
+    sourceEntries: sourceStructure.length,
+    recoveredEntries: sourceStructure.length,
+    missing: [],
+    unexpected: [],
+  },
   'Recovered structure differs',
 );
 const databaseOwner = sql(
