@@ -130,12 +130,16 @@ export function LegalCrm() {
   const [error, setError] = useState<ApiError>();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
-  const loadSession = useCallback(async () => {
+  const loadSession = useCallback(async (): Promise<ApiError | undefined> => {
     try {
       setSession(await api<Session>('/auth/me'));
+      return undefined;
     } catch (e) {
       setSession(null);
       if (e instanceof ApiError && e.status !== 401) setError(e);
+      return e instanceof ApiError
+        ? e
+        : new ApiError(0, 'Não foi possível validar o acesso. Tente novamente.');
     }
   }, []);
   useEffect(() => {
@@ -283,7 +287,7 @@ export function LegalCrm() {
   );
 }
 
-function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
+function Login({ onAuthenticated }: { onAuthenticated: () => Promise<ApiError | undefined> }) {
   const [mode, setMode] = useState<'login' | 'recovery'>('login');
   const [error, setError] = useState<ApiError>();
   const [sent, setSent] = useState(false);
@@ -313,7 +317,8 @@ function Login({ onAuthenticated }: { onAuthenticated: () => Promise<void> }) {
         } catch {
           // A temporary logging outage must not prevent an authenticated user from entering.
         }
-        await onAuthenticated();
+        const sessionError = await onAuthenticated();
+        if (sessionError) setError(sessionError);
       } else {
         const { error: authError } = await createSupabaseBrowserClient().auth.resetPasswordForEmail(
           String(data.get('email')),
