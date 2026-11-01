@@ -948,7 +948,7 @@ const structureSnapshot = (database) =>
     `SELECT COALESCE(string_agg(entry, E'\\n' ORDER BY entry), '') FROM (
       SELECT 'COLUMN:' || c.relname || ':' || a.attnum::text || ':' || a.attname || ':' ||
         format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text || ':' ||
-        COALESCE(pg_get_expr(d.adbin, d.adrelid), '') || ':' || a.attidentity || ':' || a.attgenerated AS entry
+        COALESCE(pg_get_expr(d.adbin, d.adrelid), '') || ':' || a.attidentity::text || ':' || a.attgenerated::text AS entry
       FROM pg_attribute a
       JOIN pg_class c ON c.oid = a.attrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -969,13 +969,13 @@ const structureSnapshot = (database) =>
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public'
       UNION ALL
-      SELECT 'TRIGGER:' || c.relname || ':' || t.tgname || ':' || pg_get_triggerdef(t.oid, true) || ':' || t.tgenabled
+      SELECT 'TRIGGER:' || c.relname || ':' || t.tgname || ':' || pg_get_triggerdef(t.oid, true) || ':' || t.tgenabled::text
       FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND NOT t.tgisinternal
       UNION ALL
-      SELECT 'POLICY:' || c.relname || ':' || p.polname || ':' || p.polcmd || ':' ||
+      SELECT 'POLICY:' || c.relname || ':' || p.polname || ':' || p.polcmd::text || ':' ||
         (SELECT COALESCE(string_agg(COALESCE(r.rolname, 'PUBLIC'), ',' ORDER BY COALESCE(r.rolname, 'PUBLIC')), '')
          FROM unnest(p.polroles) AS roles(role_oid)
          LEFT JOIN pg_roles r ON r.oid = roles.role_oid) || ':' ||
