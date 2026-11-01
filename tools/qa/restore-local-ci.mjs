@@ -694,7 +694,11 @@ assert.equal(restoreExecutorRole, 'supabase_admin', 'Restore must run as supabas
 const roleSessionChecks = ['supabase_admin', 'anon', 'authenticated', 'service_role'].map(
   (role) => {
     const currentRole = sql(target, `SET ROLE "${role}"; SELECT current_user; RESET ROLE`);
-    assert.equal(currentRole, role, `Restore target could not set and use role ${role}`);
+    assert.deepEqual(
+      currentRole.split('\n'),
+      ['SET', role, 'RESET'],
+      `Restore target could not set and use role ${role}`,
+    );
     return { role, canAssumeSessionRole: true, observedCurrentUser: currentRole };
   },
 );
