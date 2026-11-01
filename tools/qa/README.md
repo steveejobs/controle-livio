@@ -150,3 +150,11 @@ node --env-file=.env --import tsx tools/qa/validate-pool2-navigation.ts
 ```
 
 O pool 2 fica candidato exclusivamente para uma instância local. Não configure Vercel até verificar o host e limite efetivos do `DATABASE_URL` publicado, o máximo de instâncias/concurrency da Function, limites de clientes/servidores do Supavisor e conexões utilizadas por outros serviços. `pg_stat_activity` conta conexões do PostgreSQL e não substitui os limites de clientes do pooler.
+
+### Captura SMTP descartável na CI
+
+O job integrado usa `prepare-local-supabase-ci.mjs --smtp-capture`. Esta opção explícita só é aceita no runner Linux GitHub, em checkout sem vínculo cloud e sem credenciais Supabase externas ou variáveis SMTP. Ela habilita o Mailpit local sem relay e grava `otp_expiry=60` somente no config do checkout descartável. O ensaio de restore continua sem e-mail.
+
+`verify-smtp-capture-ci.mjs` exige esse ambiente e destinos HTTP loopback nas portas 54321/54324/3010. Usa apenas conta aleatória `@example.test`, captura convite/recuperação via API Mailpit, verifica senha anterior/nova, uso único, destino permitido e expiração após 65 segundos reais. Não encaminha mensagens nem registra corpos, endereços, links ou tokens. O único artefato contém status e booleanos sanitizados.
+
+Escopo: transporte Auth → caixa local e consumo dos links pelo Auth. Não valida o provedor hospedado, a entrega externa, o template comercial nem a página SSR final (`frontendLandingVerified=false`). O callback web exige `code` ou `token_hash` + `type`; homologar templates compatíveis com ele antes da liberação, pois o fluxo padrão com tokens no fragmento da URL não pode ser lido pelo callback de servidor. Não alterar templates cloud nesta etapa.

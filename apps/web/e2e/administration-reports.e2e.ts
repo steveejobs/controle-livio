@@ -323,6 +323,10 @@ for (const viewport of [
         .poll(() => requests.some((request) => request.path.startsWith(`/v1/reports/${report}`)))
         .toBe(true);
       await test.step(`export CSV ${report}`, async () => {
+        // Chromium drops burst downloads after ten requests within one second
+        // (LocalFrame::ShouldThrottleDownload). Exercise each export at a human
+        // pace without disabling browser safeguards or retrying lost downloads.
+        await page.waitForTimeout(200);
         try {
           const [download] = await Promise.all([
             page.waitForEvent('download', { timeout: 10_000 }),
