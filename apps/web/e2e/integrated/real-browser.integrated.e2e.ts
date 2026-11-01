@@ -277,12 +277,12 @@ async function screenshotEvidence(page: Page, name: string) {
 }
 
 async function expectOperationFeedback(page: Page, message: string) {
-  const statuses = page.getByRole('status');
+  const feedback = page.getByRole('status').or(page.getByRole('alert'));
   try {
     await expect
       .poll(
         async () =>
-          (await statuses.allTextContents()).filter((text) => text.trim() === message).length,
+          (await feedback.allTextContents()).filter((text) => text.trim() === message).length,
       )
       .toBe(1);
   } catch (error) {
@@ -300,9 +300,9 @@ async function expectOperationFeedback(page: Page, message: string) {
     }
     throw error;
   }
-  const statusTexts = await statuses.allTextContents();
-  const exactIndex = statusTexts.findIndex((text) => text.trim() === message);
-  await expect(statuses.nth(exactIndex)).toHaveText(message);
+  const feedbackTexts = await feedback.allTextContents();
+  const exactIndex = feedbackTexts.findIndex((text) => text.trim() === message);
+  await expect(feedback.nth(exactIndex)).toHaveText(message);
   const trace = currentOperationTrace.get(page);
   if (trace) {
     trace.events.push({

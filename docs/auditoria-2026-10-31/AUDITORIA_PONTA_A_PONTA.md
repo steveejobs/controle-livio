@@ -43,6 +43,12 @@
 
 ## Limites e próximos passos
 
+### Atualização de 2026-11-01: ensaio de restauração
+
+- O [Quality #41294514959](https://github.com/steveejobs/controle-livio/actions/runs/41294514959) passou no job `synthetic-restore`. O arquivo sintético foi restaurado em banco descartável novo. O artefato sanitizado confirmou 46 tabelas, 216 ACLs, 27 default ACLs, owners, estrutura, chaves estrangeiras, totais financeiros e sessões dos quatro papéis Supabase. A verificação também confirmou ausência dos privilégios `TRUNCATE`, `REFERENCES` e `TRIGGER` para `authenticated` e de acesso direto de `anon` nas tabelas públicas após a migration de segurança.
+- O checkpoint do artefato é `INCOMPLETE`, embora o job tenha passado, pois as entradas do scheduler `cron`/`net` foram excluídas deliberadamente. Este teste não restaura backup histórico, configuração hospedada do Auth nem arquivos do Storage. O banco compartilhado de produção não recebeu a migration nem foi modificado pelo ensaio.
+- Na mesma execução, `application` passou; `supabase-isolation` falhou na jornada 4 das duas rodadas. O HTTP 422 e a mensagem EICAR da API estavam corretos, mas o teste procurava o feedback em `role=status`, enquanto a interface usa `role=alert` para erros. O helper foi corrigido para aceitar os dois papéis acessíveis. Os demais 5 cenários focados e 13 completos passaram; scanner real, Auth/RLS/Storage e validação da migration também passaram. Falta a nova execução do pacote exato.
+
 - O script `tools/qa/live-readonly.mjs` gera link de login e verifica OTP; apesar do nome, cria sessão e pode produzir eventos. Não foi executado nesta auditoria de leitura.
 - O preflight `verify-workflows.ts --preflight` retornou `PREFLIGHT_READ_ONLY_ONLY` e `writeAuthorized=false`. O `.env` atual aponta para a ref conectada a Production/Preview. Nenhuma migration, seed ou escrita de QA foi executada nela.
 - O Playwright local integral não foi repetido: a máquina tinha cerca de 0,22 GB de RAM física livre e a execução anterior travou. O runner Linux da branch de validação é a fonte possível de evidência integrada desta etapa.
