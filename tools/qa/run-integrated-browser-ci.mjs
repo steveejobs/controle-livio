@@ -163,6 +163,10 @@ const webEnv = {
 const testEnv = { ...webEnv, NODE_ENV: 'test' };
 testEnv.LIVIO_QA_OUTPUT = outputDir;
 testEnv.GITHUB_RUN_ID = process.env.GITHUB_RUN_ID;
+// The browser harness reads only the disposable database already checked by localUrl above.
+testEnv.DATABASE_URL = process.env.DATABASE_URL;
+testEnv.SUPABASE_LOCAL = process.env.SUPABASE_LOCAL;
+testEnv.SUPABASE_ENVIRONMENT = process.env.SUPABASE_ENVIRONMENT;
 testEnv.CLAMAV_HOST = process.env.CLAMAV_HOST;
 testEnv.CLAMAV_PORT = process.env.CLAMAV_PORT;
 testEnv.SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
