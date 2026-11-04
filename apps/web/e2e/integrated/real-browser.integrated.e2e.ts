@@ -3442,6 +3442,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       await paymentForm.getByLabel('Parcela').selectOption(installmentId);
       const upload = await formWithSubmitButton(financePage, 'Enviar e conferir comprovante');
       const blockedReceiptIds: string[] = [];
+      let previousReceiptsBefore: unknown;
       // Stage 2: verify the persisted ledger, not only an HTTP rejection.
       const databaseUrl = process.env.DATABASE_URL;
       if (
@@ -3460,6 +3461,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
           const receipt = await database.paymentReceipt.findFirst({
             where: { id: receiptId, organizationId: organizationA, installmentId },
             select: {
+              documentId: true,
               status: true,
               paymentId: true,
               reviewHistory: true,
@@ -3485,6 +3487,10 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
             new Prisma.Decimal(0),
           );
           return {
+            receiptId,
+            documentId: receipt.documentId,
+            organizationId: organizationA,
+            installmentId,
             receiptStatus: receipt.status,
             paymentId: receipt.paymentId,
             reviewEvents: Array.isArray(receipt.reviewHistory) ? receipt.reviewHistory.length : -1,
@@ -3586,6 +3592,17 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
             expect(after).toEqual(before);
           }
         }
+        previousReceiptsBefore = await database.paymentReceipt.findMany({
+          where: { organizationId: organizationA, id: { in: blockedReceiptIds } },
+          select: {
+            id: true,
+            documentId: true,
+            status: true,
+            paymentId: true,
+            reviewHistory: true,
+          },
+          orderBy: { id: 'asc' },
+        });
       } finally {
         await database.$disconnect();
       }
@@ -3625,13 +3642,36 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       const partialReceipt = (await uploadedResponse.json()) as {
         id: string;
         documentId: string;
+        document: { id: string; title: string };
         installmentId: string;
         clientId: string;
       };
       expect(partialReceipt).toMatchObject({
         installmentId,
         clientId: clientA,
+        document: {
+          id: partialReceipt.documentId,
+          title: `Comprovante financeiro · recibo-parcial-${suffix}.pdf`,
+        },
       });
+      expect(blockedReceiptIds).not.toContain(partialReceipt.id);
+      const retrieved = bodyAs<typeof partialReceipt>(
+        await browserApi(financePage, `/finance/receipts/${partialReceipt.id}`),
+      );
+      expect(retrieved).toMatchObject(partialReceipt);
+      const listed = bodyAs<{ items: Array<typeof partialReceipt> }>(
+        await browserApi(financePage, `/finance/receipts?installmentId=${installmentId}`),
+      );
+      expect(listed.items.find(({ id }) => id === partialReceipt.id)).toMatchObject(partialReceipt);
+      const forbiddenRead = await browserApi(
+        financePage,
+        `/finance/receipts/${partialReceipt.id}`,
+        {
+          organizationId: organizationB,
+        },
+      );
+      expect([403, 404]).toContain(forbiddenRead.status);
+      expect(JSON.stringify(forbiddenRead.body)).not.toContain(partialReceipt.documentId);
       const preview = financePage.getByRole('region', { name: 'Conferência do comprovante' });
       await expect(preview).toContainText(`recibo-parcial-${suffix}.pdf`);
       await expect(preview).toContainText('R$ 33,34');
@@ -3647,6 +3687,42 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       );
       const partialDatabase = new PrismaClient();
       try {
+        const beforeRetry = async () => ({
+          receipt: await partialDatabase.paymentReceipt.findFirst({
+            where: { id: partialReceipt.id, organizationId: organizationA, installmentId },
+            select: { status: true, paymentId: true, documentId: true, reviewHistory: true },
+          }),
+          payments: await partialDatabase.payment.findMany({
+            where: {
+              organizationId: organizationA,
+              idempotencyKey: `receipt:${partialReceipt.id}`,
+            },
+            select: { id: true, amount: true },
+          }),
+          allocations: await partialDatabase.paymentAllocation.findMany({
+            where: { organizationId: organizationA, installmentId, reversedAt: null },
+            select: { id: true, paymentId: true, amount: true },
+            orderBy: { id: 'asc' },
+          }),
+          auditCount: await partialDatabase.auditLog.count({
+            where: {
+              organizationId: organizationA,
+              resource: 'payment_receipt',
+              resourceId: partialReceipt.id,
+            },
+          }),
+          previousReceipts: await partialDatabase.paymentReceipt.findMany({
+            where: { organizationId: organizationA, id: { in: blockedReceiptIds } },
+            select: {
+              id: true,
+              documentId: true,
+              status: true,
+              paymentId: true,
+              reviewHistory: true,
+            },
+            orderBy: { id: 'asc' },
+          }),
+        });
         const receipt = await partialDatabase.paymentReceipt.findFirst({
           where: { id: partialReceipt.id, organizationId: organizationA, installmentId },
           select: {
@@ -3709,7 +3785,31 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
           },
         });
         expect(receiptAuditCount).toBe(2);
+        const snapshot = await beforeRetry();
+        expect(snapshot.previousReceipts).toEqual(previousReceiptsBefore);
+        expect(snapshot.allocations[0]?.paymentId).toBe(receipt?.paymentId);
+        const repeated = await browserApi(
+          financePage,
+          `/finance/receipts/${partialReceipt.id}/confirm`,
+          {
+            method: 'POST',
+            body: partialConfirmation.request().postDataJSON(),
+          },
+        );
+        expect([200, 201, 409]).toContain(repeated.status);
+        expect(await beforeRetry()).toEqual(snapshot);
         writeQaArtifact(`workflow-stages/receipt-valid-partial-${viewport.width}.json`, {
+          receiptId: partialReceipt.id,
+          document: partialReceipt.document,
+          installmentId,
+          organizationId: organizationA,
+          confirmationPath: new URL(partialConfirmation.url()).pathname,
+          confirmationHttpStatus: partialConfirmation.status(),
+          repeatHttpStatus: repeated.status,
+          snapshot,
+          countsUnchangedAfterRepeat: true,
+          balanceBefore: '100.0000',
+          paymentAmount: payment?.amount.toFixed(4),
           receiptStatus: receipt?.status,
           paymentCount,
           allocationCount: allocations.length,

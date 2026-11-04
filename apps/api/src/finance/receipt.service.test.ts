@@ -115,6 +115,39 @@ describe('serviço de comprovantes', () => {
     expect(documents.create).not.toHaveBeenCalled();
   });
 
+  it('retorna no upload os metadados persistidos do documento associado', async () => {
+    const document = { id: 'document-1', title: 'Comprovante financeiro · sintetico.pdf' };
+    const create = vi.fn(async (query: { include?: unknown; data: Record<string, unknown> }) => ({
+      id: 'receipt-1',
+      status: 'PENDING_REVIEW',
+      ...query.data,
+      ...(query.include ? { document } : {}),
+    }));
+    prisma.$transaction.mockImplementation(async (callback) =>
+      callback({ paymentReceipt: { create } }),
+    );
+    const result = await service.submit(actor as never, { installmentId: 'installment-1' }, file);
+    expect(result).toMatchObject({
+      id: 'receipt-1',
+      organizationId: actor.organizationId,
+      documentId: document.id,
+      document,
+      status: 'PENDING_REVIEW',
+      extractedFields: { paidAmount: { value: '25.00' } },
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: { document: { select: { id: true, title: true } } },
+        data: expect.objectContaining({
+          organizationId: actor.organizationId,
+          documentId: document.id,
+        }),
+      }),
+    );
+    expect(documents.create).toHaveBeenCalledOnce();
+    expect(finance.createPayment).not.toHaveBeenCalled();
+  });
+
   it('não armazena nem processa OCR quando o scanner rejeita o arquivo', async () => {
     scanner.assertClean.mockRejectedValue(new Error('infectado'));
     await expect(

@@ -133,6 +133,7 @@ export class ReceiptService {
     try {
       return await this.prisma.$transaction(async (transaction) => {
         const receipt = await transaction.paymentReceipt.create({
+          include: { document: { select: { id: true, title: true } } },
           data: {
             organizationId: actor.organizationId,
             clientId: target.clientId,
