@@ -10,7 +10,7 @@ import { createWorker } from 'tesseract.js';
 
 const requireFromHere = createRequire(__filename);
 const languagePath = dirname(
-  requireFromHere.resolve('@tesseract.js-data/por/4.0.0_best_int/por.traineddata.gz'),
+  require.resolve('@tesseract.js-data/por/4.0.0_best_int/por.traineddata.gz'),
 );
 const maximumPdfPages = 64;
 const maximumOcrPages = 16;

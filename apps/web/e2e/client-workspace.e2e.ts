@@ -264,6 +264,16 @@ for (const viewport of [
       expect(ocrAssetsLoaded).toEqual(
         new Set(['/ocr/worker.min.js', '/ocr/tesseract-core.wasm.js', '/ocr/por.traineddata.gz']),
       );
+      await createForm.getByLabel('Nome completo').fill('Nome já preenchido');
+      page.once('dialog', async (dialog) => {
+        expect(dialog.message()).toContain('Valor atual: Nome já preenchido');
+        expect(dialog.message()).toContain('Valor extraído: MARIA DA SILVA SOUZA');
+        await dialog.dismiss();
+      });
+      await createForm.getByRole('button', { name: 'Usar dados no cadastro' }).click();
+      await expect(createForm.getByLabel('Nome completo')).toHaveValue('Nome já preenchido');
+      await createForm.getByRole('button', { name: 'Rever dados extraídos' }).click();
+      page.once('dialog', (dialog) => dialog.accept());
       await createForm.getByRole('button', { name: 'Usar dados no cadastro' }).click();
       await expect(createForm.getByLabel('Nome completo')).toHaveValue('MARIA DA SILVA SOUZA');
       await expect(createForm.getByLabel('CPF', { exact: true })).toHaveValue('529.982.247-25');
@@ -447,6 +457,18 @@ for (const viewport of [
     const whatsapp = page.getByRole('link', { name: 'Abrir conversa no WhatsApp' });
     await expect(whatsapp).toHaveAttribute('href', /wa\.me\/5598999991234\?text=/);
     await expect(whatsapp).toHaveAttribute('href', /1\.078%2C25/);
+    const photoRequestsBefore = requests.filter(
+      (item) => item.path.endsWith('/photo') && item.method === 'POST',
+    ).length;
+    await page.getByLabel('Selecionar foto do cliente').setInputFiles({
+      name: 'foto-grande.png',
+      mimeType: 'image/png',
+      buffer: Buffer.alloc(4 * 1024 * 1024 + 1),
+    });
+    await expect(page.getByRole('alert').filter({ hasText: 'até 4 MiB' })).toBeVisible();
+    expect(
+      requests.filter((item) => item.path.endsWith('/photo') && item.method === 'POST'),
+    ).toHaveLength(photoRequestsBefore);
     await page.getByLabel('Selecionar foto do cliente').setInputFiles({
       name: 'cliente.png',
       mimeType: 'image/png',

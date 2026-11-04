@@ -8,3 +8,10 @@ chaves
 node_modules
 **/node_modules
 *.log
+.tmp/
+test-results/
+playwright-report/
+integrated-test-results/
+integrated-playwright-report*.json
+docs/auditoria-*/evidencias-*/
+*-preview.png

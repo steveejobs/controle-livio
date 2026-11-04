@@ -1,0 +1,43 @@
+{
+  "dateUtc": "2026-11-04",
+  "baseSha": "5521a3f1cebe38e8d89b0ceef38db808c5154fc9",
+  "publishedSha": "b2aef448308603e46e2e427dca1b999b5731c876",
+  "branch": "validation/audit-stage2-20261104",
+  "pullRequest": "https://github.com/steveejobs/controle-livio/pull/3",
+  "qualityRun": "https://github.com/steveejobs/controle-livio/actions/runs/41808157317",
+  "qualityRunId": 41808157317,
+  "conclusion": "failure",
+  "jobs": {
+    "application": "success",
+    "synthetic-restore": "success",
+    "supabase-isolation": "failure"
+  },
+  "integratedBrowser": {
+    "focused": { "passed": 6, "failed": 0, "skipped": 0 },
+    "full": { "passed": 13, "failed": 1, "skipped": 0 },
+    "failedScenario": "receipt upload, partial payment, portal and settlement",
+    "failure": "SQLSTATE 42501: service_role lacks SELECT on payment_receipts",
+    "failureLocation": "real-browser.integrated.e2e.ts:3495",
+    "observedBeforeFailure": "First scheduled PIX: two confirmation attempts returned HTTP 400; database assertion did not execute",
+    "postgresLedgerDef003": "NOT_VERIFIED",
+    "otherPixStates": "NOT_EXECUTED",
+    "validPixPathInNewRun": "NOT_EXECUTED"
+  },
+  "otherDisposableChecks": {
+    "authRlsStorage": "PASS",
+    "localMailCapture": "PASS",
+    "clamavCleanEicarAndFailClosed": "PASS",
+    "receiptMigrationRolesRlsIdentifiers": "PASS",
+    "syntheticRestore": "PASS"
+  },
+  "artifactName": "integrated-supabase-browser-evidence",
+  "localCorrectionPrepared": {
+    "file": "apps/web/e2e/integrated/real-browser.integrated.e2e.ts",
+    "change": "Use guarded loopback PostgreSQL Prisma read for direct persisted receipt and allocation assertions",
+    "typecheck": "PASS",
+    "eslint": "PASS",
+    "integratedRerun": "NOT_EXECUTED",
+    "commit": "NONE",
+    "push": "NONE"
+  }
+}

@@ -2154,7 +2154,9 @@ export class FinanceService {
     } catch (error) {
       if (
         error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2034' &&
+        (error.code === 'P2034' ||
+          (error.code === 'P2010' &&
+            (error.meta?.code === '40001' || error.meta?.code === '40P01'))) &&
         attempt < 4
       )
         return this.withSerializableRetry(operation, attempt + 1);

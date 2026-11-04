@@ -1,5 +1,19 @@
 # Execução de QA integrado
 
+## Resultados locais fora do código
+
+Testes automatizados e ferramentas de QA são mantidos. Resultados, traces, screenshots e logs são temporários: usar `test-results/` (ignorado pelo Git e pelo upload Vercel) ou `%TEMP%`, nunca novas pastas de evidências em `docs`. Em 2026-11-01, resíduos antigos e cópias auxiliares de worktrees foram preservados em backup local privado antes da limpeza. A documentação histórica continua no projeto; seus caminhos antigos de artifacts são referências à execução original, não arquivos necessários ao runtime. Consulte `PROJECT_CONTEXT.md` para a localização do backup e a recuperação das candidatas sem commit.
+
+## Inventário funcional sem execução
+
+`inventory-functional-surface.mjs` usa o parser TypeScript local para listar controles JSX, opções, chamadas da web, rotas e declarações de autorização da API. Não lê `.env`, não conecta serviços e não executa o aplicativo. A presença de um controle ou nome de teste não comprova cobertura: os registros começam com `REQUIRES_REVIEW`. O inventário inclui declarações dinâmicas, não todas as instâncias geradas em execução.
+
+```powershell
+node tools/qa/inventory-functional-surface.mjs --output=docs/ativacao-2026-11-01/INVENTARIO_FUNCIONAL.json
+```
+
+O destino é opcional; sem ele, só imprime contagens. Não sobrescreve arquivo existente sem `--overwrite`. O JSON não deve receber dados de usuários, valores de campos ou segredos. Relacione a execução e suas limitações na matriz de cobertura antes de classificar qualquer função como aprovada.
+
 ## Memória local e testes sequenciais no Windows
 
 `configurar-memoria-windows.ps1` usa CIM e APIs locais do PowerShell para exibir RAM, commit, pagefile, disco e processos. `-Acao Configurar` só propõe pagefile C: de 8–14 GiB quando há pressão de commit, espaço suficiente e nenhum limite maior a preservar; salva os valores originais em `%LOCALAPPDATA%\LivioQA\Pagefile`. Se precisar de elevação, solicita UAC normal e nunca reinicia o computador. `-Acao Testar` executa os testes Vitest com um worker, lint e TypeScript em sequência; build/E2E só iniciam com margem de RAM maior. Os logs transitórios ficam em `%TEMP%` e são removidos ao terminar.
@@ -107,7 +121,7 @@ O harness não valida JWT, RLS nem o guard Nest; usa um ator sintético com perm
 $env:QA_ALLOW_SHARED_DATABASE_READ_BENCHMARK = 'true'
 $env:QA_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:CONFIRM_SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
-$env:QA_ARTIFACT_DIR = 'docs/auditoria-2026-10-27/evidencias-capacidade-concorrencia'
+$env:QA_ARTIFACT_DIR = 'test-results/qa/capacidade-concorrencia'
 node --env-file=.env tools/qa/inspect-prisma-pool.mjs
 node --env-file=.env tools/qa/benchmark-prisma-pool.mjs
 ```
@@ -135,8 +149,16 @@ $env:CONFIRM_SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:PRODUCTION_SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:QA_API_CONNECTION_LIMIT = '2'
-$env:QA_ARTIFACT_DIR = 'docs/auditoria-2026-10-27/evidencias-navegacao-pool2'
+$env:QA_ARTIFACT_DIR = 'test-results/qa/navegacao-pool2'
 node --env-file=.env --import tsx tools/qa/validate-pool2-navigation.ts
 ```
 
 O pool 2 fica candidato exclusivamente para uma instância local. Não configure Vercel até verificar o host e limite efetivos do `DATABASE_URL` publicado, o máximo de instâncias/concurrency da Function, limites de clientes/servidores do Supavisor e conexões utilizadas por outros serviços. `pg_stat_activity` conta conexões do PostgreSQL e não substitui os limites de clientes do pooler.
+
+### Captura SMTP descartável na CI
+
+O job integrado usa `prepare-local-supabase-ci.mjs --smtp-capture`. Esta opção explícita só é aceita no runner Linux GitHub, em checkout sem vínculo cloud e sem credenciais Supabase externas ou variáveis SMTP. Ela habilita o Mailpit local sem relay e grava `otp_expiry=60` somente no config do checkout descartável. O ensaio de restore continua sem e-mail.
+
+`verify-smtp-capture-ci.mjs` exige esse ambiente e destinos HTTP loopback nas portas 54321/54324/3010. Usa apenas conta aleatória `@example.test`, captura convite/recuperação via API Mailpit, verifica senha anterior/nova, uso único, destino permitido e expiração após 65 segundos reais. Não encaminha mensagens nem registra corpos, endereços, links ou tokens. O único artefato contém status e booleanos sanitizados.
+
+Escopo: transporte Auth → caixa local e consumo dos links pelo Auth. Não valida o provedor hospedado, a entrega externa, o template comercial nem a página SSR final (`frontendLandingVerified=false`). O callback web exige `code` ou `token_hash` + `type`; homologar templates compatíveis com ele antes da liberação, pois o fluxo padrão com tokens no fragmento da URL não pode ser lido pelo callback de servidor. Não alterar templates cloud nesta etapa.

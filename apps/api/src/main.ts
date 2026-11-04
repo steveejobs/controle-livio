@@ -32,7 +32,7 @@ async function bootstrap(): Promise<void> {
     ],
     origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
       if (!origin || origins.includes(origin)) return callback(null, true);
-      return callback(new Error('Origem não permitida pelo CORS'), false);
+      return callback(null, false);
     },
   });
   app.useGlobalPipes(

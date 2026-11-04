@@ -88,7 +88,7 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Start disposable Supabase and export loopback-only credentials
         id: supabase-start
-        run: node tools/qa/prepare-local-supabase-ci.mjs
+        run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
       - name: Start official ClamAV bound to runner loopback
         id: clamav-start
         run: node tools/qa/start-clamav-ci.mjs
@@ -100,6 +100,9 @@ jobs:
       - name: Test real Auth, PostgreSQL RLS and Storage isolation
         if: ${{ always() && steps.supabase-start.outcome == 'success' }}
         run: npm run test:supabase
+      - name: Verify invitation and recovery with local email capture
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: node tools/qa/verify-smtp-capture-ci.mjs
       - name: Run authenticated browser and workflow journeys
         if: ${{ always() && steps.supabase-start.outcome == 'success' && steps.clamav-start.outcome == 'success' }}
         run: node tools/qa/run-integrated-browser-ci.mjs
@@ -128,6 +131,7 @@ jobs:
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results/**
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results-focused/**
             ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/smtp-capture-validation.json
             ${{ runner.temp }}/livio-integrated-artifacts/receipt-migration-validation.json
             ${{ runner.temp }}/livio-integrated-artifacts/rate-limit-isolation.json
             ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log

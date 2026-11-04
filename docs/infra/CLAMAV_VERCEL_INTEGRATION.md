@@ -1,6 +1,6 @@
 # ClamAV: CI real e proposta para Vercel
 
-**Estado em 2026-10-30: implementação local preparada; scanner real ainda não executado nesta revisão.** Nenhum serviço cloud, variável de produção ou projeto Vercel foi alterado.
+**Atualização em 2026-11-01:** o scanner real passou nos testes integrados anteriores em CI descartável, incluindo arquivo limpo, EICAR e falhas bloqueadas. O ambiente Vercel Production ainda não possui `CLAMAV_HOST`; a API nova não foi publicada. `MAX_DOCUMENT_SIZE_MB` foi ajustado para 4 MiB no projeto API Production. A proposta de hospedagem abaixo continua pendente de infraestrutura e homologação. O texto de 2026-10-30 descreve a configuração inicial do CI.
 
 ## CI isolado
 

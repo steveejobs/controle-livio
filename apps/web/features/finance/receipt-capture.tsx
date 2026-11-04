@@ -1,10 +1,12 @@
 'use client';
 
 import { useState, type FormEvent } from 'react';
+import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
 import { ApiError, api } from '../../lib/api';
 import { formatMoney } from '../shared/format';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
+import { getDocumentUploadSizeError } from '../shared/document-upload-limit';
 
 type Field = {
   value: string;
@@ -355,6 +357,11 @@ export function ReceiptCapture({
     const form = new FormData(event.currentTarget);
     const file = form.get('file');
     if (!(file instanceof File) || !file.size) return;
+    const sizeError = getDocumentUploadSizeError(file.size);
+    if (sizeError) {
+      setFeedback(`Erro: ${sizeError}`);
+      return;
+    }
     setBusy(true);
     setFeedback('Verificando segurança e lendo o comprovante…');
     try {
@@ -377,6 +384,7 @@ export function ReceiptCapture({
   return (
     <div className="stack-form">
       <form onSubmit={upload} className="stack-form">
+        <p>Limite do arquivo: {MAX_DOCUMENT_UPLOAD_SIZE_MB} MiB.</p>
         <label>
           Anexar comprovante e identificar pagamento
           <input
@@ -385,6 +393,17 @@ export function ReceiptCapture({
             accept="application/pdf,image/jpeg,image/png"
             required
             disabled={busy || !(installmentId || expenseId)}
+            onChange={(event) => {
+              const selected = event.currentTarget.files?.[0];
+              if (!selected) return;
+              const selectedSizeError = getDocumentUploadSizeError(selected.size);
+              if (selectedSizeError) {
+                event.currentTarget.value = '';
+                setFeedback(`Erro: ${selectedSizeError}`);
+              } else {
+                setFeedback(undefined);
+              }
+            }}
           />
         </label>
         <button className="secondary" disabled={busy || !(installmentId || expenseId)}>
@@ -393,7 +412,7 @@ export function ReceiptCapture({
       </form>
       {feedback && (
         <p
-          role="status"
+          role={feedback.startsWith('Erro:') ? 'alert' : 'status'}
           className={feedback.startsWith('Erro:') ? 'notice notice-error' : 'notice notice-success'}
         >
           {feedback}

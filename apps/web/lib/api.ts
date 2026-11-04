@@ -176,15 +176,27 @@ export async function downloadApiFile(path: string, fileName: string): Promise<v
   if (!response.ok) throw await responseError(response);
 
   const objectUrl = URL.createObjectURL(await response.blob());
+  let link: HTMLAnchorElement | undefined;
   try {
-    const link = document.createElement('a');
+    link = document.createElement('a');
     link.href = objectUrl;
     link.download = fileName;
     link.rel = 'noopener';
+    link.hidden = true;
+    document.body.append(link);
     link.click();
-  } finally {
+  } catch (error) {
+    link?.remove();
     URL.revokeObjectURL(objectUrl);
+    throw error;
   }
+  // The browser consumes the blob asynchronously after dispatching the click.
+  // Keep the URL alive until a later task instead of invalidating it immediately.
+  const releaseDelayMs = 1000;
+  setTimeout(() => {
+    link?.remove();
+    URL.revokeObjectURL(objectUrl);
+  }, releaseDelayMs);
 }
 
 export async function resetApiSession() {

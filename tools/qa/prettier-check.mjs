@@ -1,10 +1,10 @@
 import { execFileSync, spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import * as prettier from 'prettier';
 
 const tracked = execFileSync('git', ['ls-files', '--cached', '-z'], { encoding: 'utf8' })
   .split('\0')
-  .filter(Boolean);
+  .filter((file) => file && existsSync(file));
 const dirtyContext =
   spawnSync('git', ['diff', '--quiet', '--', 'PROJECT_CONTEXT.md'], { stdio: 'ignore' }).status ===
   1;

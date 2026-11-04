@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 4;
+export const MAX_CLIENT_PHOTO_SIZE_MB = MAX_DOCUMENT_UPLOAD_SIZE_MB;
 
 const postgresqlUrl = z
   .string()
@@ -46,6 +47,17 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
       .min(1)
       .max(MAX_DOCUMENT_UPLOAD_SIZE_MB)
       .default(MAX_DOCUMENT_UPLOAD_SIZE_MB),
+    CLAMAV_GATEWAY_URL: z
+      .string()
+      .url()
+      .refine((value) => {
+        const url = new URL(value);
+        return (
+          url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+        );
+      })
+      .optional(),
+    CLAMAV_GATEWAY_TOKEN: z.string().min(32).optional(),
     CLAMAV_HOST: z.string().min(1).optional(),
     CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3310),
     CLAMAV_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(10_000),

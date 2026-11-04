@@ -1,5 +1,7 @@
+import { scanHttps } from './scanner-https';
 import { createConnection } from 'node:net';
 import {
+  Inject,
   Injectable,
   ServiceUnavailableException,
   UnprocessableEntityException,
@@ -32,6 +34,7 @@ function ocrContainsEicarSignature(ocrText: Buffer): boolean {
 export class DocumentScannerService {
   constructor(
     private readonly config: ConfigService<ApiEnvironment, true>,
+    @Inject(PdfContentInspectionService)
     private readonly pdfInspector = new PdfContentInspectionService(),
   ) {}
 
@@ -40,8 +43,9 @@ export class DocumentScannerService {
     const isLocalTest =
       environment === 'test' && this.config.get('SUPABASE_LOCAL', { infer: true });
     const host = this.config.get('CLAMAV_HOST', { infer: true });
-    if (isLocalTest && !host) return;
-    if (!host) throw new ServiceUnavailableException('A varredura de segurança está indisponível.');
+    if (isLocalTest && !host && !this.config.get('CLAMAV_GATEWAY_URL', { infer: true })) return;
+    if (!host && !this.config.get('CLAMAV_GATEWAY_URL', { infer: true }))
+      throw new ServiceUnavailableException('A varredura de segurança está indisponível.');
 
     await this.scanBuffer(file, host);
     if (mimeType !== 'application/pdf') return;
@@ -70,7 +74,15 @@ export class DocumentScannerService {
       await this.scanBuffer(Buffer.from(eicarTestSignature, 'ascii'), host);
   }
 
-  private async scanBuffer(file: Buffer, host: string): Promise<void> {
+  private async scanBuffer(file: Buffer, host: string | undefined): Promise<void> {
+    const gateway = this.config.get('CLAMAV_GATEWAY_URL', { infer: true });
+    if (gateway)
+      return scanHttps(
+        file,
+        gateway,
+        this.config.get('CLAMAV_GATEWAY_TOKEN', { infer: true }) ?? '',
+        this.config.get('CLAMAV_TIMEOUT_MS', { infer: true }),
+      );
     const port = this.config.get('CLAMAV_PORT', { infer: true });
     const timeoutMs = this.config.get('CLAMAV_TIMEOUT_MS', { infer: true });
     await new Promise<void>((resolve, reject) => {
@@ -87,9 +99,10 @@ export class DocumentScannerService {
         if (settled) return;
         settled = true;
         socket.destroy();
-        if (/\bOK\s*$/.test(value)) {
+        const verdict = value.trim();
+        if (/^stream:\s+OK$/.test(verdict)) {
           resolve();
-        } else if (/\bFOUND\s*$/.test(value)) {
+        } else if (/^stream:\s+.+\s+FOUND$/.test(verdict)) {
           reject(
             new UnprocessableEntityException(
               'O arquivo foi bloqueado pela verificação de segurança.',

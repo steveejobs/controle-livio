@@ -155,7 +155,6 @@ const restoreArguments = (target, restoreList, archive) => [
   target,
   '--exit-on-error',
   '--no-owner',
-  ...excludedSchedulerSchemas.flatMap((schema) => ['--exclude-schema', schema]),
   '--use-list',
   restoreList,
   archive,
@@ -281,10 +280,8 @@ assert(
 );
 assert(restorePlanFixture.includes('--no-owner'), 'Restore must use the disposable runner owner');
 assert(
-  restorePlanFixture.includes('--exclude-schema') &&
-    restorePlanFixture.includes('cron') &&
-    restorePlanFixture.includes('net'),
-  'Restore must exclude both scheduler schemas using pg_restore schema filters',
+  !restorePlanFixture.includes('--exclude-schema'),
+  'The curated TOC must retain non-scheduler grants during the restore',
 );
 assert.deepEqual(
   dockerExecArguments('supabase_db_livio-legal-crm', restorePlanFixture),
@@ -385,7 +382,7 @@ assert.equal(
   0,
   `pg_restore --exclude-schema left entries for absent scheduler schemas: ${JSON.stringify(tocEvidence.schemaReferencesRemainingAfterNativeFilter)}`,
 );
-const toc = filterUnsupportedTocEntries(schemaFilteredToc, tocOwners).join('\n');
+const toc = filterUnsupportedTocEntries(sourceToc, tocOwners).join('\n');
 writeFileSync(join(evidenceDirectory, 'schema-filtered-archive-toc.txt'), `${toc}\n`);
 const residualUnsupportedReferences = toc
   .split('\n')
@@ -451,12 +448,12 @@ assert.equal(
   'The number of scheduler default ACL rows excluded differs from the expected archive inventory',
 );
 const effectiveRestoreArgs = restoreArguments(target, restoreList, archive);
-for (const requiredFlag of ['--no-owner', '--exclude-schema', '--use-list'])
+for (const requiredFlag of ['--no-owner', '--use-list'])
   assert(effectiveRestoreArgs.includes(requiredFlag), `Restore plan is missing ${requiredFlag}`);
 assert(!effectiveRestoreArgs.includes('--no-acl'), 'Restore must preserve source ACL statements');
 assert(
-  excludedSchedulerSchemas.every((schema) => effectiveRestoreArgs.includes(schema)),
-  'Restore plan must exclude cron and net schemas using pg_restore native filters',
+  !effectiveRestoreArgs.includes('--exclude-schema'),
+  'The curated restore list must be the only object filter so non-scheduler grants remain',
 );
 writeCheckpoint({
   targetDatabase: target,
@@ -697,7 +694,11 @@ assert.equal(restoreExecutorRole, 'supabase_admin', 'Restore must run as supabas
 const roleSessionChecks = ['supabase_admin', 'anon', 'authenticated', 'service_role'].map(
   (role) => {
     const currentRole = sql(target, `SET ROLE "${role}"; SELECT current_user; RESET ROLE`);
-    assert.equal(currentRole, role, `Restore target could not set and use role ${role}`);
+    assert.deepEqual(
+      currentRole.split('\n'),
+      ['SET', role, 'RESET'],
+      `Restore target could not set and use role ${role}`,
+    );
     return { role, canAssumeSessionRole: true, observedCurrentUser: currentRole };
   },
 );
@@ -736,18 +737,39 @@ assert.deepEqual(
   `Restored grants/default ACLs differ after owner mapping: ${JSON.stringify(grantSemanticComparison)}`,
 );
 
+const authenticatedTablePrivileges = (database) =>
+  sql(
+    database,
+    `SELECT COALESCE(string_agg(
+       c.relname || ':' ||
+       has_table_privilege('authenticated', c.oid, 'SELECT')::text || ':' ||
+       has_table_privilege('authenticated', c.oid, 'INSERT')::text || ':' ||
+       has_table_privilege('authenticated', c.oid, 'UPDATE')::text || ':' ||
+       has_table_privilege('authenticated', c.oid, 'DELETE')::text,
+       E'\\n' ORDER BY c.relname), '')
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')`,
+  );
+assert.equal(
+  authenticatedTablePrivileges(target),
+  authenticatedTablePrivileges('postgres'),
+  'Restored authenticated table privileges differ from the source',
+);
 assert.equal(
   sql(
     target,
     `SELECT count(*)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
-       AND NOT (has_table_privilege('authenticated', c.oid, 'SELECT')
-         AND has_table_privilege('authenticated', c.oid, 'INSERT')
-         AND has_table_privilege('authenticated', c.oid, 'UPDATE')
-         AND has_table_privilege('authenticated', c.oid, 'DELETE'))`,
+       AND (has_table_privilege('anon', c.oid, 'SELECT')
+         OR has_table_privilege('anon', c.oid, 'INSERT')
+         OR has_table_privilege('anon', c.oid, 'UPDATE')
+         OR has_table_privilege('anon', c.oid, 'DELETE')
+         OR has_table_privilege('anon', c.oid, 'TRUNCATE')
+         OR has_table_privilege('anon', c.oid, 'REFERENCES')
+         OR has_table_privilege('anon', c.oid, 'TRIGGER'))`,
   ),
   '0',
-  'Authenticated application table privileges are incomplete',
+  'Anonymous role received a direct application table privilege',
 );
 assert.equal(
   sql(
@@ -926,7 +948,7 @@ const structureSnapshot = (database) =>
     `SELECT COALESCE(string_agg(entry, E'\\n' ORDER BY entry), '') FROM (
       SELECT 'COLUMN:' || c.relname || ':' || a.attnum::text || ':' || a.attname || ':' ||
         format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text || ':' ||
-        COALESCE(pg_get_expr(d.adbin, d.adrelid), '') || ':' || a.attidentity || ':' || a.attgenerated AS entry
+        COALESCE(pg_get_expr(d.adbin, d.adrelid), '') || ':' || a.attidentity::text || ':' || a.attgenerated::text AS entry
       FROM pg_attribute a
       JOIN pg_class c ON c.oid = a.attrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -947,13 +969,13 @@ const structureSnapshot = (database) =>
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public'
       UNION ALL
-      SELECT 'TRIGGER:' || c.relname || ':' || t.tgname || ':' || pg_get_triggerdef(t.oid, true) || ':' || t.tgenabled
+      SELECT 'TRIGGER:' || c.relname || ':' || t.tgname || ':' || pg_get_triggerdef(t.oid, true) || ':' || t.tgenabled::text
       FROM pg_trigger t
       JOIN pg_class c ON c.oid = t.tgrelid
       JOIN pg_namespace n ON n.oid = c.relnamespace
       WHERE n.nspname = 'public' AND NOT t.tgisinternal
       UNION ALL
-      SELECT 'POLICY:' || c.relname || ':' || p.polname || ':' || p.polcmd || ':' ||
+      SELECT 'POLICY:' || c.relname || ':' || p.polname || ':' || p.polcmd::text || ':' ||
         (SELECT COALESCE(string_agg(COALESCE(r.rolname, 'PUBLIC'), ',' ORDER BY COALESCE(r.rolname, 'PUBLIC')), '')
          FROM unnest(p.polroles) AS roles(role_oid)
          LEFT JOIN pg_roles r ON r.oid = roles.role_oid) || ':' ||
@@ -970,9 +992,45 @@ const structureSnapshot = (database) =>
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
     ) objects`,
   );
-assert.equal(
-  structureSnapshot(target),
-  structureSnapshot('postgres'),
+const reparsedCheckConstraints = new Set([
+  'CONSTRAINT:document_signing_requests:document_signing_requests_status_check',
+  'CONSTRAINT:payment_receipts:payment_receipts_status_check',
+  'CONSTRAINT:service_catalog_items:service_catalog_items_area_check',
+]);
+const normalizeStructureEntry = (entry) => {
+  const constraintName = entry.split(':', 3).join(':');
+  if (!reparsedCheckConstraints.has(constraintName)) return entry;
+  // pg_restore reparses these three varchar-array CHECKs and moves the implicit text cast
+  // from the array to each element. Preserve strict comparison for every other object.
+  return entry
+    .replaceAll('::character varying::text', '::character varying')
+    .replaceAll(']::text[]', ']');
+};
+const sourceStructure = structureSnapshot('postgres')
+  .split('\n')
+  .filter(Boolean)
+  .map(normalizeStructureEntry);
+const recoveredStructure = structureSnapshot(target)
+  .split('\n')
+  .filter(Boolean)
+  .map(normalizeStructureEntry);
+const sourceStructureSet = new Set(sourceStructure);
+const recoveredStructureSet = new Set(recoveredStructure);
+const structureComparison = {
+  sourceEntries: sourceStructure.length,
+  recoveredEntries: recoveredStructure.length,
+  missing: sourceStructure.filter((entry) => !recoveredStructureSet.has(entry)),
+  unexpected: recoveredStructure.filter((entry) => !sourceStructureSet.has(entry)),
+};
+writeCheckpoint({ structureComparison });
+assert.deepEqual(
+  structureComparison,
+  {
+    sourceEntries: sourceStructure.length,
+    recoveredEntries: sourceStructure.length,
+    missing: [],
+    unexpected: [],
+  },
   'Recovered structure differs',
 );
 const databaseOwner = sql(

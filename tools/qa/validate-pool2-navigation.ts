@@ -24,8 +24,7 @@ const required = (name: string) => {
   return value;
 };
 const runId = `${Date.now()}-${randomBytes(3).toString('hex')}`;
-const artifactDir =
-  process.env.QA_ARTIFACT_DIR ?? 'docs/auditoria-2026-10-27/evidencias-navegacao-pool2';
+const artifactDir = process.env.QA_ARTIFACT_DIR ?? 'test-results/qa/navegacao-pool2';
 const outputPath = join(artifactDir, `qa-navigation-pool2-${runId}.json`);
 const apiLogPath = join(artifactDir, `qa-navigation-api-${runId}.log`);
 const webLogPath = join(artifactDir, `qa-navigation-web-${runId}.log`);

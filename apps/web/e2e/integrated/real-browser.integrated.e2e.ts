@@ -277,12 +277,12 @@ async function screenshotEvidence(page: Page, name: string) {
 }
 
 async function expectOperationFeedback(page: Page, message: string) {
-  const statuses = page.getByRole('status');
+  const feedback = page.getByRole('status').or(page.getByRole('alert'));
   try {
     await expect
       .poll(
         async () =>
-          (await statuses.allTextContents()).filter((text) => text.trim() === message).length,
+          (await feedback.allTextContents()).filter((text) => text.trim() === message).length,
       )
       .toBe(1);
   } catch (error) {
@@ -300,9 +300,9 @@ async function expectOperationFeedback(page: Page, message: string) {
     }
     throw error;
   }
-  const statusTexts = await statuses.allTextContents();
-  const exactIndex = statusTexts.findIndex((text) => text.trim() === message);
-  await expect(statuses.nth(exactIndex)).toHaveText(message);
+  const feedbackTexts = await feedback.allTextContents();
+  const exactIndex = feedbackTexts.findIndex((text) => text.trim() === message);
+  await expect(feedback.nth(exactIndex)).toHaveText(message);
   const trace = currentOperationTrace.get(page);
   if (trace) {
     trace.events.push({
@@ -2873,25 +2873,38 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
       const oversizedForm = await formWithSubmitButton(page, 'Enviar documento');
       await oversizedForm.getByLabel('Nome do documento').fill(oversizedTitle);
       await oversizedForm.getByLabel('Visibilidade').selectOption('INTERNAL');
-      await oversizedForm.getByLabel('Arquivo').setInputFiles({
+      const oversizedInput = oversizedForm.getByLabel('Arquivo');
+      const oversizedBytes = Buffer.alloc(4 * 1024 * 1024 + 1, 0x41);
+      await oversizedInput.setInputFiles({
         name: `large-${suffix}.pdf`,
         mimeType: 'application/pdf',
-        buffer: Buffer.alloc(4 * 1024 * 1024 + 1, 0x41),
+        buffer: oversizedBytes,
       });
-      const oversizedResponse = await clickUiOperation(page, {
-        operation: 'reject-oversized-document-upload',
-        pathname: '/v1/documents',
-        expectedContentType: 'multipart/form-data',
-        form: oversizedForm,
-        button: oversizedForm.getByRole('button', { name: 'Enviar documento' }),
-        bodyField: { name: 'title', value: oversizedTitle },
+      await expectOperationFeedback(page, 'Erro: O arquivo excede o limite de 4 MiB.');
+      await expect(oversizedInput).toHaveValue('');
+
+      const accessToken = await browserAccessToken(page);
+      expect(accessToken).toBeTruthy();
+      const oversizedResponse = await page.request.post(`${apiBase}/documents`, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'X-Organization-Id': organizationA,
+        },
+        multipart: {
+          title: oversizedTitle,
+          visibility: 'INTERNAL',
+          file: {
+            name: `large-${suffix}.pdf`,
+            mimeType: 'application/pdf',
+            buffer: oversizedBytes,
+          },
+        },
       });
       expect(oversizedResponse.status()).toBe(413);
       expect(await oversizedResponse.json()).toMatchObject({
         code: 'payload_too_large',
         message: 'A requisição excede o limite de upload.',
       });
-      await expectOperationFeedback(page, 'Erro: A requisição excede o limite de upload.');
       await expect(page.getByRole('row').filter({ hasText: oversizedTitle })).toHaveCount(0);
 
       if (
@@ -2985,7 +2998,7 @@ test('jornada 4: upload, download protegido e assinatura eletrônica no navegado
           if (recoveryResponse.status() === 201) {
             const document = (await recoveryResponse.json()) as { id: string; title: string };
             expect(document.title).toBe(recoveryTitle);
-            await expectOperationFeedback(page, 'Documento enviado com seguranÃ§a.');
+            await expectOperationFeedback(page, 'Documento enviado com segurança.');
             await expect(page.getByRole('row').filter({ hasText: recoveryTitle })).toBeVisible();
             const persistedResponse = await browserApi(page, '/documents?page=1&pageSize=100');
             assertStatus(persistedResponse, 200, 'confirm upload after ClamAV recovery');
@@ -3425,6 +3438,69 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       );
       await paymentForm.getByLabel('Parcela').selectOption(installmentId);
       const upload = await formWithSubmitButton(financePage, 'Enviar e conferir comprovante');
+      // Stage 2: verify the persisted ledger, not only an HTTP rejection.
+      if (!storageAdminKey || !loopbackHosts.has(new URL(supabaseUrl).hostname))
+        throw new Error('Stage 2 requires disposable loopback Supabase.');
+      const database = createClient(supabaseUrl, storageAdminKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      for (const operationState of [
+        'agendado',
+        'pendente',
+        'cancelado',
+        'devolvido',
+        'parcialmente devolvido',
+      ]) {
+        const pdf = await PDFDocument.create();
+        const sheet = pdf.addPage([500, 300]);
+        sheet.drawText(`PIX ${operationState}`, { x: 20, y: 250, size: 18 });
+        sheet.drawText('Valor pago: R$ 25,00', { x: 20, y: 210, size: 18 });
+        sheet.drawText('Data do pagamento: 29/10/2026', { x: 20, y: 170, size: 18 });
+        await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
+          name: `estado-${operationState}.pdf`,
+          mimeType: 'application/pdf',
+          buffer: Buffer.from(await pdf.save()),
+        });
+        const responsePromise = financePage.waitForResponse(
+          (response) =>
+            new URL(response.url()).pathname === '/v1/finance/receipts' &&
+            response.request().method() === 'POST',
+        );
+        await upload.getByRole('button', { name: 'Enviar e conferir comprovante' }).click();
+        const response = await responsePromise;
+        expect(response.status()).toBe(201);
+        const receipt = (await response.json()) as { id: string };
+        for (let retry = 0; retry < 2; retry += 1) {
+          const confirmation = await browserApi(
+            financePage,
+            `/finance/receipts/${receipt.id}/confirm`,
+            {
+              method: 'POST',
+              body: {
+                amount: '25.00',
+                paidAt: '2026-10-29T15:00:00Z',
+                method: 'PIX',
+                reference: `BLOCK-${suffix}`,
+                correctionReason: 'Revisão sintética',
+              },
+            },
+          );
+          assertStatus(confirmation, 400, `non-settlement-${operationState}`);
+        }
+        const stored = await database
+          .from('payment_receipts')
+          .select('status,payment_id')
+          .eq('id', receipt.id)
+          .single();
+        expect(stored.error).toBeNull();
+        expect(stored.data).toEqual({ status: 'PENDING_REVIEW', payment_id: null });
+        const allocations = await database
+          .from('payment_allocations')
+          .select('id')
+          .eq('installment_id', installmentId);
+        expect(allocations.error).toBeNull();
+        expect(allocations.data).toEqual([]);
+      }
       const storageBeforeInfected = await storageObjectInventory(organizationA);
       await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
         name: `recibo-infectado-${suffix}.pdf`,

@@ -1,11 +1,12 @@
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1']);
+const smtpCapture = process.argv.includes('--smtp-capture');
 const serviceExcludes = [
   'studio',
   'imgproxy',
-  'mailpit',
+  ...(smtpCapture ? [] : ['mailpit']),
   'realtime',
   'edge-runtime',
   'logflare',
@@ -28,6 +29,19 @@ if (process.env.SUPABASE_ACCESS_TOKEN || process.env.SUPABASE_DB_PASSWORD) {
 }
 if (existsSync('supabase/.temp/project-ref')) {
   fail('há um vínculo local com projeto Supabase; o job exige uma stack sem vínculo cloud.');
+}
+
+if (smtpCapture) {
+  if (Object.keys(process.env).some((key) => key.startsWith('SMTP_')))
+    fail('a captura não aceita configuração SMTP externa.');
+  const config = readFileSync('supabase/config.toml', 'utf8');
+  if (!config.includes('[auth.email]') || /otp_expiry\s*=/.test(config))
+    fail('a configuração de expiração temporária precisa ser revisada.');
+  // Explicit opt-in, after runner/unlinked guards; only this disposable checkout changes.
+  writeFileSync(
+    'supabase/config.toml',
+    config.replace('[auth.email]', '[auth.email]\notp_expiry = 60'),
+  );
 }
 
 function runSupabase(args, capture = false) {
@@ -89,6 +103,9 @@ databaseUrl.searchParams.set('connection_limit', '4');
 databaseUrl.searchParams.set('pool_timeout', '10');
 
 const environment = {
+  ...(smtpCapture
+    ? { LIVIO_MAILPIT_URL: 'http://127.0.0.1:54324', LIVIO_AUTH_OTP_EXPIRY_SECONDS: '60' }
+    : {}),
   API_PORT: '3001',
   CORS_ORIGINS: 'http://127.0.0.1:3010',
   DATABASE_URL: databaseUrl.toString(),
@@ -127,4 +144,9 @@ for (const [key, value] of Object.entries(environment)) {
 runSupabase(['--yes', 'db', 'reset', '--local']);
 console.log('Supabase local pronto: Postgres, Auth, PostgREST e Storage em loopback.');
 console.log('Migrations versionadas e seed sintético aplicados somente com --local.');
-console.log('Serviços de e-mail, realtime, Studio e serviços não usados ficaram desligados.');
+console.log(
+  smtpCapture
+    ? 'Mailpit local de captura habilitado, sem relay externo; OTP temporário de 60 segundos.'
+    : 'Serviço de e-mail desligado.',
+);
+console.log('Realtime, Studio e serviços não usados ficaram desligados.');

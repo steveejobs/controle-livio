@@ -50,7 +50,7 @@ estorno e novo pagamento, na mesma transação e com auditoria.
 
 ## Service role
 
-Fotos de clientes ficam no bucket privado `client-photos`, sem policies de acesso direto para o navegador. A API exige organização e `clients:view` para emitir URL assinada por cinco minutos; upload e remoção exigem `clients:update`, verificam assinatura JPG/PNG/WebP, limitam o arquivo a 5 MB e registram auditoria. O link temporário pode permanecer válido até expirar depois de a foto ser trocada ou removida. Mensagens de cobrança pelo WhatsApp são montadas no navegador a partir do saldo consultado; abrir a conversa não equivale a envio confirmado.
+Fotos de clientes ficam no bucket privado `client-photos`, sem policies de acesso direto para o navegador. A API exige organização e `clients:view` para emitir URL assinada por cinco minutos; upload e remoção exigem `clients:update`, verificam assinatura JPG/PNG/WebP, limitam o arquivo a 4 MiB e registram auditoria. O limite alinhado ao transporte Vercel está corrigido localmente após a candidata `8ac9dbc`, ainda sem publicação. O link temporário pode permanecer válido até expirar depois de a foto ser trocada ou removida. Mensagens de cobrança pelo WhatsApp são montadas no navegador a partir do saldo consultado; abrir a conversa não equivale a envio confirmado.
 
 `SUPABASE_SERVICE_ROLE_KEY` é obrigatória somente no servidor para Storage administrativo, convites e
 bootstrap. Nunca aparece em variável `NEXT_PUBLIC_`, resposta, HTML, bundle ou log. A API não usa essa
