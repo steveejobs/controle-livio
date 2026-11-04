@@ -3441,6 +3441,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       );
       await paymentForm.getByLabel('Parcela').selectOption(installmentId);
       const upload = await formWithSubmitButton(financePage, 'Enviar e conferir comprovante');
+      const blockedReceiptIds: string[] = [];
       // Stage 2: verify the persisted ledger, not only an HTTP rejection.
       const databaseUrl = process.env.DATABASE_URL;
       if (
@@ -3540,6 +3541,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
           const response = await responsePromise;
           expect(response.status()).toBe(201);
           const receipt = (await response.json()) as { id: string };
+          blockedReceiptIds.push(receipt.id);
           const before = await readLedger(receipt.id);
           expect(before).toMatchObject({
             receiptStatus: 'PENDING_REVIEW',
@@ -3622,6 +3624,7 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       expect(uploadedResponse.request().postData()).toContain(installmentId);
       const partialReceipt = (await uploadedResponse.json()) as {
         id: string;
+        documentId: string;
         installmentId: string;
         clientId: string;
       };
@@ -3630,22 +3633,54 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
         clientId: clientA,
       });
       const preview = financePage.getByRole('region', { name: 'Conferência do comprovante' });
+      await expect(preview).toContainText(`recibo-parcial-${suffix}.pdf`);
       await expect(preview).toContainText('R$ 33,34');
       await expect(preview).toContainText('R$ 66,66');
       const partial = financePage.waitForResponse((response) =>
         /\/v1\/finance\/receipts\/[a-f0-9-]+\/confirm$/.test(new URL(response.url()).pathname),
       );
       await preview.getByRole('button', { name: 'Confirmar pagamento' }).click();
-      expect((await partial).status()).toBe(201);
+      const partialConfirmation = await partial;
+      expect(partialConfirmation.status()).toBe(201);
+      expect(new URL(partialConfirmation.url()).pathname).toBe(
+        `/v1/finance/receipts/${partialReceipt.id}/confirm`,
+      );
       const partialDatabase = new PrismaClient();
       try {
         const receipt = await partialDatabase.paymentReceipt.findFirst({
           where: { id: partialReceipt.id, organizationId: organizationA, installmentId },
-          select: { status: true, paymentId: true, reviewHistory: true },
+          select: {
+            status: true,
+            paymentId: true,
+            reviewHistory: true,
+            documentId: true,
+            document: { select: { title: true, paymentId: true } },
+          },
         });
         expect(receipt?.status).toBe('CONFIRMED');
         expect(receipt?.paymentId).toBeTruthy();
+        expect(receipt?.documentId).toBe(partialReceipt.documentId);
+        expect(receipt?.document.title).toContain(`recibo-parcial-${suffix}.pdf`);
+        expect(receipt?.document.paymentId).toBe(receipt?.paymentId);
         expect(receipt?.reviewHistory).toHaveLength(1);
+        const blocked = await partialDatabase.paymentReceipt.findMany({
+          where: { organizationId: organizationA, id: { in: blockedReceiptIds } },
+          select: { status: true, paymentId: true, reviewHistory: true },
+        });
+        expect(blocked).toHaveLength(5);
+        for (const item of blocked) {
+          expect(item.status).toBe('PENDING_REVIEW');
+          expect(item.paymentId).toBeNull();
+          expect(item.reviewHistory).toHaveLength(0);
+        }
+        expect(
+          await partialDatabase.payment.count({
+            where: {
+              organizationId: organizationA,
+              idempotencyKey: { in: blockedReceiptIds.map((id) => `receipt:${id}`) },
+            },
+          }),
+        ).toBe(0);
         const payment = await partialDatabase.payment.findFirst({
           where: { id: receipt!.paymentId!, organizationId: organizationA, clientId: clientA },
           select: { amount: true },
