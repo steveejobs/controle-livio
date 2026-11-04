@@ -3429,7 +3429,11 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       };
       await navigateTo(financePage, /Receb/);
       await financePage.getByRole('button', { name: 'Receber pagamento' }).click();
-      const paymentForm = await formWithSubmitButton(financePage, 'Confirmar pagamento');
+      const paymentForm = financePage
+        .getByRole('textbox', { name: 'Referência do pagamento', exact: true })
+        .locator('xpath=ancestor::form');
+      await expect(paymentForm).toHaveCount(1);
+      await expect(paymentForm).toBeVisible();
       await selectFormOptionByLabel(
         financePage,
         paymentForm,
@@ -3677,7 +3681,9 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
         label: 'usuário sem vínculo não acessa os metadados do comprovante',
       });
       expect(JSON.stringify(forbiddenRead.body)).not.toContain(partialReceipt.documentId);
-      const preview = financePage.getByRole('region', { name: 'Conferência do comprovante' });
+      const preview = upload
+        .locator('xpath=..')
+        .getByRole('region', { name: 'Conferência do comprovante' });
       await expect(preview).toContainText(`recibo-parcial-${suffix}.pdf`);
       await expect(preview).toContainText('R$ 33,34');
       await expect(preview).toContainText('R$ 66,66');
