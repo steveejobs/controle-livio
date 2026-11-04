@@ -1,5 +1,16 @@
 # Contexto vivo do projeto Lívio
 
+## Etapa 3 financeira — 2026-11-04, somente alterações locais
+
+- HEAD versionado `20646dc2de791df88933996531852133cc462027`, branch `validation/audit-stage2-20261104`, worktree isolado `controle-livio-audit-stage2-validation-20261104`. O checkout principal em `af41f4c` tem conflitos preexistentes e foi somente lido; candidata HTTPS não transportada.
+- Quality histórico `41850303146` PASS nos três jobs, 277 unitários, 35 Playwright simulados, 6/6 focados e 14/14 completos, comprovantes 360/1440 com PostgreSQL descartável. Não comprova hospedagem nem o diff local da etapa 3. Relatório preservado em `docs/auditoria-2026-11-04/ETAPA_2_9.md`.
+- DEF-006: renegociação aceitava origem CANCELLED/WRITTEN_OFF e criava nova cobrança na reprodução de domínio; guarda local adicionada, duas regressões vermelhas antes e cinco verdes depois. DEF-007: remoção Storage ignorava erro retornado pelo SDK; agora propaga indisponibilidade, uma regressão vermelha antes e duas verdes depois. Persistência real/compensação dessas mudanças ainda não executadas.
+- Vitest local 284/284, suporte do harness 16/16, lint, TypeScript, Prisma e builds PASS. Formatação/diff/hashes finais em `VALIDACAO_ETAPA3.json`. Descoberta Playwright lista 15 testes, não equivale à execução.
+- Preparados 30 casos reais de concorrência, estornos, despesas, falhas, relatórios e autorização para o Quality existente, sem mudança de workflow. Duas organizações e usuários sintéticos próprios, URLs loopback, ausência de dotenv, barreira PostgreSQL com transações comprovadamente bloqueadas e evidência sanitizada por cenário. Nenhum deles recebeu PASS de banco nesta execução: faltam Docker/servidor local e autorização para publicar no runner.
+- RISK-FIN-RLS-001: potencial bypass econômico por UPDATE PostgREST de financeiro. Policies usam permissão granular enquanto a API impõe administrador/separação de funções. Reprodução PostgreSQL preparada, ainda não executada; nenhuma migration/policy alterada. Proposta de revisão separada antes de qualquer correção de alcance maior.
+- Catálogo cumulativo preserva 213 candidatos; 71 financeiros mapeados a 28 funções: 16 PARTIAL e 12 NOT_EXECUTED. Total global único permanece indeterminado. Detalhes em `ETAPA_3_FINANCEIRO.md`, catálogo e matriz complementar.
+- Nenhum commit, push, workflow manual, merge, deploy, migration remota, mudança Vercel/Supabase ou uso de documento real. Próximo passo é revisão/autorização específica da rodada consolidada descartável, começando pelo risco RLS. Production continua NO-GO; infraestrutura hospedada e aceite permanecem pendentes.
+
 ## Homologação RC concluída no Actions — 2026-10-29
 
 - Commit testado: `c943da129d1972f2f6da7321650f0a9c2841677d`, branch

@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { parseIdentificationText } from './identification-reader';
 
 describe('leitura de dados de documento', () => {
+  it.each([
+    ['RG: MG-1234567\nSSP/MG', 'MG-1234567'],
+    ['CPF: 529.982.247-25\nRG: 12.345.678-X', '12.345.678-X'],
+    ['REGISTRO GERAL\n1234567\nSSP/MA', '1234567'],
+    ['RG:\nSSP/MA', undefined],
+    ['RG:\nILEGIVEL', undefined],
+  ])('preserva o número ou ausência em %s', (text, expected) => {
+    expect(parseIdentificationText(text).rg).toBe(expected);
+  });
   it('extrai nome, CPF, RG, órgão expedidor e nascimento de linhas rotuladas', () => {
     expect(
       parseIdentificationText(`
@@ -34,5 +43,13 @@ describe('leitura de dados de documento', () => {
 
   it('não inventa valores quando o texto não identifica campos', () => {
     expect(parseIdentificationText('DOCUMENTO SEM TEXTO LEGÍVEL')).toEqual({});
+  });
+
+  it('não interpreta o órgão expedidor como número de RG quando o número está ilegível', () => {
+    expect(parseIdentificationText('NOME: ANA PEREIRA\nRG:\nSSP/MA\nCPF: 529.982.247-25')).toEqual({
+      name: 'ANA PEREIRA',
+      cpf: '52998224725',
+      issuingAuthority: 'SSP/MA',
+    });
   });
 });

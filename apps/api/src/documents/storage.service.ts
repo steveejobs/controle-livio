@@ -42,6 +42,7 @@ export class StorageService {
   }
 
   async remove(key: string, bucket = this.bucket): Promise<void> {
-    await this.client.storage.from(bucket).remove([key]);
+    const { error } = await this.client.storage.from(bucket).remove([key]);
+    if (error) throw new ServiceUnavailableException('Falha ao remover documento privado');
   }
 }

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReceiptService } from './receipt.service';
+import { interpretReceiptText } from './receipt-interpretation';
 
 const actor = {
   organizationId: '10000000-0000-4000-8000-000000000001',
@@ -77,6 +78,34 @@ describe('serviço de comprovantes', () => {
     );
   });
 
+  it.each(['agendado', 'pendente', 'cancelado', 'devolvido', 'parcialmente devolvido'])(
+    'não confirma PIX %s mesmo com motivo de correção',
+    async (status) => {
+      const parsed = interpretReceiptText(
+        `PIX ${status}\nValor pago: R$ 25,00\nData do pagamento: 30/10/2026`,
+        'PDF_TEXT',
+      );
+      prisma.paymentReceipt.findFirst.mockResolvedValue({
+        id: 'receipt-1',
+        status: 'PENDING_REVIEW',
+        installmentId: 'installment-1',
+        clientId: target.clientId,
+        extractedFields: parsed.fields,
+        reconciliation: { warnings: parsed.warnings },
+      });
+      await expect(
+        service.confirm(actor as never, 'receipt-1', {
+          amount: '25.00',
+          paidAt: '2026-10-30T12:00:00-03:00',
+          method: 'PIX',
+          reference: 'TESTE',
+          correctionReason: 'Conferência sintética',
+        }),
+      ).rejects.toThrow('não liquidada');
+      expect(finance.createPayment).not.toHaveBeenCalled();
+    },
+  );
+
   it('bloqueia duplicidade antes de varredura, OCR e Storage', async () => {
     prisma.paymentReceipt.findUnique.mockResolvedValue({ id: 'receipt-already-sent' });
     await expect(
@@ -84,6 +113,39 @@ describe('serviço de comprovantes', () => {
     ).rejects.toThrow('já foi enviado');
     expect(scanner.assertClean).not.toHaveBeenCalled();
     expect(documents.create).not.toHaveBeenCalled();
+  });
+
+  it('retorna no upload os metadados persistidos do documento associado', async () => {
+    const document = { id: 'document-1', title: 'Comprovante financeiro · sintetico.pdf' };
+    const create = vi.fn(async (query: { include?: unknown; data: Record<string, unknown> }) => ({
+      id: 'receipt-1',
+      status: 'PENDING_REVIEW',
+      ...query.data,
+      ...(query.include ? { document } : {}),
+    }));
+    prisma.$transaction.mockImplementation(async (callback) =>
+      callback({ paymentReceipt: { create } }),
+    );
+    const result = await service.submit(actor as never, { installmentId: 'installment-1' }, file);
+    expect(result).toMatchObject({
+      id: 'receipt-1',
+      organizationId: actor.organizationId,
+      documentId: document.id,
+      document,
+      status: 'PENDING_REVIEW',
+      extractedFields: { paidAmount: { value: '25.00' } },
+    });
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: { document: { select: { id: true, title: true } } },
+        data: expect.objectContaining({
+          organizationId: actor.organizationId,
+          documentId: document.id,
+        }),
+      }),
+    );
+    expect(documents.create).toHaveBeenCalledOnce();
+    expect(finance.createPayment).not.toHaveBeenCalled();
   });
 
   it('não armazena nem processa OCR quando o scanner rejeita o arquivo', async () => {
