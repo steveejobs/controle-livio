@@ -3438,6 +3438,69 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       );
       await paymentForm.getByLabel('Parcela').selectOption(installmentId);
       const upload = await formWithSubmitButton(financePage, 'Enviar e conferir comprovante');
+      // Stage 2: verify the persisted ledger, not only an HTTP rejection.
+      if (!storageAdminKey || !loopbackHosts.has(new URL(supabaseUrl).hostname))
+        throw new Error('Stage 2 requires disposable loopback Supabase.');
+      const database = createClient(supabaseUrl, storageAdminKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      for (const operationState of [
+        'agendado',
+        'pendente',
+        'cancelado',
+        'devolvido',
+        'parcialmente devolvido',
+      ]) {
+        const pdf = await PDFDocument.create();
+        const sheet = pdf.addPage([500, 300]);
+        sheet.drawText(`PIX ${operationState}`, { x: 20, y: 250, size: 18 });
+        sheet.drawText('Valor pago: R$ 25,00', { x: 20, y: 210, size: 18 });
+        sheet.drawText('Data do pagamento: 29/10/2026', { x: 20, y: 170, size: 18 });
+        await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
+          name: `estado-${operationState}.pdf`,
+          mimeType: 'application/pdf',
+          buffer: Buffer.from(await pdf.save()),
+        });
+        const responsePromise = financePage.waitForResponse(
+          (response) =>
+            new URL(response.url()).pathname === '/v1/finance/receipts' &&
+            response.request().method() === 'POST',
+        );
+        await upload.getByRole('button', { name: 'Enviar e conferir comprovante' }).click();
+        const response = await responsePromise;
+        expect(response.status()).toBe(201);
+        const receipt = (await response.json()) as { id: string };
+        for (let retry = 0; retry < 2; retry += 1) {
+          const confirmation = await browserApi(
+            financePage,
+            `/finance/receipts/${receipt.id}/confirm`,
+            {
+              method: 'POST',
+              body: {
+                amount: '25.00',
+                paidAt: '2026-10-29T15:00:00Z',
+                method: 'PIX',
+                reference: `BLOCK-${suffix}`,
+                correctionReason: 'Revisão sintética',
+              },
+            },
+          );
+          assertStatus(confirmation, 400, `non-settlement-${operationState}`);
+        }
+        const stored = await database
+          .from('payment_receipts')
+          .select('status,payment_id')
+          .eq('id', receipt.id)
+          .single();
+        expect(stored.error).toBeNull();
+        expect(stored.data).toEqual({ status: 'PENDING_REVIEW', payment_id: null });
+        const allocations = await database
+          .from('payment_allocations')
+          .select('id')
+          .eq('installment_id', installmentId);
+        expect(allocations.error).toBeNull();
+        expect(allocations.data).toEqual([]);
+      }
       const storageBeforeInfected = await storageObjectInventory(organizationA);
       await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
         name: `recibo-infectado-${suffix}.pdf`,

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReceiptService } from './receipt.service';
+import { interpretReceiptText } from './receipt-interpretation';
 
 const actor = {
   organizationId: '10000000-0000-4000-8000-000000000001',
@@ -76,6 +77,34 @@ describe('serviço de comprovantes', () => {
         }),
     );
   });
+
+  it.each(['agendado', 'pendente', 'cancelado', 'devolvido', 'parcialmente devolvido'])(
+    'não confirma PIX %s mesmo com motivo de correção',
+    async (status) => {
+      const parsed = interpretReceiptText(
+        `PIX ${status}\nValor pago: R$ 25,00\nData do pagamento: 30/10/2026`,
+        'PDF_TEXT',
+      );
+      prisma.paymentReceipt.findFirst.mockResolvedValue({
+        id: 'receipt-1',
+        status: 'PENDING_REVIEW',
+        installmentId: 'installment-1',
+        clientId: target.clientId,
+        extractedFields: parsed.fields,
+        reconciliation: { warnings: parsed.warnings },
+      });
+      await expect(
+        service.confirm(actor as never, 'receipt-1', {
+          amount: '25.00',
+          paidAt: '2026-10-30T12:00:00-03:00',
+          method: 'PIX',
+          reference: 'TESTE',
+          correctionReason: 'Conferência sintética',
+        }),
+      ).rejects.toThrow('não liquidada');
+      expect(finance.createPayment).not.toHaveBeenCalled();
+    },
+  );
 
   it('bloqueia duplicidade antes de varredura, OCR e Storage', async () => {
     prisma.paymentReceipt.findUnique.mockResolvedValue({ id: 'receipt-already-sent' });

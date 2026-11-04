@@ -311,6 +311,10 @@ export class ReceiptService {
     if (receipt.status !== 'PENDING_REVIEW')
       throw new ConflictException('Comprovante já revisado.');
     const fields = receipt.extractedFields as ReceiptFields;
+    if (fields.nonSettlementEvidence)
+      throw new BadRequestException(
+        'Operação não liquidada ou devolvida; envie um comprovante de liquidação para revisão.',
+      );
     const amount = new Prisma.Decimal(input.amount);
     if (!amount.isPositive()) throw new BadRequestException('Valor deve ser positivo.');
     const organization = await this.prisma.organization.findUnique({

@@ -80,7 +80,8 @@ export function parseIdentificationText(text: string): IdentificationData {
   const rgIndex = lines.findIndex((line) => /\b(?:RG|REGISTRO GERAL|IDENTIDADE)\b/i.test(line));
   const rgValue =
     rgIndex >= 0 ? nextValue(lines, rgIndex, /^(?:RG|REGISTRO GERAL|IDENTIDADE)\b/i) : undefined;
-  const rg = rgValue?.match(/[A-Z0-9][A-Z0-9./-]{3,}/i)?.[0];
+  const rgCandidate = rgValue?.match(/[A-Z0-9][A-Z0-9./-]{3,}/i)?.[0];
+  const rg = rgCandidate && /\d/.test(rgCandidate) ? rgCandidate : undefined;
 
   const issuerLine = lines.find((line) => /\b(?:SSP|SESP|SDS|PC|IFP|DETRAN|IIRGD)\b/i.test(line));
   const issuingAuthority = issuerLine?.match(

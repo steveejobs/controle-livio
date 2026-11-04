@@ -152,16 +152,28 @@ export function ClientManagement({
   };
 
   const useIdentification = (identified: IdentificationData, file: File) => {
-    if (identified.name) setDisplayName(identified.name);
-    if (identified.cpf) {
+    const accept = (label: string, current: string, suggested?: string) =>
+      Boolean(
+        suggested &&
+        (!current.trim() ||
+          current === suggested ||
+          window.confirm(
+            `${label}: há um conflito.\nValor atual: ${current}\nValor extraído: ${suggested}\nSubstituir pelo valor extraído? Cancele para manter o atual.`,
+          )),
+      );
+    if (accept('Nome', displayName, identified.name)) setDisplayName(identified.name!);
+    if (accept('CPF', taxId.replace(/\D/g, ''), identified.cpf)) {
       setClientType('PERSON');
       setAutoDetectedCompany(false);
-      setTaxId(formatTaxIdField(identified.cpf, 'PERSON'));
+      setTaxId(formatTaxIdField(identified.cpf!, 'PERSON'));
     }
-    if (identified.rg) {
-      setIdentityDocument([identified.rg, identified.issuingAuthority].filter(Boolean).join(' · '));
-    }
-    if (identified.birthDate) setBirthDate(identified.birthDate);
+    const suggestedIdentity = identified.rg
+      ? [identified.rg, identified.issuingAuthority].filter(Boolean).join(' · ')
+      : undefined;
+    if (accept('RG e órgão expedidor', identityDocument, suggestedIdentity))
+      setIdentityDocument(suggestedIdentity!);
+    if (accept('Data de nascimento', birthDate, identified.birthDate))
+      setBirthDate(identified.birthDate!);
     setPendingIdentityFile(file);
     setScanNotice('Confira os dados preenchidos antes de concluir o cadastro.');
   };
