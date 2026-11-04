@@ -3670,7 +3670,12 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
           organizationId: organizationB,
         },
       );
-      expect([403, 404]).toContain(forbiddenRead.status);
+      assertAuthorizationDenial(forbiddenRead, {
+        status: 401,
+        code: 'unauthorized',
+        message: 'Usuário sem vínculo ativo com esta organização',
+        label: 'usuário sem vínculo não acessa os metadados do comprovante',
+      });
       expect(JSON.stringify(forbiddenRead.body)).not.toContain(partialReceipt.documentId);
       const preview = financePage.getByRole('region', { name: 'Conferência do comprovante' });
       await expect(preview).toContainText(`recibo-parcial-${suffix}.pdf`);
