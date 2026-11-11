@@ -463,28 +463,38 @@ async function verifyBrowserRuntime(remote) {
   const cdp = await remote.newBrowserCDPSession();
   try {
     const version = await cdp.send('Browser.getVersion');
-    const command = await cdp.send('Browser.getBrowserCommandLine');
-    const manifest = JSON.parse(readFileSync(join(coreDir, 'browsers.json'), 'utf8'));
-    const revision = manifest.browsers.find(
-      (entry) => entry.name === 'chromium-headless-shell',
-    ).revision;
-    const expected = `/ms-playwright/chromium_headless_shell-${revision}/chrome-headless-shell-linux64/chrome-headless-shell`;
-    const executable = command.arguments[0];
-    evidence.browserProtocol = { ...version, executable, expectedExecutable: expected };
+    evidence.browserProtocol = version;
     evidence.expectedImageChromium = imageChromium;
     evidence.chromium = remote.version();
     if (
-      executable !== expected ||
       !version.protocolVersion ||
-      !version.product.endsWith(`/${imageChromium}`) ||
+      !version.product.endsWith('/' + imageChromium) ||
       evidence.chromium !== imageChromium
     )
-      throw new Error('Pinned Chromium executable, version or protocol mismatch.');
-    const probe =
-      "const fs=require('fs'),crypto=require('crypto'); const p=fs.realpathSync(process.argv[1]); if(!p.startsWith('/ms-playwright/'))throw Error('Executable outside image browsers'); process.stdout.write(JSON.stringify({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}));";
-    evidence.browserExecutable = JSON.parse(
-      run('docker', ['exec', name, '/livio-node24', '-e', probe, executable]),
-    );
+      throw new Error('Pinned Chromium version or protocol mismatch.');
+    // Host-side identity and read-only mounts establish provenance without experimental CDP or /proc permissions.
+    const container = JSON.parse(run('docker', ['container', 'inspect', name]))[0];
+    const bindings = new Map([
+      ['/livio-node24', realpathSync(process.execPath)],
+      ['/livio-playwright', realpathSync(coreDir)],
+    ]);
+    if (
+      container.Image !== evidence.dockerImage.id ||
+      container.Config.Image !== image ||
+      container.Mounts.length !== bindings.size ||
+      !container.Mounts.every(
+        (mount) =>
+          mount.Type === 'bind' &&
+          !mount.RW &&
+          bindings.get(mount.Destination) === realpathSync(mount.Source),
+      )
+    )
+      throw new Error('Pinned image identity or read-only runtime mounts changed.');
+    evidence.browserIntegrity = {
+      imageId: container.Image,
+      readOnlyRuntimeMounts: true,
+      selection: 'SDK default from digest-pinned image; executable path inspection is not required',
+    };
     evidence.browserComparison = 'PASS';
   } finally {
     await cdp.detach();
