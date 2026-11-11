@@ -18,6 +18,8 @@ import { setTimeout as delay } from 'node:timers/promises';
 const require = createRequire(join(process.cwd(), 'package.json'));
 const image =
   'mcr.microsoft.com/playwright:v1.64.1-noble@sha256:ee15712262f017b8157421b212b12099146645f44b1bc5c0514cbbe6a229b1d0';
+// Browser version observed in the verified immutable image, not the host install manifest.
+const imageChromium = '156.0.8078.80';
 const qpdfHash = 'db367d897829f22c4198ce1094143c9d467bd6ee7dfabc44ba6f02056b24f8b1';
 const coreDir = dirname(require.resolve('playwright-core/package.json'));
 const { yauzl } = require(join(coreDir, 'lib/utilsBundle.js'));
@@ -186,25 +188,8 @@ function exportLine(file, line) {
   appendFileSync(file, `${line}\n`);
 }
 
-async function browser() {
-  const core = require('playwright-core/package.json');
-  if (core.version !== '1.64.1') throw new Error('Playwright/image version mismatch.');
+async function startBrowserServer() {
   const node = realpathSync(process.execPath);
-  run('docker', ['pull', '--platform=linux/amd64', image]);
-  const pulled = JSON.parse(run('docker', ['image', 'inspect', image]))[0];
-  const digest = image.slice(image.indexOf('@') + 1);
-  if (
-    pulled.Os !== 'linux' ||
-    pulled.Architecture !== 'amd64' ||
-    !pulled.RepoDigests.some((value) => value.endsWith(`@${digest}`))
-  )
-    throw new Error('Docker platform or digest mismatch.');
-  evidence.dockerImage = {
-    id: pulled.Id,
-    repoDigests: pulled.RepoDigests,
-    os: pulled.Os,
-    architecture: pulled.Architecture,
-  };
   run('docker', [
     'run',
     '--detach',
@@ -232,6 +217,9 @@ async function browser() {
     '--host=0.0.0.0',
     '--port=3100',
   ]);
+  const created = JSON.parse(run('docker', ['container', 'inspect', name]))[0];
+  evidence.activeContainer = { id: created.Id, name: created.Name, state: created.State.Status };
+  evidence.containerRemoved = false;
   // No workspace, Docker socket, credential mounts or inherited host environment.
   evidence.serverNode = run('docker', ['exec', name, '/livio-node24', '--version']).trim();
   if (!evidence.serverNode.startsWith('v24.')) throw new Error('Browser server must use Node 24.');
@@ -251,6 +239,53 @@ async function browser() {
     await delay(500);
   }
   if (!ready) throw new Error('Playwright server did not become ready.');
+  const serverPackage = JSON.parse(
+    run('docker', [
+      'exec',
+      name,
+      '/livio-node24',
+      '-e',
+      "process.stdout.write(JSON.stringify(require('/livio-playwright/package.json')))",
+    ]),
+  );
+  evidence.serverPlaywright = serverPackage.version;
+  if (serverPackage.version !== '1.64.1') throw new Error('Server Playwright version mismatch.');
+}
+
+async function browser() {
+  const core = require('playwright-core/package.json');
+  evidence.clientPlaywright = core.version;
+  evidence.hostChromiumManifest = JSON.parse(
+    readFileSync(join(coreDir, 'browsers.json'), 'utf8'),
+  ).browsers.find((entry) => entry.name === 'chromium').browserVersion;
+  evidence.expectedImageChromium = imageChromium;
+  if (core.version !== '1.64.1') throw new Error('Playwright/image version mismatch.');
+  run('docker', ['pull', '--platform=linux/amd64', image]);
+  const pulled = JSON.parse(run('docker', ['image', 'inspect', image]))[0];
+  const digest = image.slice(image.indexOf('@') + 1);
+  if (
+    pulled.Os !== 'linux' ||
+    pulled.Architecture !== 'amd64' ||
+    !pulled.RepoDigests.some((value) => value.endsWith(`@${digest}`))
+  )
+    throw new Error('Docker platform or digest mismatch.');
+  evidence.dockerImage = {
+    id: pulled.Id,
+    repoDigests: pulled.RepoDigests,
+    os: pulled.Os,
+    architecture: pulled.Architecture,
+  };
+  await startBrowserServer();
+  const controlledFailure = new Error('Synthetic bootstrap failure for cleanup verification.');
+  try {
+    throw controlledFailure;
+  } catch (error) {
+    if (error !== controlledFailure) throw error;
+  } finally {
+    await stopBrowserServer();
+  }
+  evidence.cleanupAfterControlledFailure = 'PASS';
+  await startBrowserServer();
   const probeBytes = Buffer.from('LIVIO synthetic upload and download\n');
   let multipartReceived = false;
   const server = createServer((request, response) => {
@@ -294,11 +329,15 @@ async function browser() {
       exposeNetwork: '<loopback>',
       timeout: 15_000,
     });
+    await verifyBrowserRuntime(remote);
     evidence.chromium = remote.version();
     const expected = JSON.parse(readFileSync(join(coreDir, 'browsers.json'), 'utf8')).browsers.find(
       (b) => b.name === 'chromium',
     ).browserVersion;
-    if (evidence.chromium !== expected) throw new Error('Chromium version mismatch.');
+    evidence.hostChromiumManifest = expected;
+    evidence.expectedImageChromium = imageChromium;
+    if (evidence.chromium !== imageChromium)
+      throw new Error('Pinned image Chromium version mismatch.');
     const context = await remote.newContext({ acceptDownloads: true });
     await context.tracing.start({ screenshots: true, snapshots: true });
     const page = await context.newPage();
@@ -337,6 +376,18 @@ async function browser() {
   } finally {
     await remote?.close();
     await new Promise((resolve) => server.close(resolve));
+  }
+  await stopBrowserServer();
+  evidence.cleanupAfterSuccess = 'PASS';
+  await startBrowserServer();
+  const finalRemote = await require('playwright-core').chromium.connect('ws://127.0.0.1:3100/', {
+    exposeNetwork: '<loopback>',
+    timeout: 15_000,
+  });
+  try {
+    await verifyBrowserRuntime(finalRemote);
+  } finally {
+    await finalRemote.close();
   }
   exportLine(process.env.GITHUB_ENV, 'PW_TEST_CONNECT_WS_ENDPOINT=ws://127.0.0.1:3100/');
   exportLine(process.env.GITHUB_ENV, 'PW_TEST_CONNECT_EXPOSE_NETWORK=<loopback>');
@@ -387,29 +438,94 @@ async function qpdf() {
   exportLine(process.env.GITHUB_PATH, join(install, 'bin'));
 }
 
-try {
-  if (command === 'browser') await browser();
-  else if (command === 'qpdf') await qpdf();
-  else if (command === 'stop') {
-    const names = run('docker', [
+async function waitForBrowserRemoval() {
+  evidence.containerRemoved = false;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const remaining = run('docker', [
       'ps',
       '-a',
       '--filter',
       `name=^/${name}$`,
       '--format={{.Names}}',
     ]).trim();
-    if (names && names !== name) throw new Error('Unexpected container identity.');
-    if (names === name) {
-      try {
-        run('docker', ['logs', name]);
-      } finally {
-        run('docker', ['stop', name]);
-      }
+    evidence.removalChecks = attempt + 1;
+    if (!remaining) {
+      evidence.containerRemoved = true;
+      return;
     }
-    if (run('docker', ['ps', '-a', '--filter', `name=^/${name}$`, '--format={{.Names}}']).trim())
-      throw new Error('Browser container was not removed.');
-    evidence.containerRemoved = true;
-  } else throw new Error('Expected browser, qpdf or stop.');
+    if (remaining !== name) throw new Error('Unexpected container identity during cleanup.');
+    await delay(100);
+  }
+  throw new Error('Browser container remained after bounded removal wait.');
+}
+
+async function verifyBrowserRuntime(remote) {
+  const cdp = await remote.newBrowserCDPSession();
+  try {
+    const version = await cdp.send('Browser.getVersion');
+    const command = await cdp.send('Browser.getBrowserCommandLine');
+    const manifest = JSON.parse(readFileSync(join(coreDir, 'browsers.json'), 'utf8'));
+    const revision = manifest.browsers.find(
+      (entry) => entry.name === 'chromium-headless-shell',
+    ).revision;
+    const expected = `/ms-playwright/chromium_headless_shell-${revision}/chrome-headless-shell-linux64/chrome-headless-shell`;
+    const executable = command.arguments[0];
+    evidence.browserProtocol = { ...version, executable, expectedExecutable: expected };
+    evidence.expectedImageChromium = imageChromium;
+    evidence.chromium = remote.version();
+    if (
+      executable !== expected ||
+      !version.protocolVersion ||
+      !version.product.endsWith(`/${imageChromium}`) ||
+      evidence.chromium !== imageChromium
+    )
+      throw new Error('Pinned Chromium executable, version or protocol mismatch.');
+    const probe =
+      "const fs=require('fs'),crypto=require('crypto'); const p=fs.realpathSync(process.argv[1]); if(!p.startsWith('/ms-playwright/'))throw Error('Executable outside image browsers'); process.stdout.write(JSON.stringify({path:p,sha256:crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')}));";
+    evidence.browserExecutable = JSON.parse(
+      run('docker', ['exec', name, '/livio-node24', '-e', probe, executable]),
+    );
+    evidence.browserComparison = 'PASS';
+  } finally {
+    await cdp.detach();
+  }
+}
+
+async function stopBrowserServer() {
+  const names = run('docker', [
+    'ps',
+    '-a',
+    '--filter',
+    `name=^/${name}$`,
+    '--format={{.Names}}',
+  ]).trim();
+  if (names && names !== name) throw new Error('Unexpected container identity.');
+  if (names === name) {
+    const container = JSON.parse(run('docker', ['container', 'inspect', name]))[0];
+    if (container.Name !== `/${name}` || container.Config.Image !== image)
+      throw new Error('Refusing to stop an unrelated container.');
+    const record = {
+      id: container.Id,
+      name: container.Name,
+      image: container.Config.Image,
+      stateBeforeStop: container.State.Status,
+    };
+    (evidence.cleanup ??= []).push(record);
+    try {
+      run('docker', ['logs', container.Id]);
+    } finally {
+      run('docker', ['stop', container.Id]);
+    }
+    record.stopRequested = true;
+  }
+  await waitForBrowserRemoval();
+}
+
+try {
+  if (command === 'browser') await browser();
+  else if (command === 'qpdf') await qpdf();
+  else if (command === 'stop') await stopBrowserServer();
+  else throw new Error('Expected browser, qpdf or stop.');
   evidence.status = 'PASS';
 } catch (error) {
   evidence.error = error.message;
