@@ -168,3 +168,11 @@ O job integrado usa `prepare-local-supabase-ci.mjs --smtp-capture`. Esta opção
 `verify-smtp-capture-ci.mjs` exige esse ambiente e destinos HTTP loopback nas portas 54321/54324/3010. Usa apenas conta aleatória `@example.test`, captura convite/recuperação via API Mailpit, verifica senha anterior/nova, uso único, destino permitido e expiração após 65 segundos reais. Não encaminha mensagens nem registra corpos, endereços, links ou tokens. O único artefato contém status e booleanos sanitizados.
 
 Escopo: transporte Auth → caixa local e consumo dos links pelo Auth. Não valida o provedor hospedado, a entrega externa, o template comercial nem a página SSR final (`frontendLandingVerified=false`). O callback web exige `code` ou `token_hash` + `type`; homologar templates compatíveis com ele antes da liberação, pois o fluxo padrão com tokens no fragmento da URL não pode ser lido pelo callback de servidor. Não alterar templates cloud nesta etapa.
+
+## DEF-008 preflight (Etapa 3.3)
+
+The existing disposable financial runner imports financial-security-ci.mjs and financial-write-matrix.mjs. They never load dotenv; the entry point validates loopback URLs, test flags and absence of external credentials before connecting. Financial and indirect write attempts use valid synthetic rows and real local Auth JWTs; HTTP/RLS/ACL/domain failures are recorded separately. See docs/auditoria-2026-11-04/PREFLIGHT_CI_DEF008_ETAPA3_3.md for the reviewable scope and release limitations.
+
+Local support checks: node --test tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs.
+
+Optional SQL grammar/ACL rehearsal: node tools/qa/financial-sql-probe.mjs <absolute-local-PGlite-module-path>. PGlite is not a repository dependency and is never installed automatically by the script. The probe creates only in-memory synthetic databases, closes them at completion and has no database URL or remote connection. Validated locally with @electric-sql/pglite 0.3.14 / PostgreSQL 17.5; this does not validate the full application schema, Supabase or integrated concurrency.

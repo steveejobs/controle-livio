@@ -1,3 +1,4 @@
+import { PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
@@ -117,43 +118,87 @@ const uploadCross = await adminB.storage
   });
 expect(Boolean(uploadCross.error), 'organização B fez upload no path da organização A');
 
-const documentId = crypto.randomUUID();
-const versionId = crypto.randomUUID();
-const documentInsert = await lawyerA.from('documents').insert({
-  id: documentId,
-  organization_id: orgA,
-  client_id: clientA,
-  title: 'Documento ficticio de teste RLS',
-  status: 'ACTIVE',
-  visibility: 'CLIENT',
-  current_version: 1,
-  created_by_id: 'a1000000-0000-4000-8000-000000000002',
-  updated_at: new Date().toISOString(),
-});
-expect(
-  !documentInsert.error,
-  `metadata de documento falhou: ${documentInsert.error?.message ?? ''}`,
-);
-const versionInsert = await lawyerA.from('document_versions').insert({
-  id: versionId,
-  organization_id: orgA,
-  document_id: documentId,
-  version: 1,
-  storage_key: objectPath,
-  file_name: 'proof.txt',
-  mime_type: 'text/plain',
-  size_bytes: 18,
-  sha256: '0'.repeat(64),
-  uploaded_by_id: 'a1000000-0000-4000-8000-000000000002',
-});
-expect(!versionInsert.error, `metadata de versão falhou: ${versionInsert.error?.message ?? ''}`);
+if (
+  process.env.SUPABASE_LOCAL !== 'true' ||
+  process.env.SUPABASE_ENVIRONMENT !== 'test' ||
+  !['127.0.0.1', 'localhost'].includes(new URL(process.env.DATABASE_URL).hostname)
+)
+  throw new Error('Metadata fixtures require disposable loopback PostgreSQL');
+const database = new PrismaClient();
+try {
+  const documentId = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
+  const documentInsert = await lawyerA.from('documents').insert({
+    id: documentId,
+    organization_id: orgA,
+    client_id: clientA,
+    title: 'Documento ficticio de teste RLS',
+    status: 'ACTIVE',
+    visibility: 'CLIENT',
+    current_version: 1,
+    created_by_id: 'a1000000-0000-4000-8000-000000000002',
+    updated_at: new Date().toISOString(),
+  });
+  expect(
+    documentInsert.error?.code === '42501',
+    `metadata de documento falhou: ${documentInsert.error?.message ?? ''}`,
+  );
+  await database.document.create({
+    data: {
+      id: documentId,
+      organizationId: orgA,
+      clientId: clientA,
+      title: 'Synthetic RLS metadata',
+      status: 'ACTIVE',
+      visibility: 'CLIENT',
+      currentVersion: 1,
+      createdById: 'a1000000-0000-4000-8000-000000000002',
+    },
+  });
+  const versionInsert = await lawyerA.from('document_versions').insert({
+    id: versionId,
+    organization_id: orgA,
+    document_id: documentId,
+    version: 1,
+    storage_key: objectPath,
+    file_name: 'proof.txt',
+    mime_type: 'text/plain',
+    size_bytes: 18,
+    sha256: '0'.repeat(64),
+    uploaded_by_id: 'a1000000-0000-4000-8000-000000000002',
+  });
+  expect(
+    versionInsert.error?.code === '42501',
+    `metadata de versão falhou: ${versionInsert.error?.message ?? ''}`,
+  );
 
-const ownSignedUrl = await lawyerA.storage.from('legal-documents').createSignedUrl(objectPath, 60);
-expect(
-  !ownSignedUrl.error && Boolean(ownSignedUrl.data.signedUrl),
-  'usuário A não gerou URL autorizada',
-);
-const crossSignedUrl = await adminB.storage.from('legal-documents').createSignedUrl(objectPath, 60);
-expect(Boolean(crossSignedUrl.error), 'usuário B gerou download do documento A');
+  await database.documentVersion.create({
+    data: {
+      id: versionId,
+      organizationId: orgA,
+      documentId,
+      version: 1,
+      storageKey: objectPath,
+      fileName: 'proof.txt',
+      mimeType: 'text/plain',
+      sizeBytes: 18n,
+      sha256: '0'.repeat(64),
+      uploadedById: 'a1000000-0000-4000-8000-000000000002',
+    },
+  });
+  const ownSignedUrl = await lawyerA.storage
+    .from('legal-documents')
+    .createSignedUrl(objectPath, 60);
+  expect(
+    !ownSignedUrl.error && Boolean(ownSignedUrl.data.signedUrl),
+    'usuário A não gerou URL autorizada',
+  );
+  const crossSignedUrl = await adminB.storage
+    .from('legal-documents')
+    .createSignedUrl(objectPath, 60);
+  expect(Boolean(crossSignedUrl.error), 'usuário B gerou download do documento A');
 
-console.log('RLS, roles, internal notes and Storage isolation tests passed.');
+  console.log('RLS, roles, internal notes and Storage isolation tests passed.');
+} finally {
+  await database.$disconnect();
+}

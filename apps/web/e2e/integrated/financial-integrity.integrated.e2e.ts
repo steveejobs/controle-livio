@@ -8,7 +8,11 @@ test('etapa 3: concorrência, estornos, despesas, rollback e relatórios no Post
   const snapshot = await promisify(execFile)('git', ['rev-parse', 'HEAD'], { cwd: process.cwd() });
   await promisify(execFile)(
     process.execPath,
-    ['--test', resolve(process.cwd(), 'tools/qa/financial-integrity-support.test.mjs')],
+    [
+      '--test',
+      resolve(process.cwd(), 'tools/qa/financial-integrity-support.test.mjs'),
+      resolve(process.cwd(), 'tools/qa/financial-security-support.test.mjs'),
+    ],
     {
       cwd: process.cwd(),
       windowsHide: true,

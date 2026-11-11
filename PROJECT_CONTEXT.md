@@ -1,5 +1,15 @@
 # Contexto vivo do projeto Lívio
 
+## Etapa 3.1 — CI executada, DEF-008/P0 confirmado
+
+- Publicado um único commit/push: `bc9bc30101e4c92a51eeb676375d40d927ea34f1`, pai `20646dc2de791df88933996531852133cc462027`, mesmos 24 arquivos da proposta corrigida SHA-256 `24c99a43a03c8ef03ced33b59f36367fbc924f5426dec827758af016381633b4`. REN-001 preserva uma única renegociação, nenhuma criação de pagamento e saldo aritmético de 100 no registro original cancelado. Não representa duas dívidas ativas.
+- PR #3 aberta/draft, base `5521a3f`, merge sintético `455c3076792a7c9caae86e803d2e5b21377e5ae5`. Quality da PR `41887379143` FAIL: application e synthetic-restore PASS; supabase-isolation FAIL. Vitest 284/284, Playwright simulado 35/35, focados 6/6; completos 14 PASS anteriores + orquestrador FAIL. Internamente: 30 casos registrados, 28 PASS/2 FAIL, sem skips/flaky.
+- DEF-008/P0: RLS-WRITE confirmou financeiro marcando pagamento REVERSED sem estorno e despesa DRAFT como PAID, sem aprovação, por PostgREST. PostgreSQL confirmou saldo derivado 75→100, estados de recebível/parcela ainda PARTIALLY_PAID e auditoria de pagamento sem REVERSE. Respostas SDK sem erro; HTTP bruto REST não capturado. Não alterar policies/migrations automaticamente. Não extrapolar a prova ao ambiente hospedado.
+- CEN-006 falhou no harness: duas confirmações 400 por falta de motivo e nenhuma transação na barreira; fixture também usa data futura/PDF sem campos legíveis. Proposta corrigida não aplicada em `C:/Users/jarde/AppData/Local/Temp/livio-quality-41887379143/PROPOSTA_CEN006_NAO_APLICADA.patch`; contrato reproduzido localmente com serviço compilado, sem nova integração.
+- Concorrência de pagamentos/estornos/despesas, dez rollbacks e ground truth caixa/CSV passaram no escopo registrado. DEF-006/007 integrados PARTIAL: cancelado/repetição/concorrência e duas compensações reais aprovados; demais estados e indisponibilidade real de Storage pendentes. Catálogo: 28 funções, 3 FAIL/13 PARTIAL/12 NOT_EXECUTED; 213 candidatos preservados. Relatório `docs/auditoria-2026-11-04/ETAPA_3_1_FINANCEIRO_INTEGRADO.md` e evidências em `evidencias-etapa31`.
+- O evento push iniciou também `41887368525`, com integração/restore omitidos pelos filtros existentes; a validação completa é a execução da PR. Nenhum workflow manual, merge, deploy ou alteração cloud. Vercel API/web sem deployments associados ao SHA na consulta posterior ao push.
+- Autorização de commit/push consumida. Não criar novo commit/push, nem alterar policies/migrations automaticamente. Próximo passo: revisão/autorização específica para fechar a fronteira de escrita financeira (DEF-008), preservar o teste negativo e incluir o ajuste do harness na próxima rodada consolidada. Atualizações de documentação após a publicação são locais, não publicadas. Production NO-GO.
+
 ## Etapa 3 financeira — 2026-11-04, somente alterações locais
 
 - HEAD versionado `20646dc2de791df88933996531852133cc462027`, branch `validation/audit-stage2-20261104`, worktree isolado `controle-livio-audit-stage2-validation-20261104`. O checkout principal em `af41f4c` tem conflitos preexistentes e foi somente lido; candidata HTTPS não transportada.
@@ -1256,3 +1266,15 @@ O lote local adiciona formulários E2E reais para processo/responsável, contrat
 
 - Quality #41311690391 (`6a59e0a`): Supabase/ClamAV e restore passaram novamente; application passou 31/33, falhando apenas nos dois viewports no 11º CSV (`revenue-by-lawyer`), request observado e evento download ausente. A hipótese de revogação precoce de blob não resolveu a falha. Fonte Chromium `LocalFrame::ShouldThrottleDownload` confirma limite de dez downloads por segundo; teste passou a respeitar ritmo de 200 ms entre exportações sem desligar proteção ou repetir download perdido. Confirmação final depende da próxima CI.
 - Preparada captura SMTP real no Supabase descartável/Mailpit, opt-in explícito no job integrado, conta `.test`, expiração temporária de 60 segundos apenas no checkout efêmero. Verifica transporte Auth, senha, uso único, expiração e links locais; ainda não executada. Não comprova provedor hospedado nem landing SSR. Callback web exige code/token_hash; templates hospedados continuam desconhecidos (acesso Management 403), portanto compatibilidade de e-mail com frontend permanece bloqueio de homologação.
+
+
+## Etapa 3.2 ? candidata local de seguran?a, 2026-11-11
+
+Preparada migration 20261111120000_financial_api_write_boundary em 12 tabelas, sem aplica??o, com revoga??o DML/colunas e policies restritivas. Harness amplia nega??o direta por perfil/tabela, estados de renegocia??o e corrige entradas CEN-006 mantendo barreira. PostgreSQL/Auth/PostgREST novos N?O executados (Docker/psql ausentes); DEF-008 ainda n?o certificado fechado. Relat?rio ETAPA_3_2_SEGURANCA_FINANCEIRA.md documenta limites e pend?ncias, incluindo DEF-007 e caminhos indiretos. Sem commit/push/deploy/migration hospedada; worktrees/conflitos anteriores preservados. Production NO-GO.
+
+
+## Etapa 3.3 - preflight DEF-008, 2026-11-11
+
+Candidata local sobre bc9bc30, sem publicacao. Migration revisada protege 12 tabelas financeiras, 10 dependencias de autorizacao/evidencia, identidade/tenant de clients/matters contra cascades e originais financeiros no Storage. SELECT e privilegios de servidor preservados; helper Storage SECURITY DEFINER somente de leitura, sem RPC de DML. Harness troca tentativas invalidas por 216 casos validos/individuais, cobre anon/perfis/papel personalizado, historico de renegociacao e falhas de compensacao. Verificador de recibos e fixtures antigas de Storage adaptados ao contrato API-only.
+
+Motor PostgreSQL 17.5 em memoria (PGlite temporario, schema minimo): migration real, atomicidade, ACL, SELECT e Storage verificados; nao equivale a Supabase/Auth/PostgREST/Prisma integrado. 284 Vitest e 19 suporte PASS; gates e hashes finais em VALIDACAO_ETAPA3_3.json. PREFLIGHT_CI_DEF008_ETAPA3_3.md documenta consumidores, riscos e autorizacao futura minima para uma CI consolidada da PR draft. INTEGRATED_QA NOT_EXECUTED, Production NO-GO. Outros worktrees/conflitos e arquivos anteriores preservados. Nenhum commit/push/merge/deploy/migration hospedada ou credencial compartilhada.

@@ -1,3 +1,5 @@
+import { runWriteMatrix } from './financial-write-matrix.mjs';
+import { inspectFinancialSecurity } from './financial-security-ci.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
@@ -360,6 +362,7 @@ export async function runFinancialIntegrity(env = process.env) {
     });
   }
   async function check(id, purpose, operation) {
+    const previousTrace = trace;
     trace = { id, purpose, status: 'NOT_EXECUTED', requests: [] };
     evidence.cases.push(trace);
     save();
@@ -385,6 +388,7 @@ export async function runFinancialIntegrity(env = process.env) {
     }
     save();
     console.log(`${id}: ${trace.status}`);
+    trace = previousTrace;
   }
   try {
     try {
@@ -451,11 +455,18 @@ export async function runFinancialIntegrity(env = process.env) {
         b = await actor(organizations[0]),
         f = await fixture(a);
       const receipts = [];
+      const paidAt = new Date(Date.now() - 86400000).toISOString().slice(0, 10) + 'T12:00:00Z';
+      const dateText = new Date(paidAt).toLocaleDateString('pt-BR', { timeZone: 'UTC' });
       for (const label of ['A', 'B']) {
         const pdf = await PDFDocument.create();
         const page = pdf.addPage();
-        page.drawText(
-          `Comprovante PIX ${label} ${randomUUID()}\nValor pago: R$ 70,00\nData do pagamento: 15/01/2035`,
+        const lines = [
+          `Comprovante PIX ${label} ${randomUUID()}`,
+          'Valor pago: R$ 70,00',
+          `Data do pagamento: ${dateText}`,
+        ];
+        lines.forEach((line, index) =>
+          page.drawText(line, { x: 40, y: 780 - index * 24, size: 12 }),
         );
         const form = new FormData();
         form.set('installmentId', f.installmentId);
@@ -468,6 +479,18 @@ export async function runFinancialIntegrity(env = process.env) {
           status(await api(a, '/finance/receipts', { method: 'POST', body: form }), 201),
         );
       }
+      assert.equal(new Set(receipts.map((r) => r.id)).size, 2);
+      assert.equal(new Set(receipts.map((r) => r.documentId)).size, 2);
+      for (const receipt of receipts) {
+        const row = await database.paymentReceipt.findUniqueOrThrow({ where: { id: receipt.id } });
+        state(`extracted-${receipt.id}`, {
+          id: row.id,
+          documentId: row.documentId,
+          fields: row.extractedFields,
+        });
+        assert.equal(row.extractedFields.paidAmount?.value, '70.00');
+        assert.equal(row.extractedFields.paidDate?.value, paidAt.slice(0, 10));
+      }
       state('before', await ledger(f));
       const results = await overlap(
         'receivable_installments',
@@ -478,7 +501,9 @@ export async function runFinancialIntegrity(env = process.env) {
               method: 'POST',
               body: {
                 amount: '70.00',
-                paidAt: '2035-01-15T12:00:00Z',
+                paidAt,
+                correctionReason:
+                  'Revisao humana sintetica: valor e data conferidos no comprovante PIX.',
                 method: 'PIX',
                 reference: `S3-${r.id}`,
               },
@@ -513,7 +538,9 @@ export async function runFinancialIntegrity(env = process.env) {
           method: 'POST',
           body: {
             amount: '70.00',
-            paidAt: '2035-01-15T12:00:00Z',
+            paidAt,
+            correctionReason:
+              'Revisao humana sintetica: valor e data conferidos no comprovante PIX.',
             method: 'PIX',
             reference: `S3-${receipt.id}`,
           },
@@ -595,8 +622,16 @@ export async function runFinancialIntegrity(env = process.env) {
           .eq('id', expense.id)
           .select('id,status');
         state('restResults', {
-          payment: { code: changedPayment.error?.code ?? null, rows: changedPayment.data },
-          expense: { code: changedExpense.error?.code ?? null, rows: changedExpense.data },
+          payment: {
+            status: changedPayment.status,
+            code: changedPayment.error?.code ?? null,
+            rows: changedPayment.data,
+          },
+          expense: {
+            status: changedExpense.status,
+            code: changedExpense.error?.code ?? null,
+            rows: changedExpense.data,
+          },
         });
         const after = {
           ledger: await ledger(f),
@@ -608,6 +643,129 @@ export async function runFinancialIntegrity(env = process.env) {
           before,
           'RLS must not allow economic state changes outside the authorized domain flow',
         );
+      },
+    );
+    await check(
+      'API-CONTRACT-COMPATIBILITY',
+      'Contract creation remains an authorized API transaction',
+      async () => {
+        const owner = await actor(organizations[0]);
+        const f = await fixture(owner);
+        const contract = status(
+          await api(owner, '/finance/contracts', {
+            method: 'POST',
+            body: {
+              clientId: f.clientId,
+              number: randomUUID(),
+              title: 'Synthetic contract',
+              feeModel: 'FIXED',
+              fixedAmount: '100.00',
+            },
+          }),
+          201,
+        );
+        assert.equal(
+          (await database.contract.findUniqueOrThrow({ where: { id: contract.id } })).clientId,
+          f.clientId,
+        );
+        assert.equal(
+          await database.auditLog.count({
+            where: {
+              organizationId: owner.organizationId,
+              resourceId: contract.id,
+              action: 'CREATE',
+            },
+          }),
+          1,
+        );
+      },
+    );
+    await check('RLS-WRITE-MATRIX-SETUP', 'SQL inventory and valid fixtures', async () => {
+      state(
+        'catalog',
+        await inspectFinancialSecurity(database, (value) => state('catalog', value)),
+      );
+      await runWriteMatrix({
+        database,
+        Prisma,
+        env,
+        actor,
+        fixture,
+        organizations,
+        check,
+        state,
+        api,
+      });
+    });
+    await check(
+      'STORAGE-FINANCIAL-EVIDENCE',
+      'Financial originals remain immutable through Storage client API',
+      async () => {
+        const owner = await actor(organizations[0]);
+        const f = await fixture(owner);
+        const pdf = await PDFDocument.create();
+        pdf
+          .addPage()
+          .drawText('Synthetic financial evidence ' + randomUUID(), { x: 40, y: 780, size: 12 });
+        const buffer = Buffer.from(await pdf.save());
+        const form = new FormData();
+        form.set('installmentId', f.installmentId);
+        form.set('file', new Blob([buffer], { type: 'application/pdf' }), 'synthetic-evidence.pdf');
+        const receipt = status(
+          await api(owner, '/finance/receipts', { method: 'POST', body: form }),
+          201,
+        );
+        const version = await database.documentVersion.findFirstOrThrow({
+          where: { documentId: receipt.documentId },
+        });
+        const snapshot = async () => {
+          const downloaded = await auth.storage
+            .from('legal-documents')
+            .download(version.storageKey);
+          assert.equal(downloaded.error, null);
+          const bytes = Buffer.from(await downloaded.data.arrayBuffer());
+          return {
+            sha256: require('node:crypto').createHash('sha256').update(bytes).digest('hex'),
+            ledger: await ledger(f),
+            receipt: await database.paymentReceipt.findUniqueOrThrow({ where: { id: receipt.id } }),
+          };
+        };
+        for (const role of ['administrator', 'lawyer', 'secretary', 'finance', 'client']) {
+          const person = await actor(
+            organizations[0],
+            role,
+            role === 'client' ? f.clientId : undefined,
+          );
+          const rest = createClient(
+            env.NEXT_PUBLIC_SUPABASE_URL,
+            env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+            {
+              auth: { persistSession: false },
+              global: { headers: { Authorization: `Bearer ${person.token}` } },
+            },
+          );
+          const before = await snapshot();
+          state(`before-${role}`, before);
+          const update = await rest.storage
+            .from('legal-documents')
+            .update(version.storageKey, Buffer.from('Synthetic forbidden replacement'), {
+              contentType: 'application/pdf',
+            });
+          assert.ok(update.error, 'Existing original must reject overwrite');
+          const removal = await rest.storage.from('legal-documents').remove([version.storageKey]);
+          // Storage may return success with an empty removal list under RLS.
+          state(`attempt-${role}`, {
+            update: { error: update.error?.message, status: update.error?.statusCode },
+            remove: {
+              error: removal.error?.message,
+              status: removal.error?.statusCode,
+              data: removal.data,
+            },
+          });
+          const after = await snapshot();
+          state(`after-${role}`, after);
+          assert.deepEqual(after, before);
+        }
       },
     );
     await check(
@@ -731,6 +889,98 @@ export async function runFinancialIntegrity(env = process.env) {
         assert.equal(after.payments.filter((p) => p.status === 'REVERSED').length, 1);
       },
     );
+    for (const initialStatus of ['CANCELLED', 'WRITTEN_OFF', 'OPEN', 'PARTIALLY_PAID', 'OVERDUE']) {
+      await check(
+        `REN-STATE-${initialStatus}`,
+        'Renegotiation state boundary and repetition',
+        async () => {
+          const owner = await actor(organizations[0]);
+          const f = await fixture(owner);
+          if (initialStatus === 'PARTIALLY_PAID') status(await pay(owner, f, '25.00'), 201);
+          else
+            await database.receivable.update({
+              where: { id: f.receivableId },
+              data: { status: initialStatus },
+            });
+          if (initialStatus === 'OVERDUE' || initialStatus === 'CANCELLED')
+            await database.receivableInstallment.update({
+              where: { id: f.installmentId },
+              data: { status: initialStatus },
+            });
+          const snapshotRen = async () => {
+            const debts = await database.receivable.findMany({
+              where: { clientId: f.clientId },
+              orderBy: { id: 'asc' },
+              include: { installments: true },
+            });
+            const history = await database.renegotiation.findMany({
+              where: { originalReceivableId: f.receivableId },
+              orderBy: { id: 'asc' },
+            });
+            const ids = [
+              ...debts.flatMap((d) => [d.id, ...d.installments.map((i) => i.id)]),
+              ...history.map((r) => r.id),
+            ];
+            const audits = await database.auditLog.findMany({
+              where: { organizationId: owner.organizationId, resourceId: { in: ids } },
+              orderBy: { id: 'asc' },
+            });
+            return JSON.parse(JSON.stringify({ debts, history, audits, ledger: await ledger(f) }));
+          };
+          const before = await snapshotRen();
+          state('before', before);
+          const body = {
+            reference: `REN-STATE-${randomUUID()}`,
+            description: 'Renegociacao sintetica',
+            reason: 'Condicao revisada em teste sintetico',
+            issueDate: '2035-01-01',
+            installments: [
+              {
+                sequence: 1,
+                amount: initialStatus === 'PARTIALLY_PAID' ? '75.00' : '100.00',
+                dueDate: '2035-02-01',
+              },
+            ],
+          };
+          const denied = ['CANCELLED', 'WRITTEN_OFF'].includes(initialStatus);
+          const attempt = () =>
+            api(owner, `/finance/receivables/${f.receivableId}/renegotiations`, {
+              method: 'POST',
+              body: { ...body, reference: `REN-${randomUUID()}` },
+            });
+          const results = denied
+            ? await Promise.all([attempt(), attempt()])
+            : await overlap('receivable_installments', [f.installmentId], [attempt, attempt]);
+          state(
+            'concurrentResponses',
+            results.map((r) => r.status),
+          );
+          assert.deepEqual(results.map((r) => r.status).sort(), denied ? [409, 409] : [201, 409]);
+          status(
+            await api(owner, `/finance/receivables/${f.receivableId}/renegotiations`, {
+              method: 'POST',
+              body,
+            }),
+            409,
+          );
+          const after = await snapshotRen();
+          state('after', after);
+          if (denied) assert.deepEqual(after, before);
+          else {
+            assert.equal(after.history.length, 1);
+            assert.equal(after.debts.filter((d) => d.status === 'OPEN').length, 1);
+            assert.equal(after.history[0].status, 'APPROVED');
+            assert.equal(
+              after.audits.filter((a) => a.resource === 'renegotiation' && a.action === 'APPROVE')
+                .length,
+              1,
+            );
+          }
+          const debts = await database.receivable.count({ where: { clientId: f.clientId } });
+          assert.equal(debts, denied ? 1 : 2);
+        },
+      );
+    }
     await check(
       'REN-001',
       'Renegotiation cannot duplicate a cancelled original (DEF-006)',
@@ -1098,9 +1348,9 @@ export async function runFinancialIntegrity(env = process.env) {
           assert.deepEqual(after, before);
         },
       );
-    for (const point of ['document', 'receipt'])
+    for (const fault of ['document', 'receipt', 'provider-error', 'provider-unavailable'])
       await check(
-        `ROLLBACK-UPLOAD-${point}`,
+        `ROLLBACK-UPLOAD-${fault}`,
         'Real scanner/Storage/Prisma compensation with a failed record write (service injection)',
         async () => {
           const { DocumentsService } = require(
@@ -1118,6 +1368,7 @@ export async function runFinancialIntegrity(env = process.env) {
           const { ReceiptExtractionService } = require(
             resolve(root, 'apps/api/dist/finance/receipt-extraction.service.js'),
           );
+          const point = fault.startsWith('provider-') ? 'document' : fault;
           const owner = await actor(organizations[0]),
             f = await fixture(owner);
           owner.permissions = status(await api(owner, '/auth/me'), 200).user.permissions;
@@ -1138,6 +1389,33 @@ export async function runFinancialIntegrity(env = process.env) {
           const storage = new StorageService(config),
             scanner = new DocumentScannerService(config),
             audit = new AuditService();
+          let providerAttempted = false;
+          if (fault.startsWith('provider-')) {
+            const provider = storage.client;
+            storage.client = {
+              storage: {
+                from: (bucket) => {
+                  const original = provider.storage.from(bucket);
+                  return new Proxy(original, {
+                    get(target, key) {
+                      if (key === 'remove')
+                        return async () => {
+                          providerAttempted = true;
+                          if (fault === 'provider-unavailable')
+                            throw new Error('Injected provider unavailable during compensation');
+                          return {
+                            data: null,
+                            error: { message: 'Injected provider remove failure' },
+                          };
+                        };
+                      const value = Reflect.get(target, key);
+                      return typeof value === 'function' ? value.bind(target) : value;
+                    },
+                  });
+                },
+              },
+            };
+          }
           let injected = false;
           const broken = new Proxy(database, {
             get(target, key) {
@@ -1210,9 +1488,33 @@ export async function runFinancialIntegrity(env = process.env) {
                 originalname: 'synthetic-fault.pdf',
               },
             ),
+            (error) => {
+              state('communicatedError', {
+                type: error.name,
+                message: error.message,
+                status: error.getStatus?.(),
+              });
+              return fault === 'provider-error'
+                ? error.getStatus?.() === 503
+                : fault === 'provider-unavailable'
+                  ? error.message === 'Injected provider unavailable during compensation'
+                  : error.message === 'Injected upload record failure';
+            },
           );
           assert.equal(injected, true);
-          assert.deepEqual(await inventory(), before);
+          const afterStorage = await inventory();
+          if (fault.startsWith('provider-')) {
+            assert.equal(providerAttempted, true);
+            assert.ok(
+              afterStorage.length > before.length,
+              'Failed compensation leaves a measurable synthetic orphan',
+            );
+            state('orphanRisk', {
+              fault,
+              reconciliation: 'MANUAL_REQUIRED',
+              objects: afterStorage.filter((row) => !before.some((old) => old.name === row.name)),
+            });
+          } else assert.deepEqual(afterStorage, before);
           assert.equal(
             await database.paymentReceipt.count({ where: { installmentId: f.installmentId } }),
             0,
