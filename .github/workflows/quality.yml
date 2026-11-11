@@ -47,10 +47,14 @@ jobs:
       - name: Verify OCR assets and extraction from the compiled API
         run: node tools/qa/verify-receipt-runtime-ci.mjs
       - run: npm run perf:bundle
-      - run: npx playwright install --with-deps chromium
+      - name: Start prebuilt Chromium with verified loopback bridge
+        run: node tools/qa/prebuilt-ci-dependencies.mjs browser
       - name: Playwright mocked E2E
         run: npm run test:e2e
         timeout-minutes: 15
+      - name: Stop only this disposable browser server
+        if: always()
+        run: node tools/qa/prebuilt-ci-dependencies.mjs stop
       - name: Upload sanitized Playwright run summary
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,6 +62,7 @@ jobs:
           name: playwright-report
           path: |
             test-results/.last-run.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*
             ${{ runner.temp }}/livio-integrated-artifacts/receipt-runtime-validation.json
           if-no-files-found: ignore
 
@@ -80,12 +85,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Install qpdf for independent PDF fixture validation
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes qpdf
-      - name: Install the single browser used by the integrated suite
-        run: npx playwright install --with-deps chromium
+      - name: Install official hash-pinned qpdf and verify real PDF checks
+        run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
+      - name: Start prebuilt Chromium with verified loopback bridge
+        run: node tools/qa/prebuilt-ci-dependencies.mjs browser
       - name: Start disposable Supabase and export loopback-only credentials
         id: supabase-start
         run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
@@ -112,12 +115,16 @@ jobs:
       - name: Verify receipt migration, database roles, RLS and concurrent identifiers
         if: ${{ always() && steps.supabase-start.outcome == 'success' }}
         run: node tools/qa/verify-payment-receipts-ci.mjs
+      - name: Stop only this disposable browser server
+        if: always()
+        run: node tools/qa/prebuilt-ci-dependencies.mjs stop
       - name: Upload sanitized integrated evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integrated-supabase-browser-evidence
           path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics-*.json

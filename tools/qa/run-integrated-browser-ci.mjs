@@ -36,6 +36,8 @@ const safeEnvironmentKeys = [
   'RUNNER_TEMP',
   'RUNNER_TOOL_CACHE',
   'PLAYWRIGHT_BROWSERS_PATH',
+  'PW_TEST_CONNECT_WS_ENDPOINT',
+  'PW_TEST_CONNECT_EXPOSE_NETWORK',
 ];
 const runnerEnv = Object.fromEntries(
   safeEnvironmentKeys.flatMap((key) =>
