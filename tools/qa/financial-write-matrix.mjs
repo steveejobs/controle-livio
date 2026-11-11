@@ -202,7 +202,6 @@ export async function runWriteMatrix({
       category: 'QA',
       amount: '25.00',
       incurredAt: now(),
-      createdById: owner.userId,
     }),
     payment_receipts: async () => {
       const doc = await database.document.create({

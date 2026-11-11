@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createRequire } from 'node:module';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   financialRunnerConfiguration,
   validateFinancialRunnerHost,
@@ -326,6 +326,24 @@ test('financial job is independent and browser-free, with disposable setup and u
   assert.deepEqual(workflow.permissions, { contents: 'read' });
   const job = workflow.jobs['financial-security'];
   assert.equal(job.needs, undefined);
+  const apiBuild = job.steps.findIndex((step) => step.id === 'api-build');
+  const compiledSupport = job.steps.findIndex((step) =>
+    step.run?.includes('financial-integrity-support.test.mjs'),
+  );
+  assert(
+    apiBuild >= 0 && compiledSupport > apiBuild,
+    'Support tests require the real compiled finance schemas.',
+  );
+  const preflight = job.steps.findIndex((step) => step.run?.includes('--preflight'));
+  const install = job.steps.findIndex((step) => step.run === 'npm ci');
+  const qpdf = job.steps.findIndex((step) =>
+    step.run?.endsWith('prebuilt-ci-dependencies.mjs qpdf'),
+  );
+  const stack = job.steps.findIndex((step) => step.id === 'supabase-start');
+  const scanner = job.steps.findIndex((step) => step.id === 'clamav-start');
+  assert(preflight < install && install < apiBuild);
+  assert(compiledSupport < qpdf && qpdf < stack && stack < scanner);
+  assert.equal(job.steps.filter((step) => step.run === 'npm run build:api').length, 1);
   assert.equal(job.if, workflow.jobs['supabase-isolation'].if);
   assert.equal(job['runs-on'], 'ubuntu-24.04');
   const commands = job.steps.map((step) => step.run ?? '').join('\n');
@@ -363,4 +381,152 @@ test('financial job is independent and browser-free, with disposable setup and u
         readFileSync(resolve('tools/qa', file), 'utf8'),
       ),
     );
+});
+
+test('matrix fixture makers use existing required Prisma scalar fields before real SQL controls', async (context) => {
+  const { Prisma } = require('@prisma/client');
+  const file = 'tools/qa/financial-write-matrix.mjs';
+  const ast = ts.createSourceFile(
+    file,
+    readFileSync(file, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS,
+  );
+  const initializers = new Map();
+  const visit = (node) => {
+    if (
+      ts.isVariableDeclaration(node) &&
+      ts.isIdentifier(node.name) &&
+      ['makers', 'paymentData'].includes(node.name.text)
+    )
+      initializers.set(node.name.text, node.initializer.getText(ast));
+    ts.forEachChild(node, visit);
+  };
+  visit(ast);
+  const delegates = new Map(
+    Prisma.dmmf.datamodel.models.map((model) => [
+      model.name[0].toLowerCase() + model.name.slice(1),
+      model,
+    ]),
+  );
+  const validate = (model, data) => {
+    assert(model);
+    assert.deepEqual(
+      Object.keys(data).filter((key) => !model.fields.some((field) => field.name === key)),
+      [],
+      'Unknown fixture field in ' + model.name,
+    );
+    for (const [name, value] of Object.entries(data)) {
+      const field = model.fields.find((candidate) => candidate.name === name);
+      assert.notEqual(field.kind, 'object', 'Only scalar fixture input is expected');
+      if (field.kind === 'enum') {
+        const enumeration = Prisma.dmmf.datamodel.enums.find((item) => item.name === field.type);
+        assert(
+          enumeration.values.some((item) => item.name === value),
+          model.name + '.' + name,
+        );
+      } else if (field.type === 'Decimal') {
+        assert.equal(typeof value, 'string', 'Money fixture must remain decimal text');
+        assert(/^-?\d+(?:\.\d+)?$/.test(value));
+        assert(new Prisma.Decimal(value).isFinite());
+      } else if (field.type === 'DateTime') {
+        assert(value instanceof Date && Number.isFinite(value.getTime()));
+      } else if (field.type === 'String') assert.equal(typeof value, 'string');
+      else if (field.type === 'Int') assert(Number.isInteger(value));
+      else if (field.type === 'BigInt') assert.equal(typeof value, 'bigint');
+      else if (field.type === 'Boolean') assert.equal(typeof value, 'boolean');
+      else if (field.type === 'Json') assert.doesNotThrow(() => JSON.stringify(value));
+      else assert.fail('Unhandled fixture scalar ' + field.type);
+      if (name === 'organizationId') assert.equal(value, org.organizationId);
+      if (name === 'clientId') assert.equal(value, fixture.clientId);
+      if (
+        [
+          'createdById',
+          'actorUserId',
+          'uploadedById',
+          'submittedById',
+          'confirmedById',
+          'reversedById',
+        ].includes(name)
+      )
+        assert.equal(value, owner.userId);
+    }
+    for (const relation of model.fields.filter((field) => field.kind === 'object')) {
+      for (const [index, name] of (relation.relationFromFields ?? []).entries()) {
+        if (!(name in data)) continue;
+        assert.equal(relation.relationToFields[index], 'id');
+        assert(
+          identities.get(relation.type)?.has(data[name]),
+          model.name + '.' + name + ' unknown parent',
+        );
+      }
+    }
+    assert.deepEqual(
+      model.fields
+        .filter(
+          (field) =>
+            field.kind !== 'object' &&
+            field.isRequired &&
+            !field.hasDefaultValue &&
+            !field.isUpdatedAt &&
+            data[field.name] === undefined,
+        )
+        .map((field) => field.name),
+      [],
+      'Missing fixture field in ' + model.name,
+    );
+  };
+  // Structural regression only. The unchanged harness still validates real Prisma, FK and SQL inserts.
+  const database = new Proxy(
+    {},
+    {
+      get: (_target, key) => ({
+        create: async ({ data }) => {
+          validate(delegates.get(key), data);
+          const row = { id: randomUUID(), ...data };
+          const model = delegates.get(key);
+          if (!identities.has(model.name)) identities.set(model.name, new Set());
+          identities.get(model.name).add(row.id);
+          return row;
+        },
+      }),
+    },
+  );
+  const org = { organizationId: randomUUID() };
+  const fixture = {
+    clientId: randomUUID(),
+    installmentId: randomUUID(),
+    receivableId: randomUUID(),
+  };
+  const owner = { userId: randomUUID(), organizationId: org.organizationId };
+  const identities = new Map([
+    ['Organization', new Set([org.organizationId])],
+    ['User', new Set([owner.userId])],
+    ['Client', new Set([fixture.clientId])],
+    ['Receivable', new Set([fixture.receivableId])],
+    ['ReceivableInstallment', new Set([fixture.installmentId])],
+  ]);
+  const makers = new Function(
+    'database',
+    'org',
+    'f',
+    'owner',
+    'now',
+    'randomUUID',
+    'createHash',
+    'const paymentData=' +
+      initializers.get('paymentData') +
+      '; const makers=' +
+      initializers.get('makers') +
+      '; return makers;',
+  )(database, org, fixture, owner, () => new Date(), randomUUID, createHash);
+  assert.equal(Object.keys(makers).length, 12);
+  for (const [table, maker] of Object.entries(makers))
+    await context.test('fixture: ' + table, async () => {
+      validate(
+        Prisma.dmmf.datamodel.models.find((model) => model.dbName === table),
+        await maker(),
+      );
+    });
 });

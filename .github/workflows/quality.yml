@@ -178,6 +178,9 @@ jobs:
       - name: Refuse linked projects, shared env and external credentials before installation
         run: node tools/qa/run-financial-integrity-ci.mjs --preflight
       - run: npm ci
+      - name: Build the real API without web or browser
+        id: api-build
+        run: npm run build:api
       - name: Verify financial runner guards and existing harness support
         run: node --test tools/qa/financial-runner.test.mjs tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs
       - name: Install and validate only official qpdf; no browser or image pull
@@ -188,9 +191,6 @@ jobs:
       - name: Start own official ClamAV bound to loopback
         id: clamav-start
         run: node tools/qa/start-clamav-ci.mjs
-      - name: Build the real API without web or browser
-        id: api-build
-        run: npm run build:api
       - name: Validate real scanner and PDF fixtures
         id: clamav-ready
         run: node tools/qa/validate-clamav-ci.mjs --ready
