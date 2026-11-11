@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   application:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       # Loopback placeholders keep unit/build jobs unable to reach shared services.
@@ -64,7 +64,7 @@ jobs:
   supabase-isolation:
     # Run against the disposable local stack for PRs, main and the authorized validation branch.
     if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       CLAMAV_HOST: 127.0.0.1
