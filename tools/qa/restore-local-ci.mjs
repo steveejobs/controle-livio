@@ -7,9 +7,12 @@ import assert from 'node:assert/strict';
 const excludedSchedulerSchemas = ['cron', 'net'];
 const excludedSchedulerExtensions = new Set(['pg_cron', 'pg_net']);
 const expectedRestoreInventory = {
-  sourceOwners: 351,
-  sourceAclRows: 232,
-  restoredAclRows: 216,
+  // DEF-008 adds exactly two public routines, each with an explicit ACL.
+  // No relation/type/index was added; owner and ACL inventories grow by two.
+  // The archive observed in Quality 43038974286 has 234 ACL rows / 218 retained.
+  sourceOwners: 351 + 2,
+  sourceAclRows: 232 + 2,
+  restoredAclRows: 216 + 2,
   restoredDefaultAclRows: 27,
   excludedSchedulerAclRows: 16,
   excludedSchedulerDefaultAclRows: 3,
@@ -430,7 +433,7 @@ assert.equal(
 assert.equal(
   filteredTocEvidence.aclRowsRestored,
   expectedRestoreInventory.restoredAclRows,
-  'Restore list does not retain all 216 expected public ACL entries',
+  'Restore list does not retain all 218 expected public ACL entries',
 );
 assert.equal(
   filteredTocEvidence.defaultAclRowsRestored,
