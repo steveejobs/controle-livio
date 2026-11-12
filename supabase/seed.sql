@@ -136,7 +136,7 @@ WHERE r.key = 'administrator'
      OR (p.resource = 'reports' AND p.action IN ('view','export'))
    ))
    OR (r.key = 'client' AND (
-     (p.resource IN ('matters','contracts','receivables','payments','documents','calendar') AND p.action = 'view')
+     (p.resource IN ('clients','matters','contracts','receivables','payments','documents','calendar') AND p.action = 'view')
      OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'messages' AND p.action IN ('view','create'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))

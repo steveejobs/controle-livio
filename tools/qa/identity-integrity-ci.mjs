@@ -6,6 +6,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateIdentityEnvironment } from './identity-environment.mjs';
+import { runDocumentStorageMatrix } from './document-storage-matrix.mjs';
 
 // Direct Node integration: API/SQL/Auth/Storage/scanner, never mocked persistence.
 // No dotenv, no workflow changes, no financial test invocation.
@@ -75,6 +76,14 @@ export async function runIdentityIntegrity(env = process.env) {
       include: { permissions: { include: { permission: true } } },
     });
     assert.equal(source.length, 5);
+    assert(
+      source
+        .find((r) => r.key === 'client')
+        .permissions.some(
+          ({ permission }) => permission.resource === 'clients' && permission.action === 'view',
+        ),
+      'Seed client lacks canonical clients:view',
+    );
     const permissions = new Map();
     for (const role of source) {
       const copied = await db.role.create({
@@ -156,6 +165,17 @@ export async function runIdentityIntegrity(env = process.env) {
     };
   }
   try {
+    const applied = await db.$queryRawUnsafe(
+      "SELECT version FROM supabase_migrations.schema_migrations WHERE version='20261112120000'",
+    );
+    assert.equal(applied.length, 1, 'DEF017 migration must actually be applied');
+    evidence.storagePolicies = await db.$queryRawUnsafe(
+      "SELECT policyname,permissive,roles::text AS roles,cmd,qual,with_check FROM pg_policies WHERE schemaname='storage' AND tablename='objects' ORDER BY policyname",
+    );
+    evidence.databaseIdentity = await db.$queryRawUnsafe(
+      'SELECT current_user::text AS role,current_database()::text AS database',
+    );
+    evidence.def017Migration = applied;
     assert.equal((await fetch(env.NEXT_PUBLIC_API_URL + '/health/ready')).status, 200);
     const orgA = await organization(),
       orgB = await organization();
@@ -591,6 +611,194 @@ export async function runIdentityIntegrity(env = process.env) {
       active.before = { sha256: version.sha256 };
       assert(result.error, 'Direct identity evidence overwrite was accepted');
       assert.equal(afterHash, version.sha256);
+    });
+    await check('ID-STORAGE-AUTHORIZATION-MATRIX', async () => {
+      assert(document && client);
+      await runDocumentStorageMatrix({
+        env,
+        db,
+        storage,
+        actor,
+        owner,
+        foreign,
+        client,
+        document,
+        png,
+        request,
+        upload,
+      });
+    });
+    await check('ID-DOCUMENT-VERSION-INTEGRITY', async () => {
+      const before = await db.documentVersion.findFirstOrThrow({
+        where: { documentId: document.id },
+      });
+      const original = await storage.storage.from('legal-documents').download(before.storageKey);
+      assert.equal(original.error, null);
+      const originalHash = createHash('sha256')
+        .update(Buffer.from(await original.data.arrayBuffer()))
+        .digest('hex');
+      assert.equal(originalHash, before.sha256);
+      const changed = Buffer.concat([png, Buffer.from('SYNTHETIC NEW VERSION')]);
+      const form = new FormData();
+      form.append('file', new Blob([changed], { type: 'image/png' }), 'version2.png');
+      expectStatus(
+        await request(owner, '/documents/' + document.id + '/versions', {
+          method: 'POST',
+          body: form,
+        }),
+        201,
+      );
+      const versions = await db.documentVersion.findMany({
+        where: { documentId: document.id },
+        orderBy: { version: 'asc' },
+      });
+      assert.equal(versions.length, 2);
+      assert.notEqual(versions[0].storageKey, versions[1].storageKey);
+      for (const v of versions) {
+        const bytes = await storage.storage.from('legal-documents').download(v.storageKey);
+        assert.equal(bytes.error, null);
+        assert.equal(
+          createHash('sha256')
+            .update(Buffer.from(await bytes.data.arrayBuffer()))
+            .digest('hex'),
+          v.sha256,
+        );
+      }
+      assert.equal(versions[0].sha256, originalHash);
+      active.versions = versions.map((v) => ({
+        id: v.id,
+        key: v.storageKey,
+        sha256: v.sha256,
+        version: v.version,
+      }));
+      const countBefore = await db.document.count({ where: { organizationId: owner.org } });
+      const objectsBefore = await db.$queryRawUnsafe(
+        "SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'",
+      );
+      const eicar = Buffer.from(
+        'X5O!P%@AP[4\\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*',
+      );
+      const infected = await PDFDocument.create();
+      infected.addPage().drawText('SYNTHETIC SCANNER TEST');
+      await infected.attach(eicar, 'eicar.com', {
+        mimeType: 'application/octet-stream',
+        description: 'SYNTHETIC ANTIVIRUS TEST',
+      });
+      const infectedBytes = Buffer.from(await infected.save());
+      assert.equal((await PDFDocument.load(infectedBytes)).getPageCount(), 1);
+      const rejected = await request(owner, '/documents', {
+        method: 'POST',
+        body: upload(client.id, infectedBytes, 'application/pdf'),
+      });
+      assert.equal(rejected.http, 422);
+      assert.match(JSON.stringify(rejected.body), /verifica.*seguran/i);
+      assert.equal(await db.document.count({ where: { organizationId: owner.org } }), countBefore);
+      assert.deepEqual(
+        await db.$queryRawUnsafe(
+          "SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'",
+        ),
+        objectsBefore,
+      );
+    });
+    await check('ID-SIGNATURE-SERVER-STORAGE-COMPATIBILITY', async () => {
+      const pdf = await PDFDocument.create();
+      pdf.addPage().drawText('SYNTHETIC SIGNATURE TEST - NO LEGAL VALIDITY');
+      const bytes = Buffer.from(await pdf.save());
+      const source = expectStatus(
+        await request(owner, '/documents', {
+          method: 'POST',
+          body: upload(client.id, bytes, 'application/pdf'),
+        }),
+        201,
+      );
+      const sourceVersion = await db.documentVersion.findFirstOrThrow({
+        where: { documentId: source.id },
+      });
+      const revoked = expectStatus(
+        await request(owner, '/documents/' + source.id + '/signature-requests', {
+          method: 'POST',
+          body: { signerName: 'SIGNATARIO SINTETICO' },
+        }),
+        201,
+      );
+      expectStatus(
+        await request(owner, '/documents/signature-requests/' + revoked.id + '/revoke', {
+          method: 'POST',
+        }),
+        201,
+      );
+      const revokedRead = await fetch(
+        env.NEXT_PUBLIC_API_URL + '/public/signatures/' + revoked.token,
+      );
+      assert.equal(revokedRead.status, 410);
+      active.requests.push({
+        method: 'GET',
+        path: '/public/signatures/[redacted]',
+        http: revokedRead.status,
+      });
+      const link = expectStatus(
+        await request(owner, '/documents/' + source.id + '/signature-requests', {
+          method: 'POST',
+          body: { signerName: 'SIGNATARIO SINTETICO' },
+        }),
+        201,
+      );
+      const signed = await fetch(
+        env.NEXT_PUBLIC_API_URL + '/public/signatures/' + link.token + '/sign',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            signerName: 'SIGNATARIO SINTETICO',
+            consent: true,
+            signature: 'data:image/png;base64,' + png.toString('base64'),
+          }),
+          signal: AbortSignal.timeout(35000),
+        },
+      );
+      active.requests.push({
+        method: 'POST',
+        path: '/public/signatures/[redacted]/sign',
+        http: signed.status,
+      });
+      assert.equal(signed.status, 201);
+      const result = await signed.json();
+      assert.equal(result.status, 'SIGNED');
+      const row = await db.documentSigningRequest.findUniqueOrThrow({ where: { id: link.id } });
+      assert.equal(row.status, 'SIGNED');
+      assert.equal(row.signedDocumentId, result.signedDocumentId);
+      const signedVersion = await db.documentVersion.findFirstOrThrow({
+        where: { documentId: result.signedDocumentId },
+      });
+      for (const version of [sourceVersion, signedVersion]) {
+        const download = await storage.storage.from('legal-documents').download(version.storageKey);
+        assert.equal(download.error, null);
+        assert.equal(
+          createHash('sha256')
+            .update(Buffer.from(await download.data.arrayBuffer()))
+            .digest('hex'),
+          version.sha256,
+        );
+      }
+      const signature = await storage.storage
+        .from('document-signatures')
+        .download(row.signatureStorageKey);
+      assert.equal(signature.error, null);
+      assert.equal(
+        createHash('sha256')
+          .update(Buffer.from(await signature.data.arrayBuffer()))
+          .digest('hex'),
+        row.signatureSha256,
+      );
+      assert((await db.auditLog.count({ where: { resourceId: link.id, action: 'UPDATE' } })) > 0);
+      assert(
+        (await db.auditLog.count({ where: { resourceId: revoked.id, action: 'CANCEL' } })) > 0,
+      );
+      active.result = {
+        sourceDocumentId: source.id,
+        signedDocumentId: result.signedDocumentId,
+        signatureSha256: row.signatureSha256,
+      };
     });
     evidence.setup = 'PASS';
   } catch (error) {

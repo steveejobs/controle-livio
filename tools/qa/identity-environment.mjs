@@ -23,6 +23,7 @@ export function validateIdentityEnvironment(env, root, options = {}) {
       '.env.production',
       '.env.production.local',
       '.env.test',
+      '.env.test.local',
       '.env.development',
       '.env.development.local',
     ].flatMap((suffix) =>

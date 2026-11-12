@@ -34,6 +34,12 @@ for (const [key, value] of [
     assert.throws(() => validateIdentityEnvironment({ ...env, [key]: value }, '.', opts)),
   );
 test('identity guard rejects linked env files and the local Windows host', () => {
+  assert.throws(() =>
+    validateIdentityEnvironment(env, '.', {
+      ...opts,
+      exists: (p) => p.replaceAll('\\', '/').endsWith('apps/api/.env.test.local'),
+    }),
+  );
   assert.throws(() => validateIdentityEnvironment(env, '.', { ...opts, exists: () => true }));
   assert.throws(() => validateIdentityEnvironment(env, '.', { ...opts, platform: 'win32' }));
 });

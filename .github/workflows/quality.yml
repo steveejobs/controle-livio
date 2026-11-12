@@ -182,7 +182,7 @@ jobs:
         id: api-build
         run: npm run build:api
       - name: Verify financial runner guards and existing harness support
-        run: node --test tools/qa/financial-runner.test.mjs tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs
+        run: node --test tools/qa/financial-runner.test.mjs tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs tools/qa/document-security.test.mjs
       - name: Install and validate only official qpdf; no browser or image pull
         run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
       - name: Start own disposable PostgreSQL, Auth, PostgREST and Storage; apply migrations
@@ -207,7 +207,11 @@ jobs:
         run: node tools/qa/validate-clamav-ci.mjs --failure-modes
       - name: Stop only this job's disposable Supabase project
         if: ${{ always() && steps.supabase-start.outcome != 'skipped' }}
-        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1
+        run: |
+          stop_code=0
+          npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || stop_code=$?
+          node tools/qa/supabase-start-diagnostics.mjs --cleanup-check "$stop_code"
+          exit "$stop_code"
       - name: Stop only this job's ClamAV container
         if: always()
         run: node tools/qa/stop-clamav-ci.mjs
@@ -221,6 +225,7 @@ jobs:
             ${{ runner.temp }}/livio-financial-security/financial-api.log
             ${{ runner.temp }}/livio-financial-security/workflow-stages/financial-stage3.json
             ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-qpdf.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-supabase-*.json
             ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
             ${{ runner.temp }}/livio-integrated-artifacts/receipt-migration-validation.json
           if-no-files-found: ignore
