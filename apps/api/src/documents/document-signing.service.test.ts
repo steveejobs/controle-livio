@@ -357,3 +357,63 @@ describe('DocumentSigningService', () => {
     await expect(withThrottle.publicDetails('d'.repeat(64))).rejects.toBeInstanceOf(GoneException);
   });
 });
+
+it('attempts both compensations and releases PROCESSING even if the first removal fails', async () => {
+  const pdf = await PDFDocument.create();
+  pdf.addPage();
+  const source = Buffer.from(await pdf.save());
+  const request = {
+    id: 'synthetic-request',
+    organizationId: 'org-a',
+    documentId: 'document-a',
+    sourceVersion: 1,
+    status: 'PENDING',
+    signerName: 'Synthetic Test',
+    createdById: 'user-a',
+    expiresAt: new Date(Date.now() + 60000),
+    document: {
+      id: 'document-a',
+      organizationId: 'org-a',
+      title: 'SYNTHETIC TEST',
+      category: 'IDENTIFICACAO',
+      clientId: 'client-a',
+    },
+    sourceDocumentVersion: {
+      storageKey: 'organizations/org-a/source.pdf',
+      mimeType: 'application/pdf',
+      sha256: 'a'.repeat(64),
+    },
+  };
+  const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+  const prisma = {
+    documentSigningRequest: { findUnique: vi.fn().mockResolvedValue(request), updateMany },
+    $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
+    $transaction: vi.fn().mockRejectedValue(new Error('Injected SQL failure')),
+  };
+  const remove = vi
+    .fn()
+    .mockRejectedValueOnce(new Error('Injected removal failure'))
+    .mockResolvedValueOnce(undefined);
+  const storage = { download: vi.fn().mockResolvedValue(source), upload: vi.fn(), remove };
+  const service = new DocumentSigningService(
+    prisma as never,
+    storage as never,
+    {} as never,
+    { assertClean: vi.fn() } as never,
+  );
+  await expect(
+    service.sign('f'.repeat(64), {
+      signerName: 'Synthetic Test',
+      consent: true,
+      signature: 'data:image/png;base64,' + signaturePng().toString('base64'),
+    }),
+  ).rejects.toThrow();
+  expect(storage.upload).toHaveBeenCalledTimes(2);
+  expect(remove).toHaveBeenCalledTimes(2);
+  expect(updateMany).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      where: { id: 'synthetic-request', status: 'PROCESSING' },
+      data: { status: 'PENDING' },
+    }),
+  );
+});

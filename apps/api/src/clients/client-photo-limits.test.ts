@@ -17,7 +17,7 @@ describe('client photo transport limits', () => {
       service.uploadPhoto(
         { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] },
         'client-a',
-        { buffer } as Express.Multer.File,
+        { buffer, mimetype: 'image/png' } as Express.Multer.File,
       ),
     ).rejects.toThrow('4 MiB');
     expect(upload).not.toHaveBeenCalled();
@@ -46,6 +46,7 @@ describe('client photo transport limits', () => {
       } as never,
       { record: vi.fn() } as never,
       storage as never,
+      { assertClean: vi.fn() } as never,
     );
     vi.spyOn(service, 'get').mockResolvedValue({
       id: 'client-a',
@@ -57,7 +58,7 @@ describe('client photo transport limits', () => {
       service.uploadPhoto(
         { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] },
         'client-a',
-        { buffer } as Express.Multer.File,
+        { buffer, mimetype: 'image/png' } as Express.Multer.File,
       ),
     ).resolves.toEqual({ url: 'https://example.test/private-photo' });
     expect(calls).toEqual(['upload', 'commit', 'remove-old']);
@@ -86,6 +87,7 @@ describe('client photo transport limits', () => {
       } as never,
       { record: vi.fn() } as never,
       storage as never,
+      { assertClean: vi.fn() } as never,
     );
     vi.spyOn(service, 'get').mockResolvedValue({
       id: 'client-a',
@@ -96,7 +98,7 @@ describe('client photo transport limits', () => {
       service.uploadPhoto(
         { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] },
         'client-a',
-        { buffer } as Express.Multer.File,
+        { buffer, mimetype: 'image/png' } as Express.Multer.File,
       ),
     ).rejects.toThrow('outra sessão');
     expect(storage.remove).toHaveBeenCalledExactlyOnceWith(

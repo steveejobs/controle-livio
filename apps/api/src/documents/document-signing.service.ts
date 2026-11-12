@@ -8,6 +8,7 @@ import {
   HttpException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { AuthenticatedActor } from '@livio/shared';
@@ -355,12 +356,24 @@ export class DocumentSigningService {
       });
       return { status: 'SIGNED', signedAt, signedDocumentId };
     } catch (error) {
-      if (signatureStored) await this.storage.remove(signatureStorageKey, signatureBucket);
-      if (signedDocumentStored) await this.storage.remove(signedStorageKey);
-      await this.prisma.documentSigningRequest.updateMany({
-        where: { id: request.id, status: 'PROCESSING' },
-        data: { status: 'PENDING' },
-      });
+      const cleanup = await Promise.allSettled([
+        ...(signatureStored ? [this.storage.remove(signatureStorageKey, signatureBucket)] : []),
+        ...(signedDocumentStored ? [this.storage.remove(signedStorageKey)] : []),
+      ]);
+      try {
+        await this.prisma.documentSigningRequest.updateMany({
+          where: { id: request.id, status: 'PROCESSING' },
+          data: { status: 'PENDING' },
+        });
+      } catch {
+        throw new ServiceUnavailableException(
+          'A assinatura falhou e exige revisão administrativa do processamento e dos arquivos.',
+        );
+      }
+      if (cleanup.some((result) => result.status === 'rejected'))
+        throw new ServiceUnavailableException(
+          'A assinatura falhou e há arquivos cuja recuperação exige revisão administrativa.',
+        );
       throw error;
     }
   }

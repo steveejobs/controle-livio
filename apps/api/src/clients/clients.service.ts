@@ -16,6 +16,7 @@ import { pageResult, pageWindow, type PaginationInput } from '../common/schemas'
 import { normalizeAndValidateTaxId } from '../common/tax-id';
 import { PrismaService } from '../prisma/prisma.service';
 import { StorageService } from '../documents/storage.service';
+import { DocumentScannerService } from '../documents/document-scanner.service';
 import type {
   CreateClientInput,
   CreateContactInput,
@@ -51,6 +52,7 @@ export class ClientsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly scanner: DocumentScannerService,
   ) {}
 
   async photoUrl(actor: AuthenticatedActor, id: string) {
@@ -80,6 +82,9 @@ export class ClientsService {
       throw new BadRequestException(
         `Use uma foto JPG, PNG ou WebP de até ${MAX_CLIENT_PHOTO_SIZE_MB} MiB.`,
       );
+    if (file.mimetype !== mimeType)
+      throw new BadRequestException('Tipo de arquivo não corresponde ao conteúdo da foto.');
+    await this.scanner.assertClean(buffer, mimeType);
     const key = `${actor.organizationId}/clients/${id}/${randomUUID()}.${jpeg ? 'jpg' : png ? 'png' : 'webp'}`;
     await this.storage.upload(key, buffer, mimeType, this.photoBucket);
     try {
@@ -502,38 +507,77 @@ export class ClientsService {
 
   async update(actor: AuthenticatedActor, id: string, input: UpdateClientInput) {
     const before = await this.get(actor, id);
-    const { taxId, address, customFields, ...changes } = input;
+    const { taxId, address, customFields, expectedUpdatedAt, ...changes } = input;
     let taxIdNormalized: string | undefined;
     try {
       taxIdNormalized = taxId === undefined ? undefined : normalizeAndValidateTaxId(taxId);
     } catch {
       throw new BadRequestException('CPF/CNPJ inválido');
     }
-    return this.prisma.$transaction(async (transaction) => {
-      const client = await transaction.client.update({
-        where: { id },
-        data: {
-          ...changes,
-          ...(address !== undefined ? { address: address as Prisma.InputJsonValue } : {}),
-          ...(customFields !== undefined
-            ? { customFields: customFields as Prisma.InputJsonValue }
-            : {}),
-          ...(input.email ? { email: input.email.toLowerCase() } : {}),
-          ...(taxId !== undefined ? { taxIdNormalized: taxIdNormalized ?? null } : {}),
-        },
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const client = await transaction.client.update({
+          where: {
+            id,
+            organizationId: actor.organizationId,
+            deletedAt: null,
+            ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}),
+          },
+          data: {
+            ...changes,
+            ...(expectedUpdatedAt
+              ? {
+                  updatedAt: new Date(
+                    Math.max(Date.now(), new Date(expectedUpdatedAt).getTime() + 1),
+                  ),
+                }
+              : {}),
+            ...(address !== undefined ? { address: address as Prisma.InputJsonValue } : {}),
+            ...(customFields !== undefined
+              ? { customFields: customFields as Prisma.InputJsonValue }
+              : {}),
+            ...(input.email !== undefined
+              ? { email: input.email ? input.email.toLowerCase() : null }
+              : {}),
+            ...(input.phone !== undefined ? { phone: input.phone || null } : {}),
+            ...(input.source !== undefined ? { source: input.source || null } : {}),
+            ...(taxId !== undefined ? { taxIdNormalized: taxIdNormalized ?? null } : {}),
+          },
+        });
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'UPDATE',
+          resource: 'client',
+          resourceId: id,
+          before,
+          after: client,
+        });
+        return client;
       });
-      await this.audit.record(transaction, {
-        organizationId: actor.organizationId,
-        actorUserId: actor.userId,
-        actorSessionId: actor.sessionId,
-        action: 'UPDATE',
-        resource: 'client',
-        resourceId: id,
-        before,
-        after: client,
-      });
-      return client;
-    });
+    } catch (error) {
+      if (
+        expectedUpdatedAt &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      )
+        throw new ConflictException(
+          'O cadastro foi alterado em outra sessão. Atualize a ficha antes de salvar.',
+        );
+      if (
+        taxIdNormalized &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        Array.isArray(error.meta?.target) &&
+        error.meta.target.some((field) =>
+          ['tax_id_normalized', 'taxIdNormalized'].includes(String(field)),
+        )
+      ) {
+        throw new ConflictException('Este CPF/CNPJ ja esta cadastrado nesta organizacao.');
+      }
+      throw error;
+    }
   }
 
   async archive(actor: AuthenticatedActor, id: string): Promise<void> {

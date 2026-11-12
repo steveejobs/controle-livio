@@ -12,7 +12,10 @@ export const createClientSchema = z.object({
   customFields: z.record(z.string(), z.unknown()).optional(),
 });
 
-export const updateClientSchema = createClientSchema.partial();
+export const updateClientSchema = createClientSchema.partial().extend({
+  email: z.union([z.string().email().max(320), z.literal('')]).optional(),
+  expectedUpdatedAt: z.string().datetime({ offset: true }).optional(),
+});
 
 export const createContactSchema = z.object({
   name: z.string().trim().min(2).max(200),
