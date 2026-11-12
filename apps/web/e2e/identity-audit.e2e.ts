@@ -1,6 +1,57 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import type { createWorker as createOcrWorker } from 'tesseract.js';
 import { openClientQualification } from './support/client-qualification';
+import { identityOcrFixture, identityOcrGroundTruth } from './support/identity-ocr-fixture';
+import { observeSyntheticOcr, syntheticOcrObservations } from './support/ocr-evidence';
+import { parseIdentificationText } from '../features/clients/identification-reader';
+
+test('stage56 optical fixture uses real browser Tesseract without persistence claims', async ({
+  page,
+}, info) => {
+  test.setTimeout(60000);
+  const png = identityOcrFixture();
+  await page.goto('/');
+  await page.addScriptTag({ path: resolve('node_modules/tesseract.js/dist/tesseract.min.js') });
+  const result = await page.evaluate(async (encoded) => {
+    const tesseract = (window as unknown as { Tesseract: { createWorker: typeof createOcrWorker } })
+      .Tesseract;
+    const worker = await tesseract.createWorker('por', 1, {
+      workerPath: '/ocr/worker.min.js',
+      langPath: '/ocr',
+      corePath: '/ocr/tesseract-core.wasm.js',
+    });
+    try {
+      const { data } = await worker.recognize('data:image/png;base64,' + encoded);
+      return { text: data.text, confidence: data.confidence };
+    } finally {
+      await worker.terminate();
+    }
+  }, png.toString('base64'));
+  const evidence = {
+    scope: 'REAL_BROWSER_TESSERACT_PARSER_ONLY_NO_API_OR_POSTGRESQL',
+    browser: page.context().browser()?.version(),
+    node: process.version,
+    width: 1600,
+    height: 1000,
+    bytes: png.length,
+    sha256: createHash('sha256').update(png).digest('hex'),
+    expected: identityOcrGroundTruth,
+    ...result,
+    parsed: parseIdentificationText(result.text),
+  };
+  mkdirSync('test-results/ocr-stage56', { recursive: true });
+  writeFileSync('test-results/ocr-stage56/optical.json', JSON.stringify(evidence, null, 2) + '\n');
+  writeFileSync('test-results/ocr-stage56/input.png', png);
+  await info.attach('stage56-real-optical-evidence', {
+    body: JSON.stringify(evidence),
+    contentType: 'application/json',
+  });
+  expect(evidence.parsed).toEqual(identityOcrGroundTruth);
+});
 
 async function image(page: Page) {
   return Buffer.from(
@@ -31,6 +82,7 @@ async function image(page: Page) {
 for (const width of [360, 390, 768, 1440]) {
   test(`identity review and reopening with simulated API at ${width}px`, async ({ page }, info) => {
     test.setTimeout(180_000);
+    await observeSyntheticOcr(page);
     await page.setViewportSize({ width, height: 900 });
     await page.emulateMedia({ reducedMotion: 'reduce' });
     const requests: Array<{ method: string; path: string; body: Record<string, unknown> | null }> =
@@ -190,6 +242,9 @@ for (const width of [360, 390, 768, 1440]) {
     await expect(form.getByLabel('Nome encontrado')).toHaveValue('PESSOA SINTETICA ARAUJO', {
       timeout: 120_000,
     });
+    const ocrTrace = await syntheticOcrObservations(page);
+    expect(ocrTrace.length).toBeGreaterThan(0);
+    expect(parseIdentificationText(ocrTrace.at(-1)!.text).cpf).toBe('52998224725');
     await form.getByLabel('Nome completo', { exact: true }).fill('VALOR ATUAL SINTETICO');
     await form.getByLabel('CPF', { exact: true }).fill('11144477735');
     await expect(form.locator('input[name="legalIdentity.birthDate"]')).not.toBeVisible();
@@ -293,6 +348,7 @@ for (const width of [360, 390, 768, 1440]) {
         node: process.version,
         browserVersion: page.context().browser()?.version(),
         scope: 'real browser + real OCR + simulated API persistence, no PostgreSQL',
+        rawOcr: ocrTrace,
         posted,
       }),
       contentType: 'application/json',

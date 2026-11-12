@@ -12,6 +12,14 @@ import {
   runDocumentStorageMatrix,
 } from './document-storage-matrix.mjs';
 import { runClientScopeIntegrity } from './client-scope-integrity.mjs';
+import {
+  diagnoseStorageAttempt,
+  planDeniesEveryRow,
+  restrictiveBucketBoundary,
+  sanitizeProviderPayload,
+  inspectStorageCatalog,
+  ordinaryStorageSession,
+} from './storage-authorization-proof.mjs';
 import { collectDiagnostics, failureFacts } from './supabase-start-diagnostics.mjs';
 
 const require = createRequire(import.meta.url);
@@ -19,6 +27,172 @@ const { initialRolePermissions } = require('@livio/shared');
 const yaml = require('js-yaml');
 const file = 'supabase/migrations/20261112120000_document_storage_api_write_boundary.sql';
 const sql = readFileSync(file, 'utf8');
+test('effective SQL proof refuses ownership, BYPASSRLS, privileged SET, wrong identity and disabled RLS', () => {
+  const identity = { profileId: 'synthetic-profile' };
+  const session = {
+    role: 'authenticated',
+    profile_id: identity.profileId,
+    rolsuper: false,
+    rolbypassrls: false,
+    owns_table: false,
+    can_assume_privileged: false,
+    relrowsecurity: true,
+  };
+  assert(ordinaryStorageSession(session, identity));
+  for (const override of [
+    { role: 'service_role' },
+    { profile_id: 'other' },
+    { rolsuper: true },
+    { rolbypassrls: true },
+    { owns_table: true },
+    { can_assume_privileged: true },
+    { can_assume_privileged: undefined },
+    { relrowsecurity: false },
+  ])
+    assert(!ordinaryStorageSession({ ...session, ...override }, identity));
+});
+test('ambiguous Storage HTTP never proves security without independent SQL, identity and object evidence', () => {
+  for (const response of [
+    { http: 200, providerBody: [], kind: 'ACCEPTED_OR_AMBIGUOUS_NOOP' },
+    { http: 400, code: 'NoSuchKey', kind: 'HARNESS_DOMAIN_OR_INFRA_FAILURE' },
+  ]) {
+    const base = {
+      operation: response.http === 200 ? 'delete' : 'move',
+      response,
+      fixtureValid: true,
+      serverExists: true,
+      jwtValidated: true,
+      unchanged: true,
+      positiveControl: true,
+      providerIdentified: true,
+      writeBarrier: false,
+      sourceVisible: false,
+      missingControl: response,
+    };
+    assert.equal(diagnoseStorageAttempt(base).securityProven, false);
+    assert.equal(
+      diagnoseStorageAttempt({ ...base, writeBarrier: true, unchanged: false }).classification,
+      'UNAUTHORIZED_MUTATION',
+    );
+    assert.equal(
+      diagnoseStorageAttempt({ ...base, writeBarrier: true, serverExists: false }).classification,
+      'INVALID_FIXTURE',
+    );
+    assert.equal(
+      diagnoseStorageAttempt({ ...base, writeBarrier: true, jwtValidated: false }).securityProven,
+      false,
+    );
+    assert.equal(
+      diagnoseStorageAttempt({ ...base, writeBarrier: true, positiveControl: false })
+        .securityProven,
+      false,
+    );
+    assert.equal(
+      diagnoseStorageAttempt({ ...base, writeBarrier: true, providerIdentified: false })
+        .securityProven,
+      false,
+    );
+  }
+});
+test('delete no-op classification requires empty matching missing-source control and effective SQL barrier', () => {
+  const proof = {
+    operation: 'delete',
+    response: { http: 200, providerBody: [], kind: 'ACCEPTED_OR_AMBIGUOUS_NOOP' },
+    fixtureValid: true,
+    serverExists: true,
+    jwtValidated: true,
+    unchanged: true,
+    positiveControl: true,
+    providerIdentified: true,
+    writeBarrier: true,
+    missingControl: { http: 200, providerBody: [] },
+  };
+  assert.deepEqual(diagnoseStorageAttempt(proof), {
+    classification: 'VALID_PROVIDER_NOOP',
+    securityProven: true,
+  });
+  assert.equal(
+    diagnoseStorageAttempt({ ...proof, missingControl: undefined }).securityProven,
+    false,
+  );
+  assert.equal(
+    diagnoseStorageAttempt({
+      ...proof,
+      response: { ...proof.response, providerBody: [{ name: 'deleted' }] },
+    }).securityProven,
+    false,
+  );
+});
+test('move and copy classify source visibility separately; unexplained visible copy remains inconclusive', () => {
+  const proof = {
+    operation: 'move',
+    response: { http: 400, code: 'NoSuchKey' },
+    missingControl: { code: 'NoSuchKey' },
+    fixtureValid: true,
+    serverExists: true,
+    jwtValidated: true,
+    unchanged: true,
+    positiveControl: true,
+    providerIdentified: true,
+    writeBarrier: true,
+    sourceVisible: false,
+  };
+  assert.equal(diagnoseStorageAttempt(proof).classification, 'OBJECT_NOT_VISIBLE_PROVEN');
+  assert.equal(
+    diagnoseStorageAttempt({ ...proof, sourceVisible: true }).classification,
+    'AUTHORIZATION_DENIED_PROVEN',
+  );
+  assert.equal(
+    diagnoseStorageAttempt({ ...proof, operation: 'copy-new', sourceVisible: true }).classification,
+    'INCONCLUSIVE',
+  );
+  assert.equal(diagnoseStorageAttempt({ ...proof, sourceVisible: null }).securityProven, false);
+});
+test('EXPLAIN evidence recognizes constant-false row sources without executing metadata DML', () => {
+  assert(
+    planDeniesEveryRow({
+      'Node Type': 'ModifyTable',
+      Plans: [{ 'Node Type': 'Result', 'One-Time Filter': 'false' }],
+    }),
+  );
+  assert(!planDeniesEveryRow({ 'Node Type': 'Seq Scan', Filter: '(bucket_id = legal)' }));
+  assert(!planDeniesEveryRow({ Plans: [{ Filter: 'false' }, { Filter: 'true' }] }));
+  const source = readFileSync('tools/qa/storage-authorization-proof.mjs', 'utf8');
+  assert(source.includes('EXPLAIN (FORMAT JSON, VERBOSE) DELETE'));
+  assert.doesNotMatch(source, /EXPLAIN\s*\([^)]*ANALYZE/);
+  assert.doesNotMatch(
+    source,
+    /\$executeRawUnsafe\(['"](?:DELETE|UPDATE|INSERT|CREATE|ALTER|GRANT)/,
+  );
+});
+test('predicate proof rejects permissive, wrong-role, wrong-command or changed boundary policies', () => {
+  const policy = {
+    policyname: 'document_api_update_boundary',
+    cmd: 'UPDATE',
+    roles: '{anon,authenticated}',
+    permissive: 'RESTRICTIVE',
+    qual: "(bucket_id <> 'legal-documents'::text)",
+    with_check: "(bucket_id <> 'legal-documents'::text)",
+  };
+  assert(restrictiveBucketBoundary([policy], 'authenticated', 'update'));
+  for (const override of [
+    { permissive: 'PERMISSIVE' },
+    { roles: '{not_authenticated}' },
+    { cmd: 'SELECT' },
+    { qual: 'true' },
+    { with_check: 'true' },
+  ])
+    assert(!restrictiveBucketBoundary([{ ...policy, ...override }], 'authenticated', 'update'));
+});
+test('Storage diagnostics redact signed capabilities and full credential-bearing messages', () => {
+  const sanitized = sanitizeProviderPayload({
+    token: 'secret',
+    nested: { url: 'http://local/token', message: 'error https://local/?token=secret' },
+    code: 'NoSuchKey',
+  });
+  assert(!JSON.stringify(sanitized).includes('secret'));
+  assert.equal(sanitized.code, 'NoSuchKey');
+});
 test('DEF017 migration is atomic and adds only three restrictive bucket write policies', () => {
   assert.match(sql, /^BEGIN;/);
   assert.match(sql, /COMMIT;\s*$/);
@@ -303,6 +477,7 @@ test('RLS direct-write probe targets an existing linked object already read by t
 for (const [name, runner] of [
   ['client scope', runClientScopeIntegrity],
   ['Storage matrix', runDocumentStorageMatrix],
+  ['Storage catalog', ({ env, db }) => inspectStorageCatalog(env, db)],
 ]) {
   for (const override of [
     { NEXT_PUBLIC_SUPABASE_URL: 'https://shared.invalid' },

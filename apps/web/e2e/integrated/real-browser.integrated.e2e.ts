@@ -3324,6 +3324,32 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
   browser,
 }) => {
   test.setTimeout(180_000);
+  // Positive and foreign fixtures go through the real API, never direct financial DML.
+  const paymentFixtures = new Map<string, string>();
+  const fixtureContext = await browser.newContext();
+  const fixturePage = await fixtureContext.newPage();
+  try {
+    await login(fixturePage, 'admin.aurora@example.test');
+    for (const clientId of [clientA, clientB]) {
+      const key = 'scope56-' + randomUUID();
+      const result = await browserApi(fixturePage, '/finance/payments', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': key },
+        body: {
+          clientId,
+          reference: key,
+          amount: '1.00',
+          paidAt: new Date().toISOString(),
+          method: 'PIX',
+          allocations: [],
+        },
+      });
+      assertStatus(result, 201, 'Prepare real payment scope fixture');
+      paymentFixtures.set(clientId, bodyAs<{ payment: { id: string } }>(result).payment.id);
+    }
+  } finally {
+    await fixtureContext.close();
+  }
   const scenarios = [
     {
       email: 'admin.aurora@example.test',
@@ -3353,8 +3379,9 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
       allowed: [
         ['/documents?page=1&pageSize=5', 200],
         ['/clients?page=1&pageSize=5', 200],
+        ['/finance/payments?page=1&pageSize=100', 200],
       ],
-      denied: ['/admin/users', '/finance/payments'],
+      denied: ['/admin/users', '/finance/expenses'],
     },
   ] as const;
 
@@ -3367,6 +3394,29 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
         for (const [path, expectedStatus] of scenario.allowed) {
           const result = await browserApi(page, path);
           assertStatus(result, expectedStatus, `${scenario.email} ${path} at ${viewport.width}px`);
+          if (
+            scenario.email === 'cliente.aurora@example.test' &&
+            path.startsWith('/finance/payments?')
+          ) {
+            const listed = bodyAs<{ items: Array<{ id: string; clientId: string }> }>(result);
+            expect(
+              listed.items.length,
+              'An existing own-client payment fixture is required',
+            ).toBeGreaterThan(0);
+            expect(listed.items.every((payment) => payment.clientId === clientA)).toBe(true);
+            expect(listed.items.map((payment) => payment.id)).toContain(
+              paymentFixtures.get(clientA),
+            );
+            expect(listed.items.map((payment) => payment.id)).not.toContain(
+              paymentFixtures.get(clientB),
+            );
+            const overridden = await browserApi(page, path + '&clientId=' + clientB);
+            assertStatus(overridden, 200, 'Client filter cannot override actor scope');
+            const narrowed = bodyAs<{ items: Array<{ id: string; clientId: string }> }>(overridden);
+            expect(narrowed.items.map((payment) => payment.id)).toEqual(
+              listed.items.map((payment) => payment.id),
+            );
+          }
           if (scenario.email === 'cliente.aurora@example.test' && path.startsWith('/clients?')) {
             const listed = bodyAs<{ items: Array<{ id: string }>; total: number }>(result);
             expect(listed.items.map((client) => client.id)).toEqual([clientA]);

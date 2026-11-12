@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { parseIdentificationText } from './identification-reader';
 
 describe('leitura de dados de documento', () => {
+  it('preserves the valid CPF from stage 5.5-R when its digits are recognized exactly', () => {
+    expect(parseIdentificationText('CPF: 87091994701').cpf).toBe('87091994701');
+  });
+  it('does not invent the digit seven from the observed optical slash confusion', () => {
+    expect(parseIdentificationText('CPF: 8/091994701').cpf).toBeUndefined();
+    expect(parseIdentificationText('CPF: 529.982.247-25').cpf).toBe('52998224725');
+    expect(parseIdentificationText('CPF: 529.982.247-26').cpf).toBeUndefined();
+  });
   it.each([
     ['RG: MG-1234567\nSSP/MG', 'MG-1234567'],
     ['CPF: 529.982.247-25\nRG: 12.345.678-X', '12.345.678-X'],
