@@ -3350,8 +3350,11 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
     },
     {
       email: 'cliente.aurora@example.test',
-      allowed: [['/documents?page=1&pageSize=5', 200]],
-      denied: ['/clients?page=1&pageSize=5'],
+      allowed: [
+        ['/documents?page=1&pageSize=5', 200],
+        ['/clients?page=1&pageSize=5', 200],
+      ],
+      denied: ['/admin/users', '/finance/payments'],
     },
   ] as const;
 
@@ -3364,6 +3367,18 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
         for (const [path, expectedStatus] of scenario.allowed) {
           const result = await browserApi(page, path);
           assertStatus(result, expectedStatus, `${scenario.email} ${path} at ${viewport.width}px`);
+          if (scenario.email === 'cliente.aurora@example.test' && path.startsWith('/clients?')) {
+            const listed = bodyAs<{ items: Array<{ id: string }>; total: number }>(result);
+            expect(listed.items.map((client) => client.id)).toEqual([clientA]);
+            expect(listed.total).toBe(1);
+            const otherClient = await browserApi(page, `/clients/${clientB}`);
+            assertStatus(otherClient, 404, 'Client must not read another client');
+            const forbiddenEdit = await browserApi(page, `/clients/${clientA}`, {
+              method: 'PATCH',
+              body: { displayName: 'FORBIDDEN CHANGE' },
+            });
+            assertStatus(forbiddenEdit, 403, 'Client must not edit own record without permission');
+          }
         }
         for (const path of scenario.denied) {
           const result = await browserApi(page, path);

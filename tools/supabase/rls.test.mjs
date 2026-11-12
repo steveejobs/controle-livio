@@ -1,5 +1,22 @@
 import { PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
+import { createHash } from 'node:crypto';
+import { storageDenial } from '../qa/document-storage-matrix.mjs';
+
+if (
+  process.platform !== 'linux' ||
+  process.env.GITHUB_ACTIONS !== 'true' ||
+  process.env.NODE_ENV !== 'test' ||
+  process.env.SUPABASE_LOCAL !== 'true' ||
+  process.env.SUPABASE_ENVIRONMENT !== 'test' ||
+  process.env.SUPABASE_ACCESS_TOKEN ||
+  process.env.SUPABASE_DB_PASSWORD
+) {
+  throw new Error('Trusted Storage isolation fixture requires disposable Linux CI');
+}
+const databaseHost = new URL(process.env.DATABASE_URL).hostname;
+if (!['localhost', '127.0.0.1'].includes(databaseHost))
+  throw new Error('External database rejected before trusted Storage fixture');
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY;
@@ -101,22 +118,29 @@ expect(
   'cliente portal visualizou nota interna',
 );
 
-const objectPath = `organizations/${orgA}/documents/rls-test/proof.txt`;
-const uploadA = await lawyerA.storage
+// Trusted synthetic fixture setup only; this does not certify a product API upload.
+const objectPath = 'organizations/' + orgA + '/documents/rls-test/' + crypto.randomUUID() + '.txt';
+const fixtureBytes = Buffer.from('SYNTHETIC RLS FIXTURE');
+const fixtureHash = createHash('sha256').update(fixtureBytes).digest('hex');
+const fixtureStorage = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
+const seeded = await fixtureStorage.storage
   .from('legal-documents')
-  .upload(objectPath, new Blob(['conteudo ficticio']), {
-    contentType: 'text/plain',
-    upsert: false,
-  });
-expect(!uploadA.error, `upload autorizado falhou: ${uploadA.error?.message ?? ''}`);
-
+  .upload(objectPath, fixtureBytes, { contentType: 'text/plain', upsert: false });
+expect(!seeded.error, 'trusted local Storage fixture failed');
 const uploadCross = await adminB.storage
   .from('legal-documents')
   .upload(`organizations/${orgA}/documents/rls-test/cross.txt`, new Blob(['negado']), {
     contentType: 'text/plain',
     upsert: false,
   });
-expect(Boolean(uploadCross.error), 'organização B fez upload no path da organização A');
+expect(
+  storageDenial(Number(uploadCross.error?.statusCode ?? 200), {
+    message: uploadCross.error?.message,
+  }) === 'AUTHORIZATION_DENIED',
+  'organização B fez upload no path da organização A ou a rejeição não foi de autorização',
+);
 
 if (
   process.env.SUPABASE_LOCAL !== 'true' ||
@@ -163,8 +187,8 @@ try {
     storage_key: objectPath,
     file_name: 'proof.txt',
     mime_type: 'text/plain',
-    size_bytes: 18,
-    sha256: '0'.repeat(64),
+    size_bytes: fixtureBytes.length,
+    sha256: fixtureHash,
     uploaded_by_id: 'a1000000-0000-4000-8000-000000000002',
   });
   expect(
@@ -181,8 +205,8 @@ try {
       storageKey: objectPath,
       fileName: 'proof.txt',
       mimeType: 'text/plain',
-      sizeBytes: 18n,
-      sha256: '0'.repeat(64),
+      sizeBytes: BigInt(fixtureBytes.length),
+      sha256: fixtureHash,
       uploadedById: 'a1000000-0000-4000-8000-000000000002',
     },
   });
@@ -192,6 +216,35 @@ try {
   expect(
     !ownSignedUrl.error && Boolean(ownSignedUrl.data.signedUrl),
     'usuário A não gerou URL autorizada',
+  );
+  const downloaded = await fetch(ownSignedUrl.data.signedUrl);
+  expect(downloaded.ok, 'authorized private download failed');
+  expect(
+    createHash('sha256')
+      .update(Buffer.from(await downloaded.arrayBuffer()))
+      .digest('hex') === fixtureHash,
+    'private download hash mismatch',
+  );
+  // The negative update requires a linked, readable object, not just bytes with
+  // missing metadata that would already be invisible under the old SELECT policy.
+  const uploadA = await lawyerA.storage
+    .from('legal-documents')
+    .upload(objectPath, new Blob(['SYNTHETIC FORBIDDEN CHANGE']), {
+      contentType: 'text/plain',
+      upsert: true,
+    });
+  expect(
+    storageDenial(Number(uploadA.error?.statusCode ?? 200), { message: uploadA.error?.message }) ===
+      'AUTHORIZATION_DENIED',
+    'user direct write must be denied explicitly',
+  );
+  const preserved = await fixtureStorage.storage.from('legal-documents').download(objectPath);
+  expect(!preserved.error, 'existing fixture disappeared');
+  expect(
+    createHash('sha256')
+      .update(Buffer.from(await preserved.data.arrayBuffer()))
+      .digest('hex') === fixtureHash,
+    'direct attempt changed fixture bytes',
   );
   const crossSignedUrl = await adminB.storage
     .from('legal-documents')

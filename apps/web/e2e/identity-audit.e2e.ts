@@ -1,5 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
+import { openClientQualification } from './support/client-qualification';
 
 async function image(page: Page) {
   return Buffer.from(
@@ -191,7 +192,8 @@ for (const width of [360, 390, 768, 1440]) {
     });
     await form.getByLabel('Nome completo', { exact: true }).fill('VALOR ATUAL SINTETICO');
     await form.getByLabel('CPF', { exact: true }).fill('11144477735');
-    await form.getByText('Qualificação para documentos', { exact: true }).click();
+    await expect(form.locator('input[name="legalIdentity.birthDate"]')).not.toBeVisible();
+    await openClientQualification(form);
     await form.getByLabel('RG e órgão expedidor', { exact: true }).fill('ATUAL-123');
     await form.locator('input[name="legalIdentity.birthDate"]').fill('1980-01-01');
     const conflicts: string[] = [];

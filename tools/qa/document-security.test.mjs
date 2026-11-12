@@ -3,7 +3,15 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
-import { storageDenial, storageOperations } from './document-storage-matrix.mjs';
+import {
+  storageDenial,
+  storageOperations,
+  duplicateDestinationControl,
+  captureStorageControl,
+  plannedStorageCells,
+  runDocumentStorageMatrix,
+} from './document-storage-matrix.mjs';
+import { runClientScopeIntegrity } from './client-scope-integrity.mjs';
 import { collectDiagnostics, failureFacts } from './supabase-start-diagnostics.mjs';
 
 const require = createRequire(import.meta.url);
@@ -163,3 +171,182 @@ test('workflow changes neither triggers nor permissions nor the four job scopes'
     /supabase-start-diagnostics\.mjs --cleanup-check/,
   );
 });
+
+test('copy-existing server control recognizes only the observed duplicate contract, never authorization proof', () => {
+  for (const response of [
+    { http: 400, code: 'KeyAlreadyExists', accepted: false },
+    { http: 409, code: '409', accepted: false },
+  ])
+    assert.equal(duplicateDestinationControl(response), true);
+  for (const response of [
+    { http: 400, code: 'InvalidKey', accepted: false },
+    { http: 403, code: 'AccessDenied', accepted: false },
+    { http: 503, code: 'ServiceUnavailable', accepted: false },
+    { http: 200, code: 'KeyAlreadyExists', accepted: true },
+    { http: 409, code: 'InvalidKey', accepted: false },
+    { http: 503, code: '409', accepted: false },
+  ])
+    assert.equal(duplicateDestinationControl(response), false);
+  assert.equal(
+    storageDenial(400, { message: 'KeyAlreadyExists' }),
+    'HARNESS_DOMAIN_OR_INFRA_FAILURE',
+  );
+});
+
+test('one failed server control preserves later independent controls and cleanup evidence', async () => {
+  const results = [];
+  const cleanup = [];
+  for (const operation of ['update', 'copy-existing', 'insert']) {
+    const control = { operation, status: 'FAIL' };
+    await captureStorageControl(
+      control,
+      async () => {
+        if (operation === 'update')
+          throw Object.assign(new Error('synthetic failure'), { code: 'SYNTHETIC' });
+        control.status =
+          operation === 'copy-existing' ? 'UNSUPPORTED_EXISTING_DESTINATION' : 'PASS';
+      },
+      async () => {
+        cleanup.push(operation);
+      },
+    );
+    results.push(control);
+  }
+  assert.deepEqual(
+    results.map((c) => c.status),
+    ['FAIL', 'UNSUPPORTED_EXISTING_DESTINATION', 'PASS'],
+  );
+  assert.deepEqual(cleanup, ['update', 'copy-existing', 'insert']);
+  assert(results.every((c) => c.cleaned === true));
+  assert.equal(results[0].error.code, 'SYNTHETIC');
+});
+
+test('cleanup failure remains FAIL rather than silently declaring a supported operation', async () => {
+  const control = { status: 'FAIL' };
+  await captureStorageControl(
+    control,
+    async () => {
+      control.status = 'PASS';
+    },
+    async () => {
+      throw new Error('synthetic cleanup unavailable');
+    },
+  );
+  assert.equal(control.status, 'FAIL');
+  assert.equal(control.cleaned, false);
+  assert.equal(control.cleanupError.name, 'Error');
+});
+
+test('client scope migration preserves helper ACLs and matches professional role classification', () => {
+  const sql = readFileSync(
+    'supabase/migrations/20261112140000_client_membership_scope.sql',
+    'utf8',
+  );
+  assert.match(sql, /^--[\s\S]*BEGIN;/);
+  assert.match(sql, /COMMIT;\s*$/);
+  assert.equal((sql.match(/CREATE OR REPLACE FUNCTION/g) ?? []).length, 3);
+  assert.doesNotMatch(
+    sql,
+    /\b(?:DROP|TRUNCATE|GRANT|REVOKE|ALTER TABLE|INSERT INTO|UPDATE public|DELETE FROM)\b/,
+  );
+  for (const name of ['has_permission', 'current_client_id', 'current_organization_ids'])
+    assert(sql.includes('FUNCTION public.' + name));
+  assert.match(sql, /u\.status = 'ACTIVE' AND u\.deleted_at IS NULL/);
+  assert.match(sql, /c\.organization_id = om\.organization_id AND c\.deleted_at IS NULL/);
+  assert.match(sql, /rk\.key = 'client'/);
+  assert.match(sql, /has_function_privilege\('anon'/);
+  for (const key of Object.keys(initialRolePermissions).filter((k) => k !== 'client'))
+    assert(sql.includes("'" + key + "'"));
+});
+
+test('Storage matrix materializes 72 distinct, unexecuted cells without leaking actor credentials', () => {
+  const actors = [
+    'administrator',
+    'lawyer',
+    'secretary',
+    'finance',
+    'client',
+    'anon',
+    'foreign',
+    'suspended',
+  ].map((role) => [
+    role,
+    role === 'anon'
+      ? null
+      : { profileId: 'synthetic-' + role, org: 'synthetic-org', token: 'DO_NOT_RECORD_TOKEN' },
+  ]);
+  const fixture = {
+    documentId: 'document',
+    clientId: 'client',
+    versionId: 'version',
+    storageKey: 'synthetic/key',
+  };
+  const cells = plannedStorageCells(actors, fixture);
+  assert.equal(cells.length, 72);
+  assert.equal(new Set(cells.map((c) => c.id)).size, 72);
+  assert(cells.every((c) => c.status === 'NOT_EXECUTED' && c.requests.length === 0));
+  assert(!JSON.stringify(cells).includes('DO_NOT_RECORD_TOKEN'));
+  assert.throws(() => plannedStorageCells(actors.slice(1), fixture));
+});
+
+test('RLS direct-write probe targets an existing linked object already read by the same user', () => {
+  const script = readFileSync('tools/supabase/rls.test.mjs', 'utf8');
+  const metadata = script.indexOf('await database.documentVersion.create(');
+  const readable = script.indexOf('const downloaded = await fetch(ownSignedUrl.data.signedUrl)');
+  const attempt = script.indexOf('const uploadA = await lawyerA.storage');
+  assert(metadata >= 0 && readable > metadata && attempt > readable);
+  assert(script.slice(readable, attempt).includes('private download hash mismatch'));
+  assert(script.slice(attempt).includes('SYNTHETIC FORBIDDEN CHANGE'));
+  assert(script.slice(attempt).includes('direct attempt changed fixture bytes'));
+});
+
+for (const [name, runner] of [
+  ['client scope', runClientScopeIntegrity],
+  ['Storage matrix', runDocumentStorageMatrix],
+]) {
+  for (const override of [
+    { NEXT_PUBLIC_SUPABASE_URL: 'https://shared.invalid' },
+    { SUPABASE_ACCESS_TOKEN: 'synthetic-management-credential' },
+    { SUPABASE_ENVIRONMENT: 'production' },
+  ])
+    test(
+      name +
+        ' refuses unsafe configuration before touching database or Storage: ' +
+        Object.keys(override)[0],
+      async () => {
+        let touches = 0;
+        const db = new Proxy(
+          {},
+          {
+            get() {
+              touches++;
+              throw new Error('UNEXPECTED_DATABASE_ACCESS');
+            },
+          },
+        );
+        const env = {
+          GITHUB_ACTIONS: 'true',
+          RUNNER_OS: 'Linux',
+          LIVIO_IDENTITY_INTEGRATION: 'disposable',
+          NODE_ENV: 'test',
+          SUPABASE_LOCAL: 'true',
+          SUPABASE_ENVIRONMENT: 'test',
+          NEXT_PUBLIC_API_URL: 'http://127.0.0.1:3001/v1',
+          NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:54321',
+          DATABASE_URL: 'postgresql://synthetic:synthetic@127.0.0.1:54322/postgres',
+          SUPABASE_SERVICE_ROLE_KEY: 'synthetic-only',
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: 'synthetic-only',
+          CLAMAV_HOST: '127.0.0.1',
+          CLAMAV_PORT: '13310',
+          RUNNER_TEMP: process.cwd(),
+          LIVIO_QA_OUTPUT: process.cwd() + '/synthetic-evidence',
+          ...override,
+        };
+        await assert.rejects(
+          runner({ env, db }),
+          /explicit disposable|Non-test|External endpoint|External management|Shared or linked/,
+        );
+        assert.equal(touches, 0);
+      },
+    );
+}

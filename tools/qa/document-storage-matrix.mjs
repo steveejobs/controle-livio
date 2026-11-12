@@ -16,6 +16,53 @@ export const storageOperations = [
   'copy-existing',
   'relink',
 ];
+export function plannedStorageCells(actors, fixture) {
+  assert.equal(actors.length, 8);
+  assert.equal(new Set(actors.map(([role]) => role)).size, 8);
+  return actors.flatMap(([role, identity]) =>
+    storageOperations.map((operation) => ({
+      id: `STORAGE52-${role}-${operation}`,
+      role,
+      operation,
+      databaseRole: identity ? 'authenticated' : 'anon',
+      profileId: identity?.profileId ?? null,
+      organizationId: identity?.org ?? null,
+      documentId: fixture.documentId,
+      clientId: fixture.clientId,
+      versionId: fixture.versionId,
+      storageKey: fixture.storageKey,
+      status: 'NOT_EXECUTED',
+      reason: 'CONTROL_NOT_COMPLETE',
+      requests: [],
+    })),
+  );
+}
+export function duplicateDestinationControl(response) {
+  return (
+    response.accepted === false &&
+    ((response.http === 409 &&
+      ['409', 'KeyAlreadyExists', 'Duplicate'].includes(String(response.code))) ||
+      (response.http === 400 && response.code === 'KeyAlreadyExists'))
+  );
+}
+export async function captureStorageControl(control, perform, cleanup) {
+  try {
+    await perform();
+  } catch (error) {
+    control.status = 'FAIL';
+    control.error = { name: error.name, code: error.code ?? null };
+  } finally {
+    try {
+      await cleanup();
+      control.cleaned = true;
+    } catch (error) {
+      control.status = 'FAIL';
+      control.cleaned = false;
+      control.cleanupError = { name: error.name, code: error.code ?? null };
+    }
+  }
+  return control;
+}
 export function storageDenial(http, body) {
   if (http >= 200 && http < 300) return 'ACCEPTED_OR_AMBIGUOUS_NOOP';
   const message = String(body?.message ?? body?.error ?? '');
@@ -61,6 +108,11 @@ export async function runDocumentStorageMatrix({
       ) + '\n',
     );
   const version = await db.documentVersion.findFirstOrThrow({ where: { documentId: document.id } });
+  assert.equal(version.organizationId, owner.org);
+  const linkedDocument = await db.document.findUniqueOrThrow({ where: { id: document.id } });
+  assert.equal(linkedDocument.organizationId, owner.org);
+  assert.equal(linkedDocument.clientId, client.id);
+  assert.equal(linkedDocument.deletedAt, null);
   const bucket = 'legal-documents';
   const changed = Buffer.concat([png, Buffer.from('SYNTHETIC DIRECT CHANGE')]);
   const targetResponse = await request(owner, '/documents', {
@@ -197,6 +249,14 @@ export async function runDocumentStorageMatrix({
     where: { id: actors.at(-1)[1].memberId },
     data: { status: 'SUSPENDED' },
   });
+  // Materialize all planned cells before controls; setup failure is never an empty PASS.
+  report.cases = plannedStorageCells(actors, {
+    documentId: document.id,
+    clientId: client.id,
+    versionId: version.id,
+    storageKey: version.storageKey,
+  });
+  save();
   // Control every payload through the server role on explicit transient test objects.
   // These keys are recorded, removed and absence-checked; never touch unrelated objects.
   const supported = new Set();
@@ -217,47 +277,69 @@ export async function runDocumentStorageMatrix({
     };
     report.controls.push(control);
     save();
-    try {
-      assert.equal(
-        (await storage.storage.from(bucket).upload(from, png, { contentType: 'image/png' })).error,
-        null,
-      );
-      assert.equal(await stored(from), hash(png));
-      if (operation === 'copy-existing')
+    await captureStorageControl(
+      control,
+      async () => {
         assert.equal(
-          (await storage.storage.from(bucket).upload(to, png, { contentType: 'image/png' })).error,
+          (await storage.storage.from(bucket).upload(from, png, { contentType: 'image/png' }))
+            .error,
           null,
         );
-      control.response = await attempt(env.SUPABASE_SERVICE_ROLE_KEY, operation, from, to);
-      if (operation === 'copy-existing' && !control.response.accepted) {
-        assert(
-          control.response.http === 409 || String(control.response.code) === '409',
-          'Only a duplicate-destination contract is inapplicable',
+        assert.equal(await stored(from), hash(png));
+        if (operation === 'copy-existing')
+          assert.equal(
+            (await storage.storage.from(bucket).upload(to, png, { contentType: 'image/png' }))
+              .error,
+            null,
+          );
+        control.before = { source: await stored(from), destination: await stored(to) };
+        control.objectsBefore = await db.$queryRawUnsafe(
+          "SELECT to_jsonb(o)-'last_accessed_at' AS object FROM storage.objects o WHERE bucket_id=$1 AND name IN ($2,$3) ORDER BY name",
+          bucket,
+          from,
+          to,
         );
-        control.status = 'UNSUPPORTED_EXISTING_DESTINATION';
-      } else {
-        assert(control.response.accepted, 'Structurally valid server control rejected');
-        if (['upsert', 'update'].includes(operation))
-          assert.equal(await stored(from), hash(changed));
-        if (operation === 'signed-upload') {
-          assert(control.response.signedUpload.accepted);
-          assert.equal(await stored(from), hash(changed));
+        control.response = await attempt(env.SUPABASE_SERVICE_ROLE_KEY, operation, from, to);
+        control.after = { source: await stored(from), destination: await stored(to) };
+        if (operation === 'copy-existing' && !control.response.accepted) {
+          assert(
+            duplicateDestinationControl(control.response),
+            'Only a duplicate-destination contract is inapplicable',
+          );
+          assert.deepEqual(control.after, control.before);
+          control.objectsAfter = await db.$queryRawUnsafe(
+            "SELECT to_jsonb(o)-'last_accessed_at' AS object FROM storage.objects o WHERE bucket_id=$1 AND name IN ($2,$3) ORDER BY name",
+            bucket,
+            from,
+            to,
+          );
+          assert.deepEqual(control.objectsAfter, control.objectsBefore);
+          control.status = 'UNSUPPORTED_EXISTING_DESTINATION';
+        } else {
+          assert(control.response.accepted, 'Structurally valid server control rejected');
+          if (['upsert', 'update'].includes(operation))
+            assert.equal(await stored(from), hash(changed));
+          if (operation === 'signed-upload') {
+            assert(control.response.signedUpload.accepted);
+            assert.equal(await stored(from), hash(changed));
+          }
+          if (['move', 'delete'].includes(operation)) assert.equal(await stored(from), null);
+          if (['move', 'copy-new', 'copy-existing'].includes(operation))
+            assert.equal(await stored(to), hash(png));
+          if (operation === 'insert') assert.equal(await stored(to), hash(changed));
+          supported.add(operation);
+          control.status = 'PASS';
         }
-        if (['move', 'delete'].includes(operation)) assert.equal(await stored(from), null);
-        if (['move', 'copy-new', 'copy-existing'].includes(operation))
-          assert.equal(await stored(to), hash(png));
-        if (operation === 'insert') assert.equal(await stored(to), hash(changed));
-        supported.add(operation);
-        control.status = 'PASS';
-      }
-    } finally {
-      const removed = await storage.storage.from(bucket).remove([from, to]);
-      assert.equal(removed.error, null);
-      assert.equal(await stored(from), null);
-      assert.equal(await stored(to), null);
-      control.cleaned = true;
-      save();
-    }
+      },
+      async () => {
+        const removed = await storage.storage.from(bucket).remove([from, to]);
+        assert.equal(removed.error, null);
+        assert.equal(await stored(from), null);
+        assert.equal(await stored(to), null);
+      },
+    );
+    if (control.status === 'FAIL') supported.delete(operation);
+    save();
   }
   assert.equal(await stored(version.storageKey), version.sha256);
   assert.equal(
@@ -267,43 +349,43 @@ export async function runDocumentStorageMatrix({
     'anon',
   );
   for (const [role, identity] of actors) {
-    if (identity) {
-      const claims = JSON.parse(
-        Buffer.from(identity.token.split('.')[1], 'base64url').toString('utf8'),
-      );
-      assert.equal(claims.role, 'authenticated');
-      assert.equal(claims.sub, identity.profileId);
-      const valid = await storage.auth.getUser(identity.token);
-      assert.equal(valid.error, null);
-      assert.equal(valid.data.user.id, identity.profileId);
-      const membership = await db.organizationMember.findUniqueOrThrow({
-        where: { id: identity.memberId },
-        include: { roles: { include: { role: true } } },
-      });
-      assert.equal(membership.organizationId, identity.org);
-      assert.equal(membership.status, role === 'suspended' ? 'SUSPENDED' : 'ACTIVE');
-      const expectedRole = ['foreign', 'suspended'].includes(role) ? 'administrator' : role;
-      assert(membership.roles.some(({ role }) => role.key === expectedRole));
+    try {
+      if (identity) {
+        const claims = JSON.parse(
+          Buffer.from(identity.token.split('.')[1], 'base64url').toString('utf8'),
+        );
+        assert.equal(claims.role, 'authenticated');
+        assert.equal(claims.sub, identity.profileId);
+        const valid = await storage.auth.getUser(identity.token);
+        assert.equal(valid.error, null);
+        assert.equal(valid.data.user.id, identity.profileId);
+        const membership = await db.organizationMember.findUniqueOrThrow({
+          where: { id: identity.memberId },
+          include: { roles: { include: { role: true } } },
+        });
+        assert.equal(membership.organizationId, identity.org);
+        if (role === 'client') assert.equal(membership.clientId, client.id);
+        assert.equal(membership.status, role === 'suspended' ? 'SUSPENDED' : 'ACTIVE');
+        const expectedRole = ['foreign', 'suspended'].includes(role) ? 'administrator' : role;
+        assert(membership.roles.some(({ role }) => role.key === expectedRole));
+      }
+    } catch (error) {
+      report.profileErrors ??= [];
+      report.profileErrors.push({ role, name: error.name, code: error.code ?? null });
+      for (const c of report.cases.filter((c) => c.role === role))
+        c.reason = 'INVALID_TEST_IDENTITY';
+      save();
+      continue;
     }
     for (const operation of storageOperations) {
-      const c = {
-        id: `STORAGE52-${role}-${operation}`,
-        role,
-        databaseRole: identity ? 'authenticated' : 'anon',
-        profileId: identity?.profileId ?? null,
-        organizationId: identity?.org ?? null,
-        documentId: document.id,
-        clientId: client.id,
-        versionId: version.id,
-        storageKey: version.storageKey,
-        operation,
-        status: 'FAIL',
-        requests: [],
-      };
-      report.cases.push(c);
+      const c = report.cases.find((c) => c.role === role && c.operation === operation);
       if (!supported.has(operation)) {
         c.status = 'NOT_EXECUTED';
-        c.reason = 'SERVER_CONTROL_DOES_NOT_SUPPORT_EXISTING_DESTINATION';
+        c.reason =
+          report.controls.find((r) => r.operation === operation)?.status ===
+          'UNSUPPORTED_EXISTING_DESTINATION'
+            ? 'SERVER_CONTROL_DOES_NOT_SUPPORT_EXISTING_DESTINATION'
+            : 'SERVER_CONTROL_FAILED';
         save();
         continue;
       }
@@ -312,6 +394,8 @@ export async function runDocumentStorageMatrix({
           ? copyVersion.storageKey
           : `organizations/${owner.org}/qa-forbidden/${randomUUID()}.png`;
       try {
+        c.status = 'FAIL';
+        delete c.reason;
         c.before = await snapshot(destination);
         assert.equal(c.before.bytes, version.sha256);
         assert.equal(
@@ -320,8 +404,11 @@ export async function runDocumentStorageMatrix({
         );
         c.fixtureValid = true;
         c.jwtValidated = Boolean(identity);
-        c.attempt = await attempt(identity?.token, operation, version.storageKey, destination);
-        c.after = await snapshot(destination);
+        try {
+          c.attempt = await attempt(identity?.token, operation, version.storageKey, destination);
+        } finally {
+          c.after = await snapshot(destination);
+        }
         assert.equal(c.attempt.kind, 'AUTHORIZATION_DENIED');
         assert.deepEqual(c.after, c.before);
         c.status = 'PASS';
@@ -331,10 +418,27 @@ export async function runDocumentStorageMatrix({
       save();
     }
   }
-  report.setup = 'PASS';
+  report.setup =
+    report.controls.some((c) => c.status === 'FAIL') || report.profileErrors?.length
+      ? 'FAIL'
+      : 'PASS';
+  report.summary = {
+    planned: report.cases.length,
+    sent: report.cases.filter((c) => c.attempt).length,
+    passed: report.cases.filter((c) => c.status === 'PASS').length,
+    failed: report.cases.filter((c) => c.status === 'FAIL').length,
+    notExecuted: report.cases.filter((c) => c.status === 'NOT_EXECUTED').length,
+  };
   save();
   assert(
-    report.cases.every((c) => ['PASS', 'NOT_EXECUTED'].includes(c.status)),
+    report.setup === 'PASS' &&
+      report.cases.length === 72 &&
+      report.cases.every(
+        (c) =>
+          c.status === 'PASS' ||
+          (c.status === 'NOT_EXECUTED' &&
+            c.reason === 'SERVER_CONTROL_DOES_NOT_SUPPORT_EXISTING_DESTINATION'),
+      ),
     'Document Storage authorization matrix failed',
   );
   return report;

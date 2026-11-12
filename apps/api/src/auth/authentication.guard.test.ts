@@ -30,7 +30,9 @@ function membership(organizationId: string, userId = 'user-a') {
     clientId: null,
     roles: [
       {
+        organizationId,
         role: {
+          organizationId,
           key: 'administrator',
           permissions: [{ permission: { resource: 'clients', action: 'view' } }],
         },
@@ -59,7 +61,10 @@ describe('AuthenticationGuard', () => {
             clientId: null,
             roles: [
               {
+                organizationId: 'organization-a',
                 role: {
+                  organizationId: 'organization-a',
+                  key: 'custom-reader',
                   permissions: [
                     { permission: { resource: 'clients', action: 'view' } },
                     { permission: { resource: 'clients', action: 'view' } },

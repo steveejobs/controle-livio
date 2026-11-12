@@ -6,6 +6,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { openClientQualification } from '../support/client-qualification';
 
 function syntheticCpf() {
   const digits = Array.from(randomUUID().replace(/\D/g, '').padEnd(9, '3').slice(0, 9), Number);
@@ -122,6 +123,7 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     expect(creates).toBe(0);
     expect(await db.client.count({ where: { organizationId: org } })).toBe(beforeCancel);
     await form.getByLabel('CPF', { exact: true }).fill(approvedCpf);
+    await openClientQualification(form);
     await form.locator('input[name="legalIdentity.birthDate"]').fill('1980-01-01');
     await form.getByLabel('RG e órgão expedidor', { exact: true }).fill('ATUAL-123');
     await form

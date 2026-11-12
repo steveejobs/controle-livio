@@ -7,6 +7,7 @@ import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { validateIdentityEnvironment } from './identity-environment.mjs';
 import { runDocumentStorageMatrix } from './document-storage-matrix.mjs';
+import { runClientScopeIntegrity } from './client-scope-integrity.mjs';
 
 // Direct Node integration: API/SQL/Auth/Storage/scanner, never mocked persistence.
 // No dotenv, no workflow changes, no financial test invocation.
@@ -614,7 +615,7 @@ export async function runIdentityIntegrity(env = process.env) {
     });
     await check('ID-STORAGE-AUTHORIZATION-MATRIX', async () => {
       assert(document && client);
-      await runDocumentStorageMatrix({
+      const matrix = await runDocumentStorageMatrix({
         env,
         db,
         storage,
@@ -627,6 +628,22 @@ export async function runIdentityIntegrity(env = process.env) {
         request,
         upload,
       });
+      active.matrixSummary = matrix.summary;
+    });
+    await check('ID-CLIENT-SCOPE-INTEGRITY', async () => {
+      const result = await runClientScopeIntegrity({
+        env,
+        db,
+        storage,
+        actor,
+        owner,
+        foreign,
+        client,
+        document,
+        request,
+        upload,
+      });
+      active.scopeCases = result.cases.map(({ id, status }) => ({ id, status }));
     });
     await check('ID-DOCUMENT-VERSION-INTEGRITY', async () => {
       const before = await db.documentVersion.findFirstOrThrow({
