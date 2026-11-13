@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
   storageDenial,
+  diagnoseMatrixAttempt,
+  storageWriteBarrier,
   storageOperations,
   duplicateDestinationControl,
   captureStorageControl,
@@ -254,11 +256,16 @@ test('client seed grants canonical own-record view without any new write permiss
 test('Storage classification rejects malformed payload, auth failures and silent success as proof', () => {
   assert.equal(storageOperations.length, 9);
   assert.equal(
-    storageDenial(403, { message: 'new row violates row-level security policy' }),
+    storageDenial(400, {
+      statusCode: '403',
+      code: 'AccessDenied',
+      error: 'Unauthorized',
+      message: 'new row violates row-level security policy',
+    }),
     'AUTHORIZATION_DENIED',
   );
   assert.equal(
-    storageDenial(400, { message: 'permission denied for table documents' }),
+    storageDenial(403, { code: '42501', message: 'permission denied for table documents' }),
     'AUTHORIZATION_DENIED',
   );
   for (const [http, body] of [
@@ -525,3 +532,106 @@ for (const [name, runner] of [
       },
     );
 }
+
+test('observed structured managed-object denial is recognized without accepting generic 400 responses', () => {
+  const body = {
+    statusCode: '403',
+    code: 'AccessDenied',
+    error: 'Unauthorized',
+    message: 'Server managed object',
+  };
+  assert.equal(storageDenial(400, body), 'AUTHORIZATION_DENIED');
+  for (const changed of [
+    { ...body, statusCode: '500' },
+    { ...body, code: 'Other' },
+    { ...body, error: 'Other' },
+    { ...body, message: 'Object not found' },
+  ])
+    assert.equal(storageDenial(400, changed), 'HARNESS_DOMAIN_OR_INFRA_FAILURE');
+  assert.equal(storageDenial(200, body), 'ACCEPTED_OR_AMBIGUOUS_NOOP');
+  assert.equal(storageDenial(503, body), 'HARNESS_DOMAIN_OR_INFRA_FAILURE');
+});
+test('structured denial still cannot approve invalid fixtures, JWTs, missing controls or changed bytes', () => {
+  const kind = storageDenial(400, {
+    statusCode: '403',
+    code: 'AccessDenied',
+    error: 'Unauthorized',
+    message: 'Server managed object',
+  });
+  const proof = {
+    operationSent: true,
+    writeBarrier: true,
+    providerIdentified: true,
+    fixtureValid: true,
+    serverExists: true,
+    jwtValidated: true,
+    unchanged: true,
+    positiveControl: true,
+    response: { kind, http: 400 },
+  };
+  assert.equal(diagnoseMatrixAttempt(proof).securityProven, true);
+  for (const changed of [
+    { operationSent: false },
+    { writeBarrier: false },
+    { providerIdentified: false },
+    { fixtureValid: false },
+    { serverExists: false },
+    { jwtValidated: false },
+    { unchanged: false },
+    { unchanged: null },
+    { positiveControl: false },
+  ])
+    assert.equal(diagnoseMatrixAttempt({ ...proof, ...changed }).securityProven, false);
+});
+
+test('generic 400 authorization words never replace the structured provider contract', () => {
+  for (const message of [
+    'Unauthorized',
+    'access denied',
+    'permission denied',
+    'Server managed object',
+  ])
+    assert.notEqual(storageDenial(400, { message }), 'AUTHORIZATION_DENIED');
+});
+test('overwrite authorization proof requires exact INSERT and UPDATE restrictive policies and ordinary role', () => {
+  const policies = ['insert', 'update'].map((op) => ({
+    policyname: 'document_api_' + op + '_boundary',
+    cmd: op.toUpperCase(),
+    permissive: 'RESTRICTIVE',
+    roles: '{anon,authenticated}',
+    qual: "(bucket_id <> 'legal-documents'::text)",
+    with_check: "(bucket_id <> 'legal-documents'::text)",
+  }));
+  const proof = {
+    session: {
+      role: 'anon',
+      profile_id: null,
+      rolsuper: false,
+      rolbypassrls: false,
+      owns_table: false,
+      can_assume_privileged: false,
+      relrowsecurity: true,
+    },
+    predicate: { allowed: false },
+    barriers: {},
+  };
+  for (const op of ['upsert', 'signed-upload', 'insert', 'update'])
+    assert.equal(storageWriteBarrier(op, proof, { policies }, null), true);
+  assert.equal(
+    storageWriteBarrier('upsert', proof, { policies: policies.slice(0, 1) }, null),
+    false,
+  );
+  assert.equal(
+    storageWriteBarrier('upsert', { ...proof, predicate: { allowed: true } }, { policies }, null),
+    false,
+  );
+  assert.equal(
+    storageWriteBarrier(
+      'upsert',
+      { ...proof, session: { ...proof.session, rolbypassrls: true } },
+      { policies },
+      null,
+    ),
+    false,
+  );
+});

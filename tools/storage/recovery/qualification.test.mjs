@@ -7,8 +7,98 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { copyTree } from './volume-copy.mjs';
 import { delayedProvider } from './delayed-provider.mjs';
-import { projectName } from './stack-identity.mjs';
+import { projectName, storageVolumeIdentity, verifyStorageVolume } from './stack-identity.mjs';
 import { cleanupTarget } from './cleanup-target.mjs';
+
+function volumeFixture(backendPath = '/mnt') {
+  const project = 'livio-recovery-123-abcdef12';
+  return {
+    project,
+    container: {
+      Id: 'b'.repeat(64),
+      Name: '/supabase_storage_' + project,
+      Config: {
+        Labels: { 'com.supabase.cli.project': project },
+        Env: ['STORAGE_BACKEND=file', 'FILE_STORAGE_BACKEND_PATH=' + backendPath],
+      },
+      Mounts: [
+        {
+          Type: 'volume',
+          Name: 'supabase_storage_' + project,
+          Source: '/var/lib/docker/volumes/supabase_storage_' + project + '/_data',
+          Destination: backendPath,
+        },
+      ],
+    },
+  };
+}
+test('observed /mnt and legacy backend paths require the matching owned named volume', () => {
+  for (const path of ['/mnt', '/var/lib/storage']) {
+    const f = volumeFixture(path);
+    assert.deepEqual(storageVolumeIdentity(f.container, f.project), {
+      backendPath: path,
+      volume: 'supabase_storage_' + f.project,
+    });
+  }
+});
+test('configured backend without its exact mount is denied', () => {
+  const f = volumeFixture();
+  f.container.Mounts[0].Destination = '/var/lib/storage';
+  assert.throws(() => storageVolumeIdentity(f.container, f.project));
+});
+test('bind mounts and volumes belonging to another project are denied', () => {
+  for (const mutation of [
+    (c) => {
+      c.Mounts[0].Type = 'bind';
+    },
+    (c) => {
+      c.Mounts[0].Name = 'supabase_storage_other';
+    },
+  ]) {
+    const f = volumeFixture();
+    mutation(f.container);
+    assert.throws(() => storageVolumeIdentity(f.container, f.project));
+  }
+});
+test('backend identity requires both the exact container name and project label', () => {
+  for (const mutation of [
+    (c) => {
+      c.Name = '/supabase_storage_other';
+    },
+    (c) => {
+      c.Config.Labels['com.supabase.cli.project'] = 'other';
+    },
+  ]) {
+    const f = volumeFixture();
+    mutation(f.container);
+    assert.throws(() => storageVolumeIdentity(f.container, f.project));
+  }
+});
+test('unsupported paths, traversal and duplicated configuration fail closed', () => {
+  for (const path of ['/mnt/../other', '/external', '/mnt/']) {
+    const f = volumeFixture(path);
+    assert.throws(() => storageVolumeIdentity(f.container, f.project));
+  }
+  const f = volumeFixture();
+  f.container.Config.Env.push('FILE_STORAGE_BACKEND_PATH=/mnt');
+  assert.throws(() => storageVolumeIdentity(f.container, f.project));
+});
+test('non-file backends and ambiguous mounts fail closed', () => {
+  const f = volumeFixture();
+  f.container.Config.Env[0] = 'STORAGE_BACKEND=s3';
+  assert.throws(() => storageVolumeIdentity(f.container, f.project));
+  const g = volumeFixture();
+  g.container.Mounts.push({ ...g.container.Mounts[0] });
+  assert.throws(() => storageVolumeIdentity(g.container, g.project));
+});
+test('cleanup uses the observed backend path and still requires verified absence', () => {
+  const f = identifiedCleanup();
+  const storage = f.state.containers[1];
+  storage.Config.Env[1] = 'FILE_STORAGE_BACKEND_PATH=/mnt';
+  storage.Mounts[0].Destination = '/mnt';
+  assert.equal(cleanupTarget(f.env, f.options).backendPath, '/mnt');
+  assert.equal(f.state.stops, 1);
+});
 
 const cleanupEnv = {
   GITHUB_ACTIONS: 'true',
@@ -105,9 +195,17 @@ function identifiedCleanup() {
   const storage = {
     Id: storageId,
     Name: '/supabase_storage_' + project,
-    Config: { Labels: labels },
+    Config: {
+      Labels: labels,
+      Env: ['STORAGE_BACKEND=file', 'FILE_STORAGE_BACKEND_PATH=/var/lib/storage'],
+    },
     Mounts: [
-      { Type: 'volume', Name: 'supabase_storage_' + project, Destination: '/var/lib/storage' },
+      {
+        Type: 'volume',
+        Name: 'supabase_storage_' + project,
+        Source: '/var/lib/docker/volumes/supabase_storage_' + project + '/_data',
+        Destination: '/var/lib/storage',
+      },
     ],
   };
   const state = {
@@ -124,8 +222,28 @@ function identifiedCleanup() {
     read: () => JSON.stringify({ project, sourceCluster: '111' }),
     docker: (args) => {
       if (args[0] === 'ps') return state.ids.join('\n');
+      if (args[0] === 'volume' && args[1] === 'inspect')
+        return JSON.stringify([
+          {
+            Name: 'supabase_storage_' + project,
+            Driver: 'local',
+            Scope: 'local',
+            Options: null,
+            Mountpoint: storage.Mounts[0].Source,
+          },
+        ]);
       if (args[0] === 'volume') return state.volumes.join('\n');
       if (args[0] === 'inspect') return JSON.stringify(state.containers);
+      if (args[0] === 'exec' && args[2] === 'node') {
+        const path = storage.Config.Env[1].split('=')[1];
+        return JSON.stringify({
+          backendPath: path,
+          realPath: path,
+          directory: true,
+          device: '1',
+          inode: '2',
+        });
+      }
       if (args[0] === 'exec') return state.cluster;
       throw new Error('UNEXPECTED_DOCKER_OPERATION');
     },
@@ -278,5 +396,61 @@ test('physical backup copier preserves nested bytes/hash and refuses overwriting
   } finally {
     assert.equal(dirname(root), tmpdir());
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('physical identity requires Docker volume identity and the exact real configured directory', () => {
+  const f = volumeFixture();
+  const volume = {
+    Name: 'supabase_storage_' + f.project,
+    Driver: 'local',
+    Scope: 'local',
+    Options: null,
+    Mountpoint: f.container.Mounts[0].Source,
+  };
+  const physical = {
+    backendPath: '/mnt',
+    realPath: '/mnt',
+    directory: true,
+    device: '1',
+    inode: '2',
+  };
+  const run = (args) => {
+    if (args[0] === 'volume' && args[1] === 'inspect') return JSON.stringify([volume]);
+    assert.equal(args[0], 'exec');
+    assert.equal(args[2], 'node');
+    assert.ok(!/writeFile|unlink|rmSync/.test(args[4]));
+    return JSON.stringify(physical);
+  };
+  assert.equal(verifyStorageVolume(f.container, f.project, run).physical.directory, true);
+  for (const [key, value] of [
+    ['Driver', 'external'],
+    ['Mountpoint', '/foreign'],
+    ['Options', { device: '/external' }],
+  ]) {
+    const old = volume[key];
+    volume[key] = value;
+    assert.throws(() => verifyStorageVolume(f.container, f.project, run));
+    volume[key] = old;
+  }
+  for (const [key, value] of [
+    ['realPath', '/elsewhere'],
+    ['directory', false],
+    ['backendPath', '/external'],
+  ]) {
+    const old = physical[key];
+    physical[key] = value;
+    assert.throws(() => verifyStorageVolume(f.container, f.project, run));
+    physical[key] = old;
+  }
+});
+test('an extra bind or foreign volume is rejected even with a valid backend mount', () => {
+  for (const mount of [
+    { Type: 'bind', Destination: '/unknown' },
+    { Type: 'volume', Name: 'other', Destination: '/other' },
+  ]) {
+    const f = volumeFixture();
+    f.container.Mounts.push(mount);
+    assert.throws(() => storageVolumeIdentity(f.container, f.project));
   }
 });

@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import assert from 'node:assert/strict';
 import {
   assertRecoveryArchive,
+  recoveryPrivateTableQuery,
+  recoveryFunctionQuery,
   assertRecoveryOwners,
   recoveryRestoreInventory,
 } from '../storage/recovery/restore-inventory.mjs';
@@ -344,13 +346,26 @@ writeCheckpoint({ targetDatabase: target });
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
 run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
 restoreStage = 'archive_toc_preflight';
+writeCheckpoint();
 const sourceToc = run('pg_restore', '-l', archive).split('\n');
 const schemaFilteredToc = run(...listArguments(archive)).split('\n');
 const tocOwners = discoverTocOwners(sourceToc);
 const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line, tocOwners) }));
 // Expand counts ONLY after verifying every new ACL's exact reviewed identity.
 // All existing owner/grant/default-ACL/source-vs-target assertions remain intact.
-const recoveryAclCount = assertRecoveryArchive(tocEntries.map((row) => row.entry));
+writeFileSync(join(evidenceDirectory, 'source-archive-toc.txt'), sourceToc.join('\n') + '\n');
+writeFileSync(
+  join(evidenceDirectory, 'schema-filtered-archive-toc.txt'),
+  schemaFilteredToc.join('\n') + '\n',
+);
+const recoveryPrivateTables = JSON.parse(sql('postgres', recoveryPrivateTableQuery));
+const recoveryFunctions = JSON.parse(sql('postgres', recoveryFunctionQuery));
+writeCheckpoint({ recoveryPrivateTables, recoveryFunctions });
+const recoveryAclCount = assertRecoveryArchive(
+  tocEntries.map((row) => row.entry),
+  recoveryPrivateTables,
+  recoveryFunctions,
+);
 expectedRestoreInventory.sourceOwners += recoveryRestoreInventory.owners.length;
 expectedRestoreInventory.sourceAclRows += recoveryAclCount;
 expectedRestoreInventory.restoredAclRows += recoveryAclCount;
@@ -511,6 +526,37 @@ writeCheckpoint({
   excludedSchedulerSchemas,
 });
 run(...effectiveRestoreArgs);
+const restoredRecoveryPrivateTables = JSON.parse(sql(target, recoveryPrivateTableQuery));
+const restoredRecoveryFunctions = JSON.parse(sql(target, recoveryFunctionQuery));
+writeCheckpoint({ restoredRecoveryPrivateTables, restoredRecoveryFunctions });
+assertRecoveryArchive(
+  tocEntries.map((row) => row.entry),
+  restoredRecoveryPrivateTables,
+  restoredRecoveryFunctions,
+);
+const privacyWithoutOwner = (rows) =>
+  rows.map((row) => ({
+    name: row.name,
+    rls: row.rls,
+    forceRls: row.forceRls,
+    ownerOnlyColumnAcl: row.ownerOnlyColumnAcl,
+    serverAccess: row.serverAccess,
+    ownerOnlyAcl: row.ownerOnlyAcl,
+    noBrowserPrivileges: row.noBrowserPrivileges,
+  }));
+assert.deepEqual(
+  privacyWithoutOwner(restoredRecoveryPrivateTables),
+  privacyWithoutOwner(recoveryPrivateTables),
+);
+const functionPrivacy = (rows) =>
+  rows.map((fn) => ({
+    name: fn.name,
+    securityDefiner: fn.securityDefiner,
+    config: fn.config,
+    noBrowserExecute: fn.noBrowserExecute,
+    serverExecute: fn.serverExecute,
+  }));
+assert.deepEqual(functionPrivacy(restoredRecoveryFunctions), functionPrivacy(recoveryFunctions));
 restoreStage = 'validate_recovery';
 writeCheckpoint({
   targetDatabase: target,

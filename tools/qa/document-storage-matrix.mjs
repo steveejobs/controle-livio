@@ -9,6 +9,8 @@ import {
   inspectStorageCatalog,
   inspectActorStorage,
   sanitizeProviderPayload,
+  ordinaryStorageSession,
+  restrictiveBucketBoundary,
 } from './storage-authorization-proof.mjs';
 
 const hash = (b) => createHash('sha256').update(b).digest('hex');
@@ -72,17 +74,36 @@ export async function captureStorageControl(control, perform, cleanup) {
 }
 export function storageDenial(http, body) {
   if (http >= 200 && http < 300) return 'ACCEPTED_OR_AMBIGUOUS_NOOP';
-  const message = String(body?.message ?? body?.error ?? '');
   if (
-    /row.level security|permission denied|not authorized|unauthori[sz]ed|access denied/i.test(
-      message,
-    ) &&
-    !/invalid.*(jwt|token)|expired.*(jwt|token)/i.test(message)
+    http === 400 &&
+    String(body?.statusCode) === '403' &&
+    body?.code === 'AccessDenied' &&
+    body?.error === 'Unauthorized' &&
+    ['Server managed object', 'new row violates row-level security policy'].includes(body?.message)
+  )
+    return 'AUTHORIZATION_DENIED';
+  if (
+    [401, 403].includes(http) &&
+    body?.code === '42501' &&
+    body?.message === 'permission denied for table documents'
   )
     return 'AUTHORIZATION_DENIED';
   return 'HARNESS_DOMAIN_OR_INFRA_FAILURE';
 }
-
+export function diagnoseMatrixAttempt(proof) {
+  if (!proof.operationSent || !proof.writeBarrier || !proof.providerIdentified)
+    return { classification: 'INCONCLUSIVE', securityProven: false };
+  return diagnoseStorageAttempt(proof);
+}
+export function storageWriteBarrier(operation, proof, catalog, identity) {
+  if (!ordinaryStorageSession(proof.session, identity) || proof.predicate?.allowed !== false)
+    return false;
+  const policy = (op) => restrictiveBucketBoundary(catalog.policies, proof.session.role, op);
+  if (['upsert', 'signed-upload'].includes(operation)) return policy('insert') && policy('update');
+  if (operation === 'update') return policy('update');
+  if (operation === 'insert') return policy('insert');
+  return proof.barriers[operation] === true;
+}
 // Reuses the identity harness actors, real API fixtures, database and Storage client.
 export async function runDocumentStorageMatrix({
   env,
@@ -573,9 +594,20 @@ export async function runDocumentStorageMatrix({
             : sqlProof.visible.length === 0 && httpReadDenied
               ? false
               : null;
-        c.diagnosis = diagnoseStorageAttempt({
+        c.authorization.operationWriteBarrier = storageWriteBarrier(
+          operation,
+          sqlProof,
+          report.authorizationCatalog,
+          identity,
+        );
+        c.diagnosis = diagnoseMatrixAttempt({
           operation,
           response: c.attempt,
+          operationSent: Boolean(
+            c.attempt?.method &&
+            c.attempt?.path &&
+            c.attempt?.target?.source === version.storageKey,
+          ),
           unchanged: isDeepStrictEqual(c.before, c.after),
           fixtureValid: c.fixtureValid,
           jwtValidated: c.jwtValidated,
@@ -584,7 +616,7 @@ export async function runDocumentStorageMatrix({
             supported.has(operation) &&
             !report.sdkControls.some((s) => s.operation === operation && s.status !== 'PASS'),
           providerIdentified: Boolean(report.authorizationCatalog.image),
-          writeBarrier: sqlProof.barriers[operation] === true,
+          writeBarrier: c.authorization.operationWriteBarrier,
           sourceVisible,
           missingControl: c.missingSourceControl,
         });

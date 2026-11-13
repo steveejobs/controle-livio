@@ -4,7 +4,7 @@ import { resolve, relative, isAbsolute } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { validateRecoveryEnvironment } from './environment.mjs';
-import { projectName, docker } from './stack-identity.mjs';
+import { projectName, docker, verifyStorageVolume } from './stack-identity.mjs';
 
 function evidenceDirectory(env, options = {}) {
   assert.equal(options.platform ?? process.platform, 'linux');
@@ -94,9 +94,8 @@ export function cleanupTarget(env = process.env, options = {}) {
       (p) => p.HostPort === new URL(env.DATABASE_URL).port,
     ),
   );
-  const volume = storage.Mounts?.find((m) => m.Destination === '/var/lib/storage');
-  assert.equal(volume?.Type, 'volume');
-  assert.ok(before.volumes.includes(volume.Name));
+  const identity = verifyStorageVolume(storage, project, run);
+  assert.ok(before.volumes.includes(identity.volume));
   const cluster = run([
     'exec',
     db.Id,
@@ -139,7 +138,8 @@ export function cleanupTarget(env = process.env, options = {}) {
     status: 'PASS',
     project,
     cluster,
-    volume: volume.Name,
+    volume: identity.volume,
+    backendPath: identity.backendPath,
     containersBefore: before.ids.length,
     containersAfter: 0,
     namedProjectVolumesAfter: 0,

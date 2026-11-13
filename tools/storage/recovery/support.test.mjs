@@ -88,17 +88,46 @@ test('restore owner inventory uses exact identities and rejects a same-count sub
   replaced[0] = replaced[0].replace('configuration', 'unreviewed');
   assert.throws(() => assertRecoveryOwners(replaced));
 });
+const privateCatalogFixture = () =>
+  recoveryRestoreInventory.aclNames
+    .filter((n) => n.startsWith('TABLE '))
+    .map((n) => ({
+      name: n.slice(6),
+      rls: true,
+      forceRls: true,
+      ownerOnlyColumnAcl: true,
+      serverAccess: true,
+      owner: 'postgres',
+      ownerOnlyAcl: true,
+      noBrowserPrivileges: true,
+    }));
+const functionCatalogFixture = () =>
+  recoveryRestoreInventory.aclNames
+    .filter((n) => n.startsWith('FUNCTION '))
+    .map((n) => ({
+      name: n.slice(9),
+      owner: 'postgres',
+      securityDefiner: true,
+      config: ['search_path=pg_catalog'],
+      noBrowserExecute: true,
+      serverExecute: true,
+    }));
 test('restore ACL inventory rejects unexpected execution/table entries', () => {
   const entries = recoveryRestoreInventory.aclNames.map((name) => ({
     description: 'ACL',
     namespace: 'public',
     name,
   }));
-  assert.equal(assertRecoveryArchive(entries), 10);
+  assert.equal(
+    assertRecoveryArchive(entries, privateCatalogFixture(), functionCatalogFixture()),
+    10,
+  );
   const changed = entries.map((entry, index) =>
     index ? entry : { ...entry, name: 'FUNCTION storage_recovery_arbitrary_delete()' },
   );
-  assert.throws(() => assertRecoveryArchive(changed));
+  assert.throws(() =>
+    assertRecoveryArchive(changed, privateCatalogFixture(), functionCatalogFixture()),
+  );
 });
 test('58 contract IDs remain individually enumerated; registry is not an execution result', () => {
   const cases = JSON.parse(readFileSync(new URL('./contracts.json', import.meta.url), 'utf8'));
@@ -110,4 +139,59 @@ test('58 contract IDs remain individually enumerated; registry is not an executi
   for (let x = 1; x <= 18; x++)
     assert.ok(cases.some((c) => c.id === `REC-X${String(x).padStart(2, '0')}`));
   assert.ok(cases.every((c) => !('result' in c)));
+});
+
+test('observed six-function archive requires independent full private-table proof', () => {
+  const entries = recoveryRestoreInventory.aclNames
+    .filter((n) => n.startsWith('FUNCTION '))
+    .map((name) => ({ description: 'ACL', namespace: 'public', name }));
+  assert.equal(
+    assertRecoveryArchive(entries, privateCatalogFixture(), functionCatalogFixture()),
+    6,
+  );
+  assert.throws(() => assertRecoveryArchive(entries));
+  for (const field of [
+    'rls',
+    'forceRls',
+    'ownerOnlyAcl',
+    'ownerOnlyColumnAcl',
+    'noBrowserPrivileges',
+    'serverAccess',
+  ]) {
+    const rows = privateCatalogFixture();
+    rows[0][field] = false;
+    assert.throws(() => assertRecoveryArchive(entries, rows, functionCatalogFixture()));
+  }
+  const rows = privateCatalogFixture();
+  rows[0].owner = 'authenticated';
+  assert.throws(() => assertRecoveryArchive(entries, rows, functionCatalogFixture()));
+  assert.throws(() =>
+    assertRecoveryArchive(entries.slice(1), privateCatalogFixture(), functionCatalogFixture()),
+  );
+  assert.throws(() =>
+    assertRecoveryArchive(
+      [
+        ...entries,
+        { description: 'ACL', namespace: 'public', name: 'TABLE storage_recovery_unreviewed' },
+      ],
+      privateCatalogFixture(),
+      functionCatalogFixture(),
+    ),
+  );
+});
+
+test('restore rejects function execute, search_path and security mode drift', () => {
+  const entries = recoveryRestoreInventory.aclNames
+    .filter((n) => n.startsWith('FUNCTION '))
+    .map((name) => ({ description: 'ACL', namespace: 'public', name }));
+  for (const [key, value] of [
+    ['noBrowserExecute', false],
+    ['serverExecute', false],
+    ['securityDefiner', false],
+    ['config', ['search_path=public']],
+  ]) {
+    const f = functionCatalogFixture();
+    f[0][key] = value;
+    assert.throws(() => assertRecoveryArchive(entries, privateCatalogFixture(), f));
+  }
 });

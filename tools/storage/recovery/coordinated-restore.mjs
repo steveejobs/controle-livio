@@ -7,7 +7,13 @@ import { join, resolve } from 'node:path';
 import { runtime, snapshot } from './runtime.mjs';
 import { restoreFixture } from './restore-fixture.mjs';
 import { independentRecovery } from './independent-process.mjs';
-import { assertOwnedStack, docker, ownContainer, sql } from './stack-identity.mjs';
+import {
+  assertOwnedStack,
+  docker,
+  ownContainer,
+  sql,
+  storageVolumeIdentity,
+} from './stack-identity.mjs';
 import { validateRecoveryEnvironment } from './environment.mjs';
 import { withFinancialApi } from '../../qa/run-financial-integrity-ci.mjs';
 
@@ -60,9 +66,22 @@ function assertFreshDestination(target, source) {
     target.cluster,
   );
   const storage = ownContainer('storage', target.project, false);
-  assert.equal(
-    storage.Mounts.find((m) => m.Destination === '/var/lib/storage')?.Name,
-    target.volume,
+  const identity = storageVolumeIdentity(storage, target.project);
+  assert.equal(identity.volume, target.volume);
+  assert.equal(identity.backendPath, target.backendPath);
+  const [volume, ...extra] = JSON.parse(docker(['volume', 'inspect', identity.volume]));
+  assert.equal(extra.length, 0);
+  assert.equal(Object.keys(volume.Options ?? {}).length, 0);
+  assert.equal(storage.Mounts[0].Source, volume.Mountpoint);
+  assert.deepEqual(
+    {
+      name: volume.Name,
+      driver: volume.Driver,
+      scope: volume.Scope,
+      mountpoint: volume.Mountpoint,
+      createdAt: volume.CreatedAt ?? null,
+    },
+    target.volumeIdentity,
   );
 }
 function inventory(project) {
@@ -238,6 +257,9 @@ export async function coordinatedRestore(env) {
     r = await runtime(env);
     source = await assertOwnedStack(r.db, env);
     assert.equal(source.project, 'livio-legal-crm');
+    evidence.source = source;
+    evidence.phase = 'SOURCE_IDENTITY_VERIFIED';
+    save();
     fixtureData = await restoreFixture(r);
     await r.db.$disconnect();
     r = null;
@@ -260,6 +282,10 @@ export async function coordinatedRestore(env) {
       );
     const sourceCatalog = catalog(source.project),
       sourceRows = inventory(source.project);
+    evidence.sourceCatalog = sourceCatalog;
+    evidence.sourceRows = sourceRows;
+    evidence.phase = 'DATABASE_BACKUP';
+    save();
     const archive = '/tmp/livio-recovery-' + randomBytes(8).toString('hex') + '.dump';
     docker([
       'exec',

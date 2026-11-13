@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve, relative, isAbsolute } from 'node:path';
 import { validateRecoveryEnvironment } from './environment.mjs';
 
 export function docker(args, options = {}) {
@@ -46,6 +48,69 @@ export const sql = (project, query) =>
     ],
     { input: query },
   );
+export function storageVolumeIdentity(storage, project) {
+  projectName({ LIVIO_RECOVERY_PROJECT: project });
+  assert.equal(storage.Config?.Labels?.['com.supabase.cli.project'], project);
+  assert.equal(storage.Name, '/supabase_storage_' + project);
+  const setting = (key) => {
+    const values = (storage.Config?.Env ?? []).filter((value) => value.startsWith(key + '='));
+    assert.equal(values.length, 1, 'Storage setting must have one unambiguous value');
+    return values[0].slice(key.length + 1);
+  };
+  assert.equal(setting('STORAGE_BACKEND'), 'file');
+  const backendPath = setting('FILE_STORAGE_BACKEND_PATH');
+  assert.ok(
+    ['/mnt', '/var/lib/storage'].includes(backendPath),
+    'Unsupported disposable backend path',
+  );
+  const mounts = (storage.Mounts ?? []).filter((m) => m.Destination === backendPath);
+  assert.equal(mounts.length, 1, 'Configured backend must have one exact mount');
+  assert.equal(storage.Mounts.length, 1, 'Unknown additional Storage mount');
+  const volume = mounts[0];
+  assert.equal(volume.Type, 'volume', 'Only a named disposable Storage volume is supported');
+  assert.equal(volume.Name, 'supabase_storage_' + project);
+  return { backendPath, volume: volume.Name };
+}
+
+export function verifyStorageVolume(storage, project, run = docker) {
+  const identity = storageVolumeIdentity(storage, project);
+  const [volume, ...extra] = JSON.parse(run(['volume', 'inspect', identity.volume]).toString());
+  assert.equal(extra.length, 0);
+  assert.equal(volume.Name, identity.volume);
+  assert.equal(volume.Driver, 'local');
+  assert.equal(volume.Scope, 'local');
+  assert.equal(Object.keys(volume.Options ?? {}).length, 0, 'External/bind volume options denied');
+  if (volume.Labels?.['com.supabase.cli.project'])
+    assert.equal(volume.Labels['com.supabase.cli.project'], project);
+  assert.equal(storage.Mounts[0].Source, volume.Mountpoint);
+  assert.ok(volume.Mountpoint?.startsWith('/'), 'Absolute Docker volume identity required');
+  const physical = JSON.parse(
+    run([
+      'exec',
+      storage.Id,
+      'node',
+      '-e',
+      "const fs=require('node:fs'),p=process.env.FILE_STORAGE_BACKEND_PATH;if(!['/mnt','/var/lib/storage'].includes(p))process.exit(2);const s=fs.statSync(p,{bigint:true});console.log(JSON.stringify({backendPath:p,realPath:fs.realpathSync(p),directory:s.isDirectory(),device:s.dev.toString(),inode:s.ino.toString()}));",
+    ]).toString(),
+  );
+  assert.equal(physical.backendPath, identity.backendPath);
+  assert.equal(physical.realPath, identity.backendPath, 'Backend symlink/alias denied');
+  assert.equal(physical.directory, true);
+  assert.match(physical.device, /^\d+$/);
+  assert.match(physical.inode, /^\d+$/);
+  return {
+    ...identity,
+    volumeIdentity: {
+      name: volume.Name,
+      driver: volume.Driver,
+      scope: volume.Scope,
+      mountpoint: volume.Mountpoint,
+      createdAt: volume.CreatedAt ?? null,
+    },
+    physical,
+  };
+}
+
 export async function assertOwnedStack(db, env = process.env) {
   validateRecoveryEnvironment(env);
   const project = projectName(env),
@@ -71,21 +136,40 @@ export async function assertOwnedStack(db, env = process.env) {
   ownContainer('rest', project);
   const setting = (key) =>
     storage.Config.Env.find((value) => value.startsWith(key + '='))?.slice(key.length + 1);
-  assert.equal(
-    setting('STORAGE_BACKEND'),
-    'file',
-    'Coordinated restore supports only this disposable file backend',
+  const directory = resolve(env.LIVIO_QA_OUTPUT);
+  const boundary = relative(resolve(env.RUNNER_TEMP), directory);
+  assert.ok(!boundary.startsWith('..') && !isAbsolute(boundary));
+  const observed = {
+    project,
+    cluster: direct,
+    container: storage.Id,
+    name: storage.Name,
+    backend: setting('STORAGE_BACKEND'),
+    backendPath: setting('FILE_STORAGE_BACKEND_PATH'),
+    mounts: storage.Mounts.map((m) => ({
+      type: m.Type,
+      name: m.Name ?? null,
+      destination: m.Destination,
+    })),
+    checkpoint: 'BEFORE_PHYSICAL_IDENTITY',
+  };
+  mkdirSync(directory, { recursive: true });
+  const evidenceFile = resolve(directory, project + '-storage-identity.json');
+  writeFileSync(evidenceFile, JSON.stringify(observed, null, 2) + '\n');
+  const identity = verifyStorageVolume(storage, project);
+  writeFileSync(
+    evidenceFile,
+    JSON.stringify({ ...observed, ...identity, checkpoint: 'VERIFIED' }, null, 2) + '\n',
   );
-  assert.equal(setting('FILE_STORAGE_BACKEND_PATH'), '/var/lib/storage');
-  const volume = storage.Mounts.find((m) => m.Destination === '/var/lib/storage');
-  assert.equal(volume?.Type, 'volume', 'Only a named disposable Storage volume is supported');
-  assert.ok(volume.Name.includes(project), 'Storage volume must belong to the same project');
   return {
     project,
     cluster: direct,
     databaseContainer: container.Id,
     storageContainer: storage.Id,
-    volume: volume.Name,
+    volume: identity.volume,
+    backendPath: identity.backendPath,
+    volumeIdentity: identity.volumeIdentity,
+    physical: identity.physical,
     storageImage: storage.Image,
     tenantId: setting('TENANT_ID'),
   };
