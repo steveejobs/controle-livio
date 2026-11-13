@@ -965,7 +965,11 @@ test('seletor de cliente: carregamento sob demanda, erro, nova tentativa e lista
         exact: true,
       });
       await expect.poll(() => clientRequestStarted, { timeout: apiOperationTimeoutMs }).toBe(true);
-      await expect(loadingForm.getByRole('status')).toContainText('Carregando clientes');
+      const clientLoadingStatus = loadingForm
+        .getByRole('status')
+        .filter({ hasText: 'Carregando clientes' });
+      await expect(clientLoadingStatus).toHaveCount(1);
+      await expect(clientLoadingStatus).toContainText('Carregando clientes');
       await expect(loadingClientSelect).toBeDisabled();
       markWorkflowStage(page, 'client-select-state-probe', 'loading', {
         fieldLabel: 'Cliente',

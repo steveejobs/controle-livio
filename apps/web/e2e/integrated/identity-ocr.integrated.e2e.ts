@@ -269,7 +269,11 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
       .getByRole('button', { name: 'Abrir', exact: true })
       .click();
     await expect(page.getByLabel('Nome completo', { exact: true })).toHaveValue(name);
-    await expect(page.getByLabel('CPF', { exact: true })).toHaveValue(
+    // The detail view displays CPF in its identity header; it has no editable CPF field.
+    const reopenedIdentity = page.getByRole('heading', { name, exact: true }).locator('..');
+    await expect(reopenedIdentity).toHaveCount(1);
+    await expect(reopenedIdentity).toBeVisible();
+    await expect(reopenedIdentity).toContainText(
       approvedCpf.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4'),
     );
     const reopenedForm = page.locator('#dados-cliente form');
@@ -295,6 +299,7 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     await expect(form.getByLabel('Nome encontrado')).toBeVisible({ timeout: 60000 });
     await form.getByRole('button', { name: 'Usar dados no cadastro' }).click();
     const beforeFailure = await db.document.count({ where: { organizationId: org } });
+    const clientsBeforeFailure = await db.client.count({ where: { organizationId: org } });
     const objectsBefore = await db.$queryRaw<
       Array<{ count: number }>
     >`SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'`;
@@ -305,6 +310,7 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     checkpoint('duplicate');
     expect((await duplicateResponse).status()).toBe(409);
     await expect(form.getByRole('alert')).toBeVisible();
+    expect(await db.client.count({ where: { organizationId: org } })).toBe(clientsBeforeFailure);
     expect(await db.document.count({ where: { organizationId: org } })).toBe(beforeFailure);
     expect(
       await db.$queryRaw`SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'`,
