@@ -189,90 +189,94 @@ enum AuditAction {
 }
 
 model Organization {
-  id                      String                   @id @default(uuid()) @db.Uuid
-  legalName               String                   @map("legal_name")
-  slug                    String                   @unique @db.VarChar(80)
-  tradeName               String?                  @map("trade_name")
-  taxId                   String?                  @map("tax_id")
-  status                  OrganizationStatus       @default(ACTIVE)
-  timezone                String                   @default("America/Sao_Paulo")
-  settings                Json                     @default("{}")
-  createdAt               DateTime                 @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt               DateTime                 @updatedAt @map("updated_at") @db.Timestamptz(3)
-  users                   User[]
-  memberships             OrganizationMember[]
-  memberRoles             OrganizationMemberRole[]
-  roles                   Role[]
-  permissions             Permission[]
-  userRoles               UserRole[]
-  rolePermissions         RolePermission[]
-  sessions                Session[]
-  passwordResetTokens     PasswordResetToken[]
-  clients                 Client[]
-  clientContacts          ClientContact[]
-  matters                 Matter[]
-  matterParties           MatterParty[]
-  pipelines               Pipeline[]
-  pipelineStages          PipelineStage[]
-  matterStageHistory      MatterStageHistory[]
-  contracts               Contract[]
-  serviceCatalogItems     ServiceCatalogItem[]
-  receivables             Receivable[]
-  installments            ReceivableInstallment[]
-  payments                Payment[]
+  storageUploadIntents     StorageUploadIntent[]
+  storageRecoveryIncidents StorageRecoveryIncident[]
+  id                       String                    @id @default(uuid()) @db.Uuid
+  legalName                String                    @map("legal_name")
+  slug                     String                    @unique @db.VarChar(80)
+  tradeName                String?                   @map("trade_name")
+  taxId                    String?                   @map("tax_id")
+  status                   OrganizationStatus        @default(ACTIVE)
+  timezone                 String                    @default("America/Sao_Paulo")
+  settings                 Json                      @default("{}")
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  users                    User[]
+  memberships              OrganizationMember[]
+  memberRoles              OrganizationMemberRole[]
+  roles                    Role[]
+  permissions              Permission[]
+  userRoles                UserRole[]
+  rolePermissions          RolePermission[]
+  sessions                 Session[]
+  passwordResetTokens      PasswordResetToken[]
+  clients                  Client[]
+  clientContacts           ClientContact[]
+  matters                  Matter[]
+  matterParties            MatterParty[]
+  pipelines                Pipeline[]
+  pipelineStages           PipelineStage[]
+  matterStageHistory       MatterStageHistory[]
+  contracts                Contract[]
+  serviceCatalogItems      ServiceCatalogItem[]
+  receivables              Receivable[]
+  installments             ReceivableInstallment[]
+  payments                 Payment[]
   paymentReceipts          PaymentReceipt[]
-  paymentChangeRequests   PaymentChangeRequest[]
-  paymentAllocations      PaymentAllocation[]
-  paymentReversals        PaymentReversal[]
-  financialAdjustments    FinancialAdjustment[]
-  renegotiations          Renegotiation[]
-  expenses                Expense[]
-  documents               Document[]
-  documentVersions        DocumentVersion[]
-  documentSigningRequests DocumentSigningRequest[]
-  internalNotes           InternalNote[]
-  clientMessages          ClientMessage[]
-  tasks                   Task[]
-  taskComments            TaskComment[]
-  taskReminders           TaskReminder[]
-  taskHistory             TaskHistory[]
-  calendarEvents          CalendarEvent[]
-  notifications           Notification[]
-  auditLogs               AuditLog[]
-  activityEvents          ActivityEvent[]
-  webPushSubscriptions    WebPushSubscription[]
-  apiRateLimits           ApiRateLimit[]
+  paymentChangeRequests    PaymentChangeRequest[]
+  paymentAllocations       PaymentAllocation[]
+  paymentReversals         PaymentReversal[]
+  financialAdjustments     FinancialAdjustment[]
+  renegotiations           Renegotiation[]
+  expenses                 Expense[]
+  documents                Document[]
+  documentVersions         DocumentVersion[]
+  documentSigningRequests  DocumentSigningRequest[]
+  internalNotes            InternalNote[]
+  clientMessages           ClientMessage[]
+  tasks                    Task[]
+  taskComments             TaskComment[]
+  taskReminders            TaskReminder[]
+  taskHistory              TaskHistory[]
+  calendarEvents           CalendarEvent[]
+  notifications            Notification[]
+  auditLogs                AuditLog[]
+  activityEvents           ActivityEvent[]
+  webPushSubscriptions     WebPushSubscription[]
+  apiRateLimits            ApiRateLimit[]
 
   @@map("organizations")
 }
 
 model User {
-  id                   String                @id @default(uuid()) @db.Uuid
-  authUserId           String?               @map("auth_user_id") @db.Uuid
-  organizationId       String                @map("organization_id") @db.Uuid
-  clientId             String?               @map("client_id") @db.Uuid
-  email                String                @db.VarChar(320)
-  passwordHash         String?               @map("password_hash")
-  fullName             String                @map("full_name")
-  status               UserStatus            @default(INVITED)
-  lastLoginAt          DateTime?             @map("last_login_at") @db.Timestamptz(3)
-  passwordChangedAt    DateTime?             @map("password_changed_at") @db.Timestamptz(3)
-  failedLoginAttempts  Int                   @default(0) @map("failed_login_attempts")
-  lockedUntil          DateTime?             @map("locked_until") @db.Timestamptz(3)
-  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt            DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  deletedAt            DateTime?             @map("deleted_at") @db.Timestamptz(3)
-  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client               Client?               @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  roles                UserRole[]
-  sessions             Session[]
-  passwordResetTokens  PasswordResetToken[]
-  membership           OrganizationMember?
-  webPushSubscriptions WebPushSubscription[]
-  responsibleExpenses  Expense[]             @relation("ExpenseResponsible")
-  rejectedExpenses     Expense[]             @relation("ExpenseRejector")
-  submittedReceipts    PaymentReceipt[]      @relation("ReceiptSubmitter")
-  reviewedReceipts     PaymentReceipt[]      @relation("ReceiptReviewer")
+  storageUploadIntents     StorageUploadIntent[]     @relation("StorageRecoveryInitiator")
+  storageRecoveryDecisions StorageRecoveryIncident[] @relation("StorageRecoveryOperator")
+  id                       String                    @id @default(uuid()) @db.Uuid
+  authUserId               String?                   @map("auth_user_id") @db.Uuid
+  organizationId           String                    @map("organization_id") @db.Uuid
+  clientId                 String?                   @map("client_id") @db.Uuid
+  email                    String                    @db.VarChar(320)
+  passwordHash             String?                   @map("password_hash")
+  fullName                 String                    @map("full_name")
+  status                   UserStatus                @default(INVITED)
+  lastLoginAt              DateTime?                 @map("last_login_at") @db.Timestamptz(3)
+  passwordChangedAt        DateTime?                 @map("password_changed_at") @db.Timestamptz(3)
+  failedLoginAttempts      Int                       @default(0) @map("failed_login_attempts")
+  lockedUntil              DateTime?                 @map("locked_until") @db.Timestamptz(3)
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt                DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  deletedAt                DateTime?                 @map("deleted_at") @db.Timestamptz(3)
+  organization             Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client                   Client?                   @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  roles                    UserRole[]
+  sessions                 Session[]
+  passwordResetTokens      PasswordResetToken[]
+  membership               OrganizationMember?
+  webPushSubscriptions     WebPushSubscription[]
+  responsibleExpenses      Expense[]                 @relation("ExpenseResponsible")
+  rejectedExpenses         Expense[]                 @relation("ExpenseRejector")
+  submittedReceipts        PaymentReceipt[]          @relation("ReceiptSubmitter")
+  reviewedReceipts         PaymentReceipt[]          @relation("ReceiptReviewer")
 
   @@unique([organizationId, email])
   @@index([authUserId])
@@ -853,33 +857,33 @@ model Renegotiation {
 }
 
 model Expense {
-  id                String        @id @default(uuid()) @db.Uuid
-  organizationId    String        @map("organization_id") @db.Uuid
-  matterId          String?       @map("matter_id") @db.Uuid
-  clientId          String?       @map("client_id") @db.Uuid
-  responsibleUserId String?       @map("responsible_user_id") @db.Uuid
+  id                String           @id @default(uuid()) @db.Uuid
+  organizationId    String           @map("organization_id") @db.Uuid
+  matterId          String?          @map("matter_id") @db.Uuid
+  clientId          String?          @map("client_id") @db.Uuid
+  responsibleUserId String?          @map("responsible_user_id") @db.Uuid
   description       String
-  category          String        @db.VarChar(100)
-  status            ExpenseStatus @default(DRAFT)
-  amount            Decimal       @db.Decimal(19, 4)
-  currency          String        @default("BRL") @db.Char(3)
-  incurredAt        DateTime      @map("incurred_at") @db.Date
-  dueDate           DateTime?     @map("due_date") @db.Date
-  paidAt            DateTime?     @map("paid_at") @db.Date
-  reimbursable      Boolean       @default(false)
-  approvedById      String?       @map("approved_by_id") @db.Uuid
-  approvedAt        DateTime?     @map("approved_at") @db.Timestamptz(3)
-  submittedAt       DateTime?     @map("submitted_at") @db.Timestamptz(3)
-  rejectedById      String?       @map("rejected_by_id") @db.Uuid
-  rejectedAt        DateTime?     @map("rejected_at") @db.Timestamptz(3)
-  rejectionReason   String?       @map("rejection_reason") @db.VarChar(500)
-  createdAt         DateTime      @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt         DateTime      @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization      Organization  @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  matter            Matter?       @relation(fields: [matterId], references: [id], onDelete: Restrict)
-  client            Client?       @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  responsibleUser   User?         @relation("ExpenseResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
-  rejectedBy        User?         @relation("ExpenseRejector", fields: [rejectedById], references: [id], onDelete: Restrict)
+  category          String           @db.VarChar(100)
+  status            ExpenseStatus    @default(DRAFT)
+  amount            Decimal          @db.Decimal(19, 4)
+  currency          String           @default("BRL") @db.Char(3)
+  incurredAt        DateTime         @map("incurred_at") @db.Date
+  dueDate           DateTime?        @map("due_date") @db.Date
+  paidAt            DateTime?        @map("paid_at") @db.Date
+  reimbursable      Boolean          @default(false)
+  approvedById      String?          @map("approved_by_id") @db.Uuid
+  approvedAt        DateTime?        @map("approved_at") @db.Timestamptz(3)
+  submittedAt       DateTime?        @map("submitted_at") @db.Timestamptz(3)
+  rejectedById      String?          @map("rejected_by_id") @db.Uuid
+  rejectedAt        DateTime?        @map("rejected_at") @db.Timestamptz(3)
+  rejectionReason   String?          @map("rejection_reason") @db.VarChar(500)
+  createdAt         DateTime         @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime         @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  matter            Matter?          @relation(fields: [matterId], references: [id], onDelete: Restrict)
+  client            Client?          @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  responsibleUser   User?            @relation("ExpenseResponsible", fields: [responsibleUserId], references: [id], onDelete: Restrict)
+  rejectedBy        User?            @relation("ExpenseRejector", fields: [rejectedById], references: [id], onDelete: Restrict)
   documents         Document[]
   receipts          PaymentReceipt[]
 
@@ -934,32 +938,32 @@ model Document {
 }
 
 model PaymentReceipt {
-  id               String                @id @default(uuid()) @db.Uuid
-  organizationId   String                @map("organization_id") @db.Uuid
-  clientId         String                @map("client_id") @db.Uuid
-  documentId       String                @unique @map("document_id") @db.Uuid
-  installmentId    String?               @map("installment_id") @db.Uuid
-  expenseId        String?               @map("expense_id") @db.Uuid
-  paymentId        String?               @unique @map("payment_id") @db.Uuid
-  sha256           String                @db.Char(64)
-  status           String                @default("PENDING_REVIEW") @db.VarChar(24)
-  extractedFields  Json                  @default("{}") @map("extracted_fields")
-  reconciliation   Json                  @default("{}")
-  reviewHistory    Json                  @default("[]") @map("review_history")
-  submittedById    String                @map("submitted_by_id") @db.Uuid
-  submittedByClient Boolean              @default(false) @map("submitted_by_client")
-  reviewedById     String?               @map("reviewed_by_id") @db.Uuid
-  reviewedAt       DateTime?             @map("reviewed_at") @db.Timestamptz(3)
-  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(3)
-  updatedAt        DateTime              @updatedAt @map("updated_at") @db.Timestamptz(3)
-  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  client           Client                @relation(fields: [clientId], references: [id], onDelete: Restrict)
-  document         Document              @relation(fields: [documentId], references: [id], onDelete: Restrict)
-  installment      ReceivableInstallment? @relation(fields: [installmentId], references: [id], onDelete: Restrict)
-  expense          Expense?              @relation(fields: [expenseId], references: [id], onDelete: Restrict)
-  payment          Payment?              @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  submittedBy      User                  @relation("ReceiptSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
-  reviewedBy       User?                 @relation("ReceiptReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
+  id                String                 @id @default(uuid()) @db.Uuid
+  organizationId    String                 @map("organization_id") @db.Uuid
+  clientId          String                 @map("client_id") @db.Uuid
+  documentId        String                 @unique @map("document_id") @db.Uuid
+  installmentId     String?                @map("installment_id") @db.Uuid
+  expenseId         String?                @map("expense_id") @db.Uuid
+  paymentId         String?                @unique @map("payment_id") @db.Uuid
+  sha256            String                 @db.Char(64)
+  status            String                 @default("PENDING_REVIEW") @db.VarChar(24)
+  extractedFields   Json                   @default("{}") @map("extracted_fields")
+  reconciliation    Json                   @default("{}")
+  reviewHistory     Json                   @default("[]") @map("review_history")
+  submittedById     String                 @map("submitted_by_id") @db.Uuid
+  submittedByClient Boolean                @default(false) @map("submitted_by_client")
+  reviewedById      String?                @map("reviewed_by_id") @db.Uuid
+  reviewedAt        DateTime?              @map("reviewed_at") @db.Timestamptz(3)
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt         DateTime               @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization      Organization           @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  client            Client                 @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  document          Document               @relation(fields: [documentId], references: [id], onDelete: Restrict)
+  installment       ReceivableInstallment? @relation(fields: [installmentId], references: [id], onDelete: Restrict)
+  expense           Expense?               @relation(fields: [expenseId], references: [id], onDelete: Restrict)
+  payment           Payment?               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  submittedBy       User                   @relation("ReceiptSubmitter", fields: [submittedById], references: [id], onDelete: Restrict)
+  reviewedBy        User?                  @relation("ReceiptReviewer", fields: [reviewedById], references: [id], onDelete: Restrict)
 
   @@unique([organizationId, sha256])
   @@index([organizationId, clientId, status])
@@ -1002,6 +1006,8 @@ model DocumentSigningRequest {
   expiresAt             DateTime        @map("expires_at") @db.Timestamptz(3)
   viewedAt              DateTime?       @map("viewed_at") @db.Timestamptz(3)
   signedAt              DateTime?       @map("signed_at") @db.Timestamptz(3)
+  processingGroupId     String?         @map("processing_group_id") @db.Uuid
+  processingLeaseUntil  DateTime?       @map("processing_lease_until") @db.Timestamptz(3)
   signatureStorageKey   String?         @map("signature_storage_key")
   signatureSha256       String?         @map("signature_sha256") @db.Char(64)
   signedDocumentId      String?         @map("signed_document_id") @db.Uuid
@@ -1181,20 +1187,21 @@ model CalendarEvent {
 }
 
 model Notification {
-  id             String              @id @default(uuid()) @db.Uuid
-  organizationId String              @map("organization_id") @db.Uuid
-  userId         String              @map("user_id") @db.Uuid
-  channel        NotificationChannel
-  status         NotificationStatus  @default(PENDING)
-  title          String
-  body           String
-  link           String?
-  metadata       Json                @default("{}")
-  scheduledAt    DateTime?           @map("scheduled_at") @db.Timestamptz(3)
-  sentAt         DateTime?           @map("sent_at") @db.Timestamptz(3)
-  readAt         DateTime?           @map("read_at") @db.Timestamptz(3)
-  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
-  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  storageRecoveryIncidents StorageRecoveryIncident[]
+  id                       String                    @id @default(uuid()) @db.Uuid
+  organizationId           String                    @map("organization_id") @db.Uuid
+  userId                   String                    @map("user_id") @db.Uuid
+  channel                  NotificationChannel
+  status                   NotificationStatus        @default(PENDING)
+  title                    String
+  body                     String
+  link                     String?
+  metadata                 Json                      @default("{}")
+  scheduledAt              DateTime?                 @map("scheduled_at") @db.Timestamptz(3)
+  sentAt                   DateTime?                 @map("sent_at") @db.Timestamptz(3)
+  readAt                   DateTime?                 @map("read_at") @db.Timestamptz(3)
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  organization             Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
 
   @@index([organizationId, userId, status, createdAt])
   @@map("notifications")
@@ -1253,4 +1260,92 @@ model ActivityEvent {
   @@index([organizationId, subjectType, subjectId, occurredAt])
   @@index([organizationId, occurredAt])
   @@map("activity_events")
+}
+
+// Server-owned recovery state; never granted to browser/database JWT roles.
+model StorageUploadIntent {
+  id               String                    @id @default(uuid()) @db.Uuid
+  organizationId   String                    @map("organization_id") @db.Uuid
+  purpose          String                    @db.VarChar(24)
+  bucket           String                    @db.VarChar(63)
+  objectKey        String                    @map("object_key")
+  resourceType     String                    @map("resource_type") @db.VarChar(32)
+  resourceId       String                    @map("resource_id") @db.Uuid
+  groupId          String?                   @map("group_id") @db.Uuid
+  expectedSha256   String?                   @map("expected_sha256") @db.Char(64)
+  observedSha256   String?                   @map("observed_sha256") @db.Char(64)
+  state            String                    @default("PLANNED") @db.VarChar(32)
+  idempotencyKey   String                    @map("idempotency_key") @db.VarChar(160)
+  ownerToken       String                    @map("owner_token") @db.Uuid
+  attempts         Int                       @default(0)
+  generation       Int                       @default(0)
+  lastErrorCode    String?                   @map("last_error_code") @db.VarChar(80)
+  legalHold        Boolean                   @default(false) @map("legal_hold")
+  abandonedAt      DateTime?                 @map("abandoned_at") @db.Timestamptz(3)
+  cleanupStartedAt DateTime?                 @map("cleanup_started_at") @db.Timestamptz(3)
+  leaseUntil       DateTime                  @map("lease_until") @db.Timestamptz(3)
+  dueAt            DateTime                  @map("due_at") @db.Timestamptz(3)
+  lastCheckedAt    DateTime?                 @map("last_checked_at") @db.Timestamptz(3)
+  attachedAt       DateTime?                 @map("attached_at") @db.Timestamptz(3)
+  completedAt      DateTime?                 @map("completed_at") @db.Timestamptz(3)
+  actorUserId      String?                   @map("actor_user_id") @db.Uuid
+  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime                  @updatedAt @map("updated_at") @db.Timestamptz(3)
+  organization     Organization              @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  initiator        User?                     @relation("StorageRecoveryInitiator", fields: [actorUserId], references: [id], onDelete: Restrict)
+  events           StorageRecoveryEvent[]
+  incidents        StorageRecoveryIncident[]
+
+  @@unique([id, organizationId])
+  @@unique([bucket, objectKey])
+  @@unique([organizationId, idempotencyKey])
+  @@index([state, dueAt], map: "storage_upload_intents_state_due_idx")
+  @@index([organizationId, createdAt], map: "storage_upload_intents_org_created_idx")
+  @@index([groupId], map: "storage_upload_intents_group_idx")
+  @@map("storage_upload_intents")
+}
+
+model StorageRecoveryEvent {
+  id             String              @id @default(uuid()) @db.Uuid
+  organizationId String              @map("organization_id") @db.Uuid
+  operationId    String              @map("operation_id") @db.Uuid
+  fromState      String?             @map("from_state") @db.VarChar(32)
+  toState        String              @map("to_state") @db.VarChar(32)
+  reason         String              @db.VarChar(80)
+  attempt        Int
+  generation     Int
+  actorUserId    String?             @map("actor_user_id") @db.Uuid
+  createdAt      DateTime            @default(now()) @map("created_at") @db.Timestamptz(3)
+  operation      StorageUploadIntent @relation(fields: [operationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  @@index([organizationId, operationId, createdAt], map: "storage_recovery_events_org_operation_idx")
+  @@map("storage_recovery_events")
+}
+
+model StorageRecoveryIncident {
+  id                      String               @id @default(uuid()) @db.Uuid
+  organizationId          String               @map("organization_id") @db.Uuid
+  operationId             String?              @map("operation_id") @db.Uuid
+  fingerprint             String               @db.Char(64)
+  kind                    String               @db.VarChar(80)
+  bucket                  String               @db.VarChar(63)
+  objectKey               String               @map("object_key")
+  state                   String               @default("OPEN") @db.VarChar(20)
+  notificationUndelivered Boolean              @default(false) @map("notification_undelivered")
+  notificationId          String?              @map("notification_id") @db.Uuid
+  resolution              String?              @db.VarChar(20)
+  resolutionReason        String?              @map("resolution_reason") @db.VarChar(1000)
+  resolvedById            String?              @map("resolved_by_id") @db.Uuid
+  resolvedAt              DateTime?            @map("resolved_at") @db.Timestamptz(3)
+  firstObservedAt         DateTime             @default(now()) @map("first_observed_at") @db.Timestamptz(3)
+  lastObservedAt          DateTime             @default(now()) @map("last_observed_at") @db.Timestamptz(3)
+  organization            Organization         @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  operation               StorageUploadIntent? @relation(fields: [operationId, organizationId], references: [id, organizationId], onDelete: Restrict)
+
+  operator     User?         @relation("StorageRecoveryOperator", fields: [resolvedById], references: [id], onDelete: Restrict)
+  notification Notification? @relation(fields: [notificationId], references: [id], onDelete: Restrict)
+
+  @@unique([organizationId, fingerprint])
+  @@index([organizationId, state, lastObservedAt], map: "storage_recovery_incidents_org_state_idx")
+  @@map("storage_recovery_incidents")
 }

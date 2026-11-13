@@ -3,6 +3,11 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
+import {
+  assertRecoveryArchive,
+  assertRecoveryOwners,
+  recoveryRestoreInventory,
+} from '../storage/recovery/restore-inventory.mjs';
 
 const excludedSchedulerSchemas = ['cron', 'net'];
 const excludedSchedulerExtensions = new Set(['pg_cron', 'pg_net']);
@@ -343,6 +348,12 @@ const sourceToc = run('pg_restore', '-l', archive).split('\n');
 const schemaFilteredToc = run(...listArguments(archive)).split('\n');
 const tocOwners = discoverTocOwners(sourceToc);
 const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line, tocOwners) }));
+// Expand counts ONLY after verifying every new ACL's exact reviewed identity.
+// All existing owner/grant/default-ACL/source-vs-target assertions remain intact.
+const recoveryAclCount = assertRecoveryArchive(tocEntries.map((row) => row.entry));
+expectedRestoreInventory.sourceOwners += recoveryRestoreInventory.owners.length;
+expectedRestoreInventory.sourceAclRows += recoveryAclCount;
+expectedRestoreInventory.restoredAclRows += recoveryAclCount;
 const excludedExtensionEntries = tocEntries.filter(
   ({ entry }) => entry?.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name),
 );
@@ -662,6 +673,7 @@ const ownerSnapshot = (database) =>
   );
 const sourceGrantRecords = parsedGrantSnapshot('postgres');
 const sourceOwnerRecords = ownerSnapshot('postgres').split('\n').filter(Boolean);
+assertRecoveryOwners(sourceOwnerRecords);
 writeCheckpoint({
   targetDatabase: target,
   restoreStage,
@@ -812,6 +824,7 @@ assert(
   'Application schema usage grant was not restored',
 );
 const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
+assertRecoveryOwners(restoredOwners);
 assert(restoredOwners.length > 0, 'No public owners were found in the restore target');
 assert.equal(
   restoredOwners.length,

@@ -117,7 +117,7 @@ export class ReceiptService {
       fields: interpreted.fields,
       today: dateInZone(new Date(), organization.timezone),
     });
-    const document = await this.documents.create(
+    const prepared = await this.documents.prepareCreate(
       actor,
       {
         title: `Comprovante financeiro · ${file.originalname}`.slice(0, 240),
@@ -132,6 +132,7 @@ export class ReceiptService {
     );
     try {
       return await this.prisma.$transaction(async (transaction) => {
+        const document = await this.documents.attachPrepared(transaction, prepared);
         const receipt = await transaction.paymentReceipt.create({
           include: { document: { select: { id: true, title: true } } },
           data: {
@@ -163,16 +164,8 @@ export class ReceiptService {
         return receipt;
       });
     } catch (error) {
-      // A competing upload may win the unique hash constraint. Keep the orphaned document inaccessible.
-      await this.prisma.document.updateMany({
-        where: { id: document.id, organizationId: actor.organizationId },
-        data: { deletedAt: new Date() },
-      });
-      const version = await this.prisma.documentVersion.findFirst({
-        where: { documentId: document.id },
-        select: { storageKey: true },
-      });
-      if (version) await this.storage.remove(version.storageKey);
+      // Receipt + document binding roll back together; durable intent survives.
+      await this.documents.abandonPrepared(prepared, error);
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
         throw new ConflictException('Este comprovante já foi enviado nesta organização.');
       throw error;

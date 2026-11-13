@@ -38,7 +38,12 @@ describe('serviço de comprovantes', () => {
     $transaction: vi.fn(),
   };
   const finance = { installmentReceiptBalance: vi.fn(), createPayment: vi.fn() };
-  const documents = { validateFile: vi.fn(), create: vi.fn() };
+  const documents = {
+    validateFile: vi.fn(),
+    prepareCreate: vi.fn(),
+    attachPrepared: vi.fn(),
+    abandonPrepared: vi.fn(),
+  };
   const scanner = { assertClean: vi.fn() };
   const extraction = { extract: vi.fn() };
   const storage = { remove: vi.fn() };
@@ -67,7 +72,8 @@ describe('serviço de comprovantes', () => {
       warnings: [],
       method: 'PDF_TEXT',
     });
-    documents.create.mockResolvedValue({ id: 'document-1' });
+    documents.prepareCreate.mockResolvedValue({ docId: 'document-1' });
+    documents.attachPrepared.mockResolvedValue({ id: 'document-1' });
     prisma.$transaction.mockImplementation(
       async (callback: (transaction: unknown) => Promise<unknown>) =>
         callback({
@@ -112,7 +118,7 @@ describe('serviço de comprovantes', () => {
       service.submit(actor as never, { installmentId: 'installment-1' }, file),
     ).rejects.toThrow('já foi enviado');
     expect(scanner.assertClean).not.toHaveBeenCalled();
-    expect(documents.create).not.toHaveBeenCalled();
+    expect(documents.prepareCreate).not.toHaveBeenCalled();
   });
 
   it('retorna no upload os metadados persistidos do documento associado', async () => {
@@ -144,7 +150,7 @@ describe('serviço de comprovantes', () => {
         }),
       }),
     );
-    expect(documents.create).toHaveBeenCalledOnce();
+    expect(documents.prepareCreate).toHaveBeenCalledOnce();
     expect(finance.createPayment).not.toHaveBeenCalled();
   });
 
@@ -154,7 +160,7 @@ describe('serviço de comprovantes', () => {
       service.submit(actor as never, { installmentId: 'installment-1' }, file),
     ).rejects.toThrow('infectado');
     expect(extraction.extract).not.toHaveBeenCalled();
-    expect(documents.create).not.toHaveBeenCalled();
+    expect(documents.prepareCreate).not.toHaveBeenCalled();
   });
 
   it('armazena apenas após a varredura e mantém envio do cliente pendente', async () => {
@@ -170,7 +176,7 @@ describe('serviço de comprovantes', () => {
         method: 'OCR',
       };
     });
-    documents.create.mockImplementation(async () => {
+    documents.prepareCreate.mockImplementation(async () => {
       order.push('store');
       return { id: 'document-1' };
     });

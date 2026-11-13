@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { recoveryWriterDouble } from '../storage-recovery/writer-test-double';
 import { GoneException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { PDFDocument } from 'pdf-lib';
 import { deflateSync } from 'node:zlib';
@@ -87,6 +89,7 @@ describe('DocumentSigningService', () => {
       {} as never,
       audit as never,
       {} as never,
+      recoveryWriterDouble({} as never) as never,
     );
 
     const result = await service.createRequest(actor, 'document-a', { expiresInDays: 7 });
@@ -133,6 +136,7 @@ describe('DocumentSigningService', () => {
       storage as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble(storage as never) as never,
     );
 
     const result = await service.publicDetails(token);
@@ -174,7 +178,7 @@ describe('DocumentSigningService', () => {
       sourceDocumentVersion: {
         storageKey: 'organizations/org-a/source.pdf',
         mimeType: 'application/pdf',
-        sha256: 'a'.repeat(64),
+        sha256: createHash('sha256').update(sourceBytes).digest('hex'),
       },
     };
     const documentCreate = vi.fn().mockResolvedValue({ id: 'created' });
@@ -188,6 +192,7 @@ describe('DocumentSigningService', () => {
       $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
       $transaction: vi.fn(async (operation: (transaction: unknown) => unknown) =>
         operation({
+          $queryRaw: vi.fn().mockResolvedValue([]),
           document: { create: documentCreate },
           documentSigningRequest: { updateMany: transactionUpdate },
         }),
@@ -220,6 +225,7 @@ describe('DocumentSigningService', () => {
       storage as never,
       audit as never,
       scanner as never,
+      recoveryWriterDouble(storage as never) as never,
     );
 
     const result = await service.sign('e'.repeat(64), {
@@ -243,7 +249,12 @@ describe('DocumentSigningService', () => {
     expect(uploads[0]?.bucket).toBe('document-signatures');
     expect(transactionUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'request-a', status: 'PROCESSING' },
+        where: expect.objectContaining({
+          id: 'request-a',
+          status: 'PROCESSING',
+          processingGroupId: expect.any(String),
+          processingLeaseUntil: { gt: expect.any(Date) },
+        }),
         data: expect.objectContaining({
           status: 'SIGNED',
           signatureSha256: expect.any(String),
@@ -281,7 +292,7 @@ describe('DocumentSigningService', () => {
       sourceDocumentVersion: {
         storageKey: 'organizations/org-a/source.pdf',
         mimeType: 'application/pdf',
-        sha256: 'a'.repeat(64),
+        sha256: createHash('sha256').update(sourceBytes).digest('hex'),
       },
     };
 
@@ -305,12 +316,14 @@ describe('DocumentSigningService', () => {
           updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         },
         $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
+        $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(prisma)),
       };
       const service = new DocumentSigningService(
         prisma as never,
         storage as never,
         {} as never,
         scanner as never,
+        recoveryWriterDouble(storage as never) as never,
       );
 
       await expect(
@@ -333,6 +346,7 @@ describe('DocumentSigningService', () => {
       {} as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble({} as never) as never,
     );
 
     await expect(service.publicDetails('not-a-token')).rejects.toBeInstanceOf(NotFoundException);
@@ -353,6 +367,7 @@ describe('DocumentSigningService', () => {
       {} as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble({} as never) as never,
     );
     await expect(withThrottle.publicDetails('d'.repeat(64))).rejects.toBeInstanceOf(GoneException);
   });
@@ -381,25 +396,31 @@ it('attempts both compensations and releases PROCESSING even if the first remova
     sourceDocumentVersion: {
       storageKey: 'organizations/org-a/source.pdf',
       mimeType: 'application/pdf',
-      sha256: 'a'.repeat(64),
+      sha256: createHash('sha256').update(source).digest('hex'),
     },
   };
   const updateMany = vi.fn().mockResolvedValue({ count: 1 });
   const prisma = {
     documentSigningRequest: { findUnique: vi.fn().mockResolvedValue(request), updateMany },
     $queryRaw: vi.fn().mockResolvedValue([{ request_count: 1 }]),
-    $transaction: vi.fn().mockRejectedValue(new Error('Injected SQL failure')),
+    $transaction: vi
+      .fn()
+      .mockImplementationOnce(async (fn: (tx: unknown) => unknown) => fn(prisma))
+      .mockRejectedValue(new Error('Injected SQL failure')),
   };
   const remove = vi
     .fn()
     .mockRejectedValueOnce(new Error('Injected removal failure'))
     .mockResolvedValueOnce(undefined);
   const storage = { download: vi.fn().mockResolvedValue(source), upload: vi.fn(), remove };
+  const recovery = recoveryWriterDouble(storage as never);
+  const release = vi.spyOn(recovery, 'releaseSigningGroup');
   const service = new DocumentSigningService(
     prisma as never,
     storage as never,
     {} as never,
     { assertClean: vi.fn() } as never,
+    recovery as never,
   );
   await expect(
     service.sign('f'.repeat(64), {
@@ -410,10 +431,5 @@ it('attempts both compensations and releases PROCESSING even if the first remova
   ).rejects.toThrow();
   expect(storage.upload).toHaveBeenCalledTimes(2);
   expect(remove).toHaveBeenCalledTimes(2);
-  expect(updateMany).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      where: { id: 'synthetic-request', status: 'PROCESSING' },
-      data: { status: 'PENDING' },
-    }),
-  );
+  expect(release).toHaveBeenCalledWith('synthetic-request', expect.any(String));
 });

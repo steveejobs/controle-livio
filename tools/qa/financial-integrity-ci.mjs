@@ -1402,7 +1402,10 @@ export async function runFinancialIntegrity(env = process.env) {
                         return async () => {
                           providerAttempted = true;
                           if (fault === 'provider-unavailable')
-                            throw new Error('Injected provider unavailable during compensation');
+                            throw Object.assign(
+                              new Error('Injected provider unavailable during compensation'),
+                              { code: 'ECONNREFUSED' },
+                            );
                           return {
                             data: null,
                             error: { message: 'Injected provider remove failure' },
@@ -1450,6 +1453,10 @@ export async function runFinancialIntegrity(env = process.env) {
                 );
             },
           });
+          const { StorageRecoveryService } = require(
+            resolve('apps/api/dist/storage-recovery/storage-recovery.service.js'),
+          );
+          const recovery = new StorageRecoveryService(database, storage, audit, config);
           const docs = new DocumentsService(
             point === 'document' ? broken : database,
             storage,
@@ -1458,9 +1465,10 @@ export async function runFinancialIntegrity(env = process.env) {
             undefined,
             undefined,
             scanner,
+            recovery,
           );
           const receipts = new ReceiptService(
-            point === 'receipt' ? broken : database,
+            ['document', 'receipt'].includes(point) ? broken : database,
             new FinanceService(database, audit),
             docs,
             scanner,
@@ -1493,12 +1501,15 @@ export async function runFinancialIntegrity(env = process.env) {
                 type: error.name,
                 message: error.message,
                 status: error.getStatus?.(),
+                primaryCausePreserved: error.cause?.message === 'Injected upload record failure',
               });
-              return fault === 'provider-error'
-                ? error.getStatus?.() === 503
-                : fault === 'provider-unavailable'
-                  ? error.message === 'Injected provider unavailable during compensation'
-                  : error.message === 'Injected upload record failure';
+              // Durable compensation now exposes 503 while retaining the original
+              // injected SQL failure as cause. Monetary/physical assertions below
+              // remain unchanged; a swallowed failure or missing intent is a FAIL.
+              return fault.startsWith('provider-')
+                ? error.getStatus?.() === 503 &&
+                    error.cause?.message === 'Injected upload record failure'
+                : error.message === 'Injected upload record failure';
             },
           );
           assert.equal(injected, true);
@@ -1515,6 +1526,19 @@ export async function runFinancialIntegrity(env = process.env) {
               objects: afterStorage.filter((row) => !before.some((old) => old.name === row.name)),
             });
           } else assert.deepEqual(afterStorage, before);
+          const newObjects = afterStorage.filter(
+            (row) => !before.some((old) => old.name === row.name),
+          );
+          for (const object of newObjects) {
+            const intent = await database.storageUploadIntent.findUniqueOrThrow({
+              where: { bucket_objectKey: { bucket: 'legal-documents', objectKey: object.name } },
+            });
+            assert.equal(intent.organizationId, owner.organizationId);
+            assert.equal(intent.state, 'RECONCILE_PENDING');
+            assert.equal(intent.attempts, 1);
+            assert.equal(intent.lastErrorCode, 'PROVIDER_UNAVAILABLE');
+            assert.ok(intent.cleanupStartedAt);
+          }
           assert.equal(
             await database.paymentReceipt.count({ where: { installmentId: f.installmentId } }),
             0,

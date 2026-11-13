@@ -1,0 +1,79 @@
+name: Disposable storage recovery rehearsal
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type disposable-new-stack. Does not authorize hosted activation.'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-contracts:
+    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'validation/audit-stage2-20261104' && github.event.pull_request.draft) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/validation/audit-stage2-20261104' && inputs.confirmation == 'disposable-new-stack') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    env:
+      NODE_ENV: test
+      SUPABASE_LOCAL: 'true'
+      SUPABASE_ENVIRONMENT: test
+      NEXT_TELEMETRY_DISABLED: '1'
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '13310'
+      CLAMAV_TIMEOUT_MS: '10000'
+      LIVIO_IDENTITY_INTEGRATION: disposable
+      LIVIO_STORAGE_RECOVERY: disposable-new-stack
+      STORAGE_RECOVERY_DISPATCH_ENABLED: 'true'
+      STORAGE_RECOVERY_DELETE_ENABLED: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Reject shared environment before installation
+        run: node tools/qa/run-financial-integrity-ci.mjs --preflight
+      - run: npm ci
+      - run: npm run build:api
+      - name: Qualify recovery guards and real local HTTP transport
+        run: node --test tools/storage/recovery/support.test.mjs tools/storage/recovery/qualification.test.mjs
+      - name: Install hash-pinned qpdf
+        run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
+      - name: Prepare own disposable PostgreSQL Auth and Storage with versioned migrations
+        run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
+      - name: Start own loopback ClamAV
+        run: node tools/qa/start-clamav-ci.mjs
+      - name: Validate real scanner readiness
+        run: node tools/qa/validate-clamav-ci.mjs --ready
+      - name: Recovery contracts; missing mandatory proofs keep this step non-green
+        env:
+          QA_TIMINGS: 'false'
+          LIVIO_QA_OUTPUT: ${{ runner.temp }}/livio-storage-recovery
+        run: node tools/storage/recovery/run-ci.mjs
+      - name: Preserve sanitized recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-recovery-stage61
+          path: |
+            ${{ runner.temp }}/livio-storage-recovery/*.json
+            ${{ runner.temp }}/livio-storage-recovery/financial-api.log
+          if-no-files-found: ignore
+      - name: Stop only the recorded disposable restore destination
+        if: always()
+        env:
+          QA_TIMINGS: 'false'
+          LIVIO_QA_OUTPUT: ${{ runner.temp }}/livio-storage-recovery
+        run: node tools/storage/recovery/cleanup-target.mjs
+      - name: Stop only own disposable Supabase
+        if: always()
+        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || true
+      - name: Stop only own ClamAV
+        if: always()
+        run: node tools/qa/stop-clamav-ci.mjs

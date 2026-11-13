@@ -1,3 +1,4 @@
+import { recoveryWriterDouble } from '../storage-recovery/writer-test-double';
 import { expect, it, vi } from 'vitest';
 import { ClientsService } from './clients.service';
 
@@ -11,6 +12,7 @@ it('never uploads or changes a client photo when the existing scanner rejects it
     {} as never,
     storage as never,
     { assertClean } as never,
+    recoveryWriterDouble(storage as never) as never,
   );
   vi.spyOn(service, 'get').mockResolvedValue({ id: 'synthetic-client' } as never);
   await expect(

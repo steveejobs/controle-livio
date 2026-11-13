@@ -15,6 +15,11 @@ import { AuditService } from '../common/audit.service';
 import { pageResult, pageWindow, type PaginationInput } from '../common/schemas';
 import { normalizeAndValidateTaxId } from '../common/tax-id';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  StorageRecoveryService,
+  type UploadTicket,
+} from '../storage-recovery/storage-recovery.service';
+import { sha256 } from '../storage-recovery/storage-recovery.domain';
 import { StorageService } from '../documents/storage.service';
 import { DocumentScannerService } from '../documents/document-scanner.service';
 import type {
@@ -53,6 +58,7 @@ export class ClientsService {
     private readonly audit: AuditService,
     private readonly storage: StorageService,
     private readonly scanner: DocumentScannerService,
+    private readonly recovery: StorageRecoveryService,
   ) {}
 
   async photoUrl(actor: AuthenticatedActor, id: string) {
@@ -84,11 +90,25 @@ export class ClientsService {
       );
     if (file.mimetype !== mimeType)
       throw new BadRequestException('Tipo de arquivo não corresponde ao conteúdo da foto.');
-    await this.scanner.assertClean(buffer, mimeType);
     const key = `${actor.organizationId}/clients/${id}/${randomUUID()}.${jpeg ? 'jpg' : png ? 'png' : 'webp'}`;
-    await this.storage.upload(key, buffer, mimeType, this.photoBucket);
+    const ticket = await this.recovery.plan({
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      purpose: 'PHOTO',
+      bucket: 'client-photos',
+      key,
+      resourceType: 'client',
+      resourceId: id,
+      expectedSha256: sha256(buffer),
+      idempotencyKey: 'PHOTO:' + key,
+    });
+    let retired: UploadTicket | null = null;
     try {
+      await this.recovery.store(ticket, buffer, mimeType, () =>
+        this.scanner.assertClean(buffer, mimeType),
+      );
       await this.prisma.$transaction(async (transaction) => {
+        await this.recovery.lockForAttachment(transaction, ticket);
         const result = await transaction.client.updateMany({
           where: {
             id,
@@ -109,19 +129,27 @@ export class ClientsService {
           resourceId: id,
           metadata: { operation: 'upload' },
         });
+        if (before.photoStorageKey)
+          retired = await this.recovery.retire(
+            transaction,
+            actor.organizationId,
+            'client-photos',
+            before.photoStorageKey,
+          );
+        await this.recovery.complete(transaction, ticket);
       });
     } catch (error) {
-      await this.storage.remove(key, this.photoBucket);
+      await this.recovery.compensate(ticket, error);
       throw error;
     }
-    if (before.photoStorageKey) await this.storage.remove(before.photoStorageKey, this.photoBucket);
+    if (retired) await this.recovery.compensate(retired);
     return { url: await this.storage.signedUrl(key, 300, this.photoBucket) };
   }
 
   async removePhoto(actor: AuthenticatedActor, id: string) {
     const before = await this.get(actor, id);
     if (!before.photoStorageKey) return { url: null };
-    await this.prisma.$transaction(async (transaction) => {
+    const retired = await this.prisma.$transaction(async (transaction) => {
       const result = await transaction.client.updateMany({
         where: {
           id,
@@ -141,8 +169,14 @@ export class ClientsService {
         resource: 'client_photo',
         resourceId: id,
       });
+      return this.recovery.retire(
+        transaction,
+        actor.organizationId,
+        'client-photos',
+        before.photoStorageKey!,
+      );
     });
-    await this.storage.remove(before.photoStorageKey, this.photoBucket);
+    if (retired) await this.recovery.compensate(retired);
     return { url: null };
   }
 
