@@ -56,6 +56,8 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     SMTP_USER: z.string().min(1).optional(),
     SMTP_PASSWORD: z.string().min(1).optional(),
     SMTP_FROM: z.string().email().optional(),
+    STORAGE_RECOVERY_DISPATCH_ENABLED: booleanEnvironmentValue.default(false),
+    STORAGE_RECOVERY_DELETE_ENABLED: booleanEnvironmentValue.default(false),
     CRON_SECRET: z.string().min(32).optional(),
     VAPID_PUBLIC_KEY: z.string().min(20).optional(),
     VAPID_PRIVATE_KEY: z.string().min(20).optional(),

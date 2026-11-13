@@ -1,3 +1,4 @@
+import { recoveryWriterDouble } from '../storage-recovery/writer-test-double';
 import { describe, expect, it, vi } from 'vitest';
 import { ClientsService } from './clients.service';
 
@@ -9,6 +10,8 @@ describe('client photo transport limits', () => {
       { $transaction: transaction } as never,
       {} as never,
       { upload } as never,
+      undefined,
+      recoveryWriterDouble({ upload } as never) as never,
     );
     vi.spyOn(service, 'get').mockResolvedValue({ id: 'client-a' } as never);
     const buffer = Buffer.alloc(4 * 1024 * 1024 + 1);
@@ -17,7 +20,7 @@ describe('client photo transport limits', () => {
       service.uploadPhoto(
         { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] },
         'client-a',
-        { buffer } as Express.Multer.File,
+        { buffer, mimetype: 'image/png' } as Express.Multer.File,
       ),
     ).rejects.toThrow('4 MiB');
     expect(upload).not.toHaveBeenCalled();
@@ -39,6 +42,14 @@ describe('client photo transport limits', () => {
       }),
       signedUrl: vi.fn().mockResolvedValue('https://example.test/private-photo'),
     };
+    const recovery = recoveryWriterDouble(storage as never);
+    recovery.retire = async () =>
+      ({ id: 'old', organizationId: 'org-a', ownerToken: 'unit' }) as never;
+    const compensate = recovery.compensate;
+    recovery.compensate = async (ticket) => {
+      if (ticket.id === 'old') await storage.remove('old-private-key', 'client-photos');
+      else await compensate(ticket);
+    };
     const service = new ClientsService(
       {
         $transaction: async (action: (tx: unknown) => unknown) =>
@@ -46,6 +57,8 @@ describe('client photo transport limits', () => {
       } as never,
       { record: vi.fn() } as never,
       storage as never,
+      { assertClean: vi.fn() } as never,
+      recovery as never,
     );
     vi.spyOn(service, 'get').mockResolvedValue({
       id: 'client-a',
@@ -57,7 +70,7 @@ describe('client photo transport limits', () => {
       service.uploadPhoto(
         { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] },
         'client-a',
-        { buffer } as Express.Multer.File,
+        { buffer, mimetype: 'image/png' } as Express.Multer.File,
       ),
     ).resolves.toEqual({ url: 'https://example.test/private-photo' });
     expect(calls).toEqual(['upload', 'commit', 'remove-old']);
@@ -86,6 +99,8 @@ describe('client photo transport limits', () => {
       } as never,
       { record: vi.fn() } as never,
       storage as never,
+      { assertClean: vi.fn() } as never,
+      recoveryWriterDouble(storage as never) as never,
     );
     vi.spyOn(service, 'get').mockResolvedValue({
       id: 'client-a',
@@ -96,7 +111,7 @@ describe('client photo transport limits', () => {
       service.uploadPhoto(
         { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] },
         'client-a',
-        { buffer } as Express.Multer.File,
+        { buffer, mimetype: 'image/png' } as Express.Multer.File,
       ),
     ).rejects.toThrow('outra sessão');
     expect(storage.remove).toHaveBeenCalledExactlyOnceWith(
@@ -109,7 +124,13 @@ describe('client photo transport limits', () => {
 
   it('denies a foreign client before reading, uploading or deleting Storage objects', async () => {
     const storage = { upload: vi.fn(), remove: vi.fn(), signedUrl: vi.fn() };
-    const service = new ClientsService({} as never, {} as never, storage as never);
+    const service = new ClientsService(
+      {} as never,
+      {} as never,
+      storage as never,
+      undefined,
+      recoveryWriterDouble(storage as never) as never,
+    );
     vi.spyOn(service, 'get').mockRejectedValue(new Error('Cliente não encontrado'));
     const actor = { organizationId: 'org-a', userId: 'user-a', permissions: ['clients:update'] };
     await expect(service.photoUrl(actor, 'foreign-client')).rejects.toThrow(

@@ -819,6 +819,8 @@ export class FinanceService {
             include: { installments: true },
           });
           if (!original) throw new NotFoundException('Recebível não encontrado');
+          if (['CANCELLED', 'WRITTEN_OFF'].includes(original.status))
+            throw new ConflictException('O recebível não está disponível para renegociação');
           await this.lockInstallments(
             transaction,
             actor.organizationId,

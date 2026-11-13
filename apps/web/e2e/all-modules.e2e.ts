@@ -179,6 +179,8 @@ async function mockApplication(page: Page) {
           }),
         ),
       };
+    } else if (pathname === '/v1/notifications/push/config' && request.method() === 'GET') {
+      body = { enabled: false, subscriptions: [] };
     } else if (pathname === '/v1/notifications') {
       body = { items: [], unread: 0 };
     } else if (pathname === '/v1/notifications/reconcile') {

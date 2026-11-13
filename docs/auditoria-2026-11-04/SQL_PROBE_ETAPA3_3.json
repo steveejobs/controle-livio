@@ -1,0 +1,25 @@
+{
+  "scope": "in-memory PostgreSQL engine; synthetic minimal schema, no Supabase or integration",
+  "cases": [
+    {
+      "scenario": "normal",
+      "version": "170005",
+      "status": "PASS"
+    },
+    {
+      "scenario": "inherited-grant",
+      "version": "170005",
+      "status": "PASS"
+    },
+    {
+      "scenario": "missing-table",
+      "version": "170005",
+      "status": "PASS"
+    },
+    {
+      "scenario": "reachable-bypass",
+      "version": "170005",
+      "status": "PASS"
+    }
+  ]
+}

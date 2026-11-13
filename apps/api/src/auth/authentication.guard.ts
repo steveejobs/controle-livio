@@ -14,17 +14,21 @@ import type { RequestWithActor } from '../common/request-with-actor';
 import { recordRequestTiming } from '../common/request-timing';
 import { PrismaService } from '../prisma/prisma.service';
 import { PUBLIC_ROUTE_KEY } from './public.decorator';
+import { hasValidMembershipScope, requiresClientBinding } from './client-scope';
 
 const membershipSelect = {
   id: true,
   organizationId: true,
   userId: true,
   clientId: true,
+  client: { select: { organizationId: true, deletedAt: true } },
   roles: {
     select: {
+      organizationId: true,
       role: {
         select: {
           key: true,
+          organizationId: true,
           permissions: {
             select: { permission: { select: { resource: true, action: true } } },
           },
@@ -123,6 +127,11 @@ export class AuthenticationGuard implements CanActivate {
       );
     }
 
+    const clientRestricted = requiresClientBinding(membership.roles.map(({ role }) => role.key));
+    if (!hasValidMembershipScope(membership)) {
+      throw new UnauthorizedException('Vínculo de acesso inválido; contate o Administrador');
+    }
+
     const permissions = membership.roles.flatMap(({ role }) =>
       role.permissions.map(
         ({ permission }) => `${permission.resource}:${permission.action}` as PermissionCode,
@@ -138,7 +147,7 @@ export class AuthenticationGuard implements CanActivate {
       isAdministrator,
       ...(typeof sessionId === 'string' ? { sessionId } : {}),
       permissions: [...new Set(permissions)],
-      ...(membership.clientId ? { clientId: membership.clientId } : {}),
+      ...(clientRestricted && membership.clientId ? { clientId: membership.clientId } : {}),
     };
     request.actor = actor;
     return true;

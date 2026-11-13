@@ -136,7 +136,7 @@ WHERE r.key = 'administrator'
      OR (p.resource = 'reports' AND p.action IN ('view','export'))
    ))
    OR (r.key = 'client' AND (
-     (p.resource IN ('matters','contracts','receivables','payments','documents','calendar') AND p.action = 'view')
+     (p.resource IN ('clients','matters','contracts','receivables','payments','documents','calendar') AND p.action = 'view')
      OR (p.resource = 'receipts' AND p.action IN ('view','create'))
      OR (p.resource = 'messages' AND p.action IN ('view','create'))
      OR (p.resource = 'notifications' AND p.action IN ('view','update'))
@@ -283,3 +283,13 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO public.internal_notes (id, organization_id, client_id, matter_id, body, created_by_id, updated_at)
 VALUES ('17000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000001','11000000-0000-4000-8000-000000000001','14000000-0000-4000-8000-000000000001','Nota interna ficticia e confidencial.','a1000000-0000-4000-8000-000000000002',now())
 ON CONFLICT (id) DO NOTHING;
+
+-- Recovery administration: no browser table grants, only canonical Administrator.
+INSERT INTO public.permissions(id,organization_id,resource,action,description)
+ SELECT gen_random_uuid(),o.id,'storage_recovery',a.action,'Storage recovery administration'
+ FROM public.organizations o CROSS JOIN (VALUES ('view'),('manage')) a(action)
+ ON CONFLICT(organization_id,resource,action) DO NOTHING;
+INSERT INTO public.role_permissions(organization_id,role_id,permission_id)
+ SELECT r.organization_id,r.id,p.id FROM public.roles r JOIN public.permissions p
+ ON p.organization_id=r.organization_id AND p.resource='storage_recovery' AND p.action IN ('view','manage')
+ WHERE r.key='administrator' AND r.is_system ON CONFLICT DO NOTHING;

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useRef, useState, type FormEvent } from 'react';
 import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
 import { ApiError, api } from '../../lib/api';
 import { formatMoney } from '../shared/format';
@@ -103,11 +103,19 @@ function ReceiptReview({
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string>();
   const [current, setCurrent] = useState(receipt);
+  const identityStable =
+    current.id === receipt.id &&
+    current.documentId === receipt.documentId &&
+    current.installmentId === receipt.installmentId &&
+    current.expenseId === receipt.expenseId &&
+    (!current.document || current.document.id === current.documentId);
   const review = current.reconciliation;
   const fields = current.extractedFields;
   const needsReview = current.status === 'PENDING_REVIEW';
   const open = async () => {
     try {
+      if (!identityStable)
+        throw new Error('A identidade do comprovante mudou. Recarregue a revisão.');
       const result = await api<{ url: string }>(`/documents/${current.documentId}/download-url`);
       window.open(result.url, '_blank', 'noopener,noreferrer');
     } catch (error) {
@@ -120,6 +128,8 @@ function ReceiptReview({
     setFeedback(undefined);
     const form = new FormData(event.currentTarget);
     try {
+      if (!identityStable)
+        throw new Error('A identidade do comprovante mudou. Recarregue a revisão.');
       const value = String(form.get('paidAt'));
       if (!value) throw new Error('Informe a data e a hora do pagamento.');
       await api(`/finance/receipts/${current.id}/confirm`, {
@@ -148,6 +158,8 @@ function ReceiptReview({
     if (!reason?.trim()) return;
     setBusy(true);
     try {
+      if (!identityStable)
+        throw new Error('A identidade do comprovante mudou. Recarregue a revisão.');
       await api(`/finance/receipts/${current.id}/decision`, {
         method: 'POST',
         body: JSON.stringify({ decision, reason }),
@@ -261,7 +273,12 @@ function ReceiptReview({
           {review.warnings.join(' ')}
         </div>
       )}
-      <button type="button" className="secondary" onClick={() => void open()}>
+      <button
+        type="button"
+        className="secondary"
+        disabled={!identityStable}
+        onClick={() => void open()}
+      >
         Abrir comprovante privado
       </button>
       {canReview && needsReview && (
@@ -305,13 +322,13 @@ function ReceiptReview({
             Confira o arquivo e os dados antes de registrar. Valores excedentes exigem decisão
             separada.
           </p>
-          <button className="primary" disabled={busy}>
+          <button className="primary" disabled={busy || !identityStable}>
             Confirmar pagamento
           </button>
           <button
             type="button"
             className="secondary"
-            disabled={busy}
+            disabled={busy || !identityStable}
             onClick={() => void decide('NEEDS_CORRECTION')}
           >
             Solicitar correção
@@ -319,7 +336,7 @@ function ReceiptReview({
           <button
             type="button"
             className="secondary"
-            disabled={busy}
+            disabled={busy || !identityStable}
             onClick={() => void decide('REJECTED')}
           >
             Rejeitar
@@ -352,6 +369,7 @@ export function ReceiptCapture({
   const [receipt, setReceipt] = useState<Receipt>();
   const [busy, setBusy] = useState(false);
   const [feedback, setFeedback] = useState<string>();
+  const uploadGeneration = useRef(0);
   const upload = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -359,15 +377,29 @@ export function ReceiptCapture({
     if (!(file instanceof File) || !file.size) return;
     const sizeError = getDocumentUploadSizeError(file.size);
     if (sizeError) {
+      uploadGeneration.current += 1;
+      setReceipt(undefined);
+      setBusy(false);
       setFeedback(`Erro: ${sizeError}`);
       return;
     }
+    const generation = ++uploadGeneration.current;
     setBusy(true);
+    setReceipt(undefined);
     setFeedback('Verificando segurança e lendo o comprovante…');
     try {
       if (installmentId) form.set('installmentId', installmentId);
       if (expenseId) form.set('expenseId', expenseId);
       const result = await api<Receipt>('/finance/receipts', { method: 'POST', body: form });
+      if (generation !== uploadGeneration.current) return;
+      if (
+        !result.id ||
+        !result.documentId ||
+        (result.document && result.document.id !== result.documentId) ||
+        (installmentId && result.installmentId !== installmentId) ||
+        (expenseId && result.expenseId !== expenseId)
+      )
+        throw new Error('O comprovante recebido não corresponde ao lançamento selecionado.');
       setReceipt(result);
       setFeedback(
         canReview
@@ -376,9 +408,9 @@ export function ReceiptCapture({
       );
       onChanged?.();
     } catch (error) {
-      setFeedback(`Erro: ${message(error)}`);
+      if (generation === uploadGeneration.current) setFeedback(`Erro: ${message(error)}`);
     } finally {
-      setBusy(false);
+      if (generation === uploadGeneration.current) setBusy(false);
     }
   };
   return (
@@ -418,7 +450,14 @@ export function ReceiptCapture({
           {feedback}
         </p>
       )}
-      {receipt && <ReceiptReview receipt={receipt} canReview={canReview} onChanged={onChanged} />}
+      {receipt && (
+        <ReceiptReview
+          key={receipt.id}
+          receipt={receipt}
+          canReview={canReview && !busy}
+          onChanged={onChanged}
+        />
+      )}
     </div>
   );
 }

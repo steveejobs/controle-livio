@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   application:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
       # Loopback placeholders keep unit/build jobs unable to reach shared services.
@@ -47,10 +47,14 @@ jobs:
       - name: Verify OCR assets and extraction from the compiled API
         run: node tools/qa/verify-receipt-runtime-ci.mjs
       - run: npm run perf:bundle
-      - run: npx playwright install --with-deps chromium
+      - name: Start prebuilt Chromium with verified loopback bridge
+        run: node tools/qa/prebuilt-ci-dependencies.mjs browser
       - name: Playwright mocked E2E
         run: npm run test:e2e
         timeout-minutes: 15
+      - name: Stop only this disposable browser server
+        if: always()
+        run: node tools/qa/prebuilt-ci-dependencies.mjs stop
       - name: Upload sanitized Playwright run summary
         if: always()
         uses: actions/upload-artifact@v4
@@ -58,13 +62,14 @@ jobs:
           name: playwright-report
           path: |
             test-results/.last-run.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*
             ${{ runner.temp }}/livio-integrated-artifacts/receipt-runtime-validation.json
           if-no-files-found: ignore
 
   supabase-isolation:
     # Run against the disposable local stack for PRs, main and the authorized validation branch.
     if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       CLAMAV_HOST: 127.0.0.1
@@ -80,12 +85,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - name: Install qpdf for independent PDF fixture validation
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes qpdf
-      - name: Install the single browser used by the integrated suite
-        run: npx playwright install --with-deps chromium
+      - name: Install official hash-pinned qpdf and verify real PDF checks
+        run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
+      - name: Start prebuilt Chromium with verified loopback bridge
+        run: node tools/qa/prebuilt-ci-dependencies.mjs browser
       - name: Start disposable Supabase and export loopback-only credentials
         id: supabase-start
         run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
@@ -112,12 +115,16 @@ jobs:
       - name: Verify receipt migration, database roles, RLS and concurrent identifiers
         if: ${{ always() && steps.supabase-start.outcome == 'success' }}
         run: node tools/qa/verify-payment-receipts-ci.mjs
+      - name: Stop only this disposable browser server
+        if: always()
+        run: node tools/qa/prebuilt-ci-dependencies.mjs stop
       - name: Upload sanitized integrated evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integrated-supabase-browser-evidence
           path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*
             ${{ runner.temp }}/livio-integrated-artifacts/integrated-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics.json
             ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics-*.json
@@ -148,6 +155,80 @@ jobs:
       - name: Stop only this ClamAV test container
         if: always()
         run: node tools/qa/stop-clamav-ci.mjs
+
+  financial-security:
+    # Separate disposable host: financial HTTP/SQL evidence never waits for Chromium.
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '13310'
+      CLAMAV_TIMEOUT_MS: '10000'
+      LIVIO_FINANCIAL_INTEGRATION: disposable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Refuse linked projects, shared env and external credentials before installation
+        run: node tools/qa/run-financial-integrity-ci.mjs --preflight
+      - run: npm ci
+      - name: Build the real API without web or browser
+        id: api-build
+        run: npm run build:api
+      - name: Verify financial runner guards and existing harness support
+        run: node --test tools/qa/financial-runner.test.mjs tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs tools/qa/document-security.test.mjs
+      - name: Install and validate only official qpdf; no browser or image pull
+        run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
+      - name: Start own disposable PostgreSQL, Auth, PostgREST and Storage; apply migrations
+        id: supabase-start
+        run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
+      - name: Start own official ClamAV bound to loopback
+        id: clamav-start
+        run: node tools/qa/start-clamav-ci.mjs
+      - name: Validate real scanner and PDF fixtures
+        id: clamav-ready
+        run: node tools/qa/validate-clamav-ci.mjs --ready
+      - name: Run unchanged financial harness against the real API and disposable database
+        run: node tools/qa/run-financial-integrity-ci.mjs
+      - name: Preserve Auth, RLS and Storage isolation regressions
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: npm run test:supabase
+      - name: Preserve receipt database, roles and concurrency regressions
+        if: ${{ always() && steps.supabase-start.outcome == 'success' && steps.api-build.outcome == 'success' }}
+        run: node tools/qa/verify-payment-receipts-ci.mjs
+      - name: Preserve scanner failure-mode regressions
+        if: ${{ always() && steps.clamav-ready.outcome == 'success' }}
+        run: node tools/qa/validate-clamav-ci.mjs --failure-modes
+      - name: Stop only this job's disposable Supabase project
+        if: ${{ always() && steps.supabase-start.outcome != 'skipped' }}
+        run: |
+          stop_code=0
+          npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || stop_code=$?
+          node tools/qa/supabase-start-diagnostics.mjs --cleanup-check "$stop_code"
+          exit "$stop_code"
+      - name: Stop only this job's ClamAV container
+        if: always()
+        run: node tools/qa/stop-clamav-ci.mjs
+      - name: Upload independent sanitized financial evidence, including partial failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: financial-security-evidence
+          path: |
+            ${{ runner.temp }}/livio-financial-security/financial-runner-summary.json
+            ${{ runner.temp }}/livio-financial-security/financial-api.log
+            ${{ runner.temp }}/livio-financial-security/workflow-stages/financial-stage3.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-qpdf.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-supabase-*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/receipt-migration-validation.json
+          if-no-files-found: ignore
 
   synthetic-restore:
     # The restore rehearsal has its own ephemeral Supabase/PostgreSQL stack and cannot be skipped by browser failures.

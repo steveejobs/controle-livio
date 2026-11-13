@@ -22,7 +22,21 @@ import type {
 import { DocumentGeneratorService } from './document-generator.service';
 import { DocumentSettingsService } from './document-settings.service';
 import { StorageService } from './storage.service';
+import {
+  StorageRecoveryService,
+  type UploadTicket,
+} from '../storage-recovery/storage-recovery.service';
 import { DocumentScannerService } from './document-scanner.service';
+
+export interface PreparedDocument {
+  actor: AuthenticatedActor;
+  metadata: DocumentMetadataInput;
+  file: Express.Multer.File;
+  status: 'ACTIVE' | 'DRAFT';
+  documentId: string;
+  storageKey: string;
+  ticket: UploadTicket;
+}
 
 const allowedMimeTypes = new Set([
   'application/pdf',
@@ -41,6 +55,7 @@ export class DocumentsService {
     private readonly generator: DocumentGeneratorService,
     private readonly documentSettings: DocumentSettingsService,
     private readonly scanner: DocumentScannerService,
+    private readonly recovery: StorageRecoveryService,
   ) {}
 
   async generate(actor: AuthenticatedActor, input: DocumentGenerationInput) {
@@ -203,65 +218,100 @@ export class DocumentsService {
     return this.getDocument(actor, created.id);
   }
 
+  async prepareCreate(
+    actor: AuthenticatedActor,
+    metadata: DocumentMetadataInput,
+    file: Express.Multer.File,
+    status: 'ACTIVE' | 'DRAFT' = 'ACTIVE',
+  ): Promise<PreparedDocument> {
+    this.validateFile(file);
+    await this.assertLinks(actor.organizationId, metadata);
+    const documentId = randomUUID();
+    const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
+    const ticket = await this.recovery.plan({
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      purpose: 'DOCUMENT',
+      bucket: 'legal-documents',
+      key: storageKey,
+      resourceType: 'document',
+      resourceId: documentId,
+      expectedSha256: this.digest(file.buffer),
+      idempotencyKey: 'DOCUMENT:' + documentId,
+    });
+    try {
+      await this.recovery.store(ticket, file.buffer, file.mimetype, () =>
+        this.assertUploadScannable(actor, file),
+      );
+    } catch (error) {
+      await this.recovery.compensate(ticket, error);
+      throw error;
+    }
+    return { actor, metadata, file, status, documentId, storageKey, ticket };
+  }
+
+  async attachPrepared(transaction: Prisma.TransactionClient, prepared: PreparedDocument) {
+    const { actor, metadata, file, status, documentId, storageKey, ticket } = prepared;
+    await this.recovery.lockForAttachment(transaction, ticket);
+    const created = await transaction.document.create({
+      data: {
+        id: documentId,
+        organizationId: actor.organizationId,
+        title: metadata.title,
+        category: metadata.category,
+        visibility: metadata.visibility,
+        confidential: metadata.visibility === 'INTERNAL',
+        status,
+        createdById: actor.userId,
+        ...(metadata.clientId ? { clientId: metadata.clientId } : {}),
+        ...(metadata.matterId ? { matterId: metadata.matterId } : {}),
+        ...(metadata.contractId ? { contractId: metadata.contractId } : {}),
+        ...(metadata.installmentId ? { installmentId: metadata.installmentId } : {}),
+        ...(metadata.paymentId ? { paymentId: metadata.paymentId } : {}),
+        ...(metadata.expenseId ? { expenseId: metadata.expenseId } : {}),
+        versions: {
+          create: {
+            organizationId: actor.organizationId,
+            version: 1,
+            storageKey,
+            fileName: this.safeName(file.originalname),
+            mimeType: file.mimetype,
+            sizeBytes: BigInt(file.size),
+            sha256: this.digest(file.buffer),
+            uploadedById: actor.userId,
+          },
+        },
+      },
+      include: { versions: true },
+    });
+    await this.audit.record(transaction, {
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      actorSessionId: actor.sessionId,
+      action: 'CREATE',
+      resource: 'document',
+      resourceId: created.id,
+      after: { title: created.title, visibility: created.visibility, version: 1 },
+    });
+    await this.recovery.complete(transaction, ticket);
+    return this.serialize(created);
+  }
+
+  async abandonPrepared(prepared: PreparedDocument, error: unknown) {
+    await this.recovery.compensate(prepared.ticket, error);
+  }
+
   async create(
     actor: AuthenticatedActor,
     metadata: DocumentMetadataInput,
     file: Express.Multer.File,
     status: 'ACTIVE' | 'DRAFT' = 'ACTIVE',
   ) {
-    this.validateFile(file);
-    await this.assertLinks(actor.organizationId, metadata);
-    await this.assertUploadScannable(actor, file);
-    const documentId = randomUUID();
-    const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
-    await this.storage.upload(storageKey, file.buffer, file.mimetype);
+    const prepared = await this.prepareCreate(actor, metadata, file, status);
     try {
-      const document = await this.prisma.$transaction(async (transaction) => {
-        const created = await transaction.document.create({
-          data: {
-            id: documentId,
-            organizationId: actor.organizationId,
-            title: metadata.title,
-            category: metadata.category,
-            visibility: metadata.visibility,
-            confidential: metadata.visibility === 'INTERNAL',
-            status,
-            createdById: actor.userId,
-            ...(metadata.clientId ? { clientId: metadata.clientId } : {}),
-            ...(metadata.matterId ? { matterId: metadata.matterId } : {}),
-            ...(metadata.contractId ? { contractId: metadata.contractId } : {}),
-            ...(metadata.installmentId ? { installmentId: metadata.installmentId } : {}),
-            ...(metadata.paymentId ? { paymentId: metadata.paymentId } : {}),
-            ...(metadata.expenseId ? { expenseId: metadata.expenseId } : {}),
-            versions: {
-              create: {
-                organizationId: actor.organizationId,
-                version: 1,
-                storageKey,
-                fileName: this.safeName(file.originalname),
-                mimeType: file.mimetype,
-                sizeBytes: BigInt(file.size),
-                sha256: this.digest(file.buffer),
-                uploadedById: actor.userId,
-              },
-            },
-          },
-          include: { versions: true },
-        });
-        await this.audit.record(transaction, {
-          organizationId: actor.organizationId,
-          actorUserId: actor.userId,
-          actorSessionId: actor.sessionId,
-          action: 'CREATE',
-          resource: 'document',
-          resourceId: created.id,
-          after: { title: created.title, visibility: created.visibility, version: 1 },
-        });
-        return created;
-      });
-      return this.serialize(document);
+      return await this.prisma.$transaction((tx) => this.attachPrepared(tx, prepared));
     } catch (error) {
-      await this.storage.remove(storageKey);
+      await this.abandonPrepared(prepared, error);
       throw error;
     }
   }
@@ -269,12 +319,25 @@ export class DocumentsService {
   async addVersion(actor: AuthenticatedActor, documentId: string, file: Express.Multer.File) {
     this.validateFile(file);
     await this.getDocument(actor, documentId);
-    await this.assertUploadScannable(actor, file, documentId);
     const storageKey = `organizations/${actor.organizationId}/documents/${documentId}/${randomUUID()}-${this.safeName(file.originalname)}`;
-    await this.storage.upload(storageKey, file.buffer, file.mimetype);
+    const ticket = await this.recovery.plan({
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      purpose: 'VERSION',
+      bucket: 'legal-documents',
+      key: storageKey,
+      resourceType: 'document',
+      resourceId: documentId,
+      expectedSha256: this.digest(file.buffer),
+      idempotencyKey: 'VERSION:' + storageKey,
+    });
     try {
+      await this.recovery.store(ticket, file.buffer, file.mimetype, () =>
+        this.assertUploadScannable(actor, file, documentId),
+      );
       const version = await this.prisma.$transaction(
         async (transaction) => {
+          await this.recovery.lockForAttachment(transaction, ticket);
           await transaction.$queryRaw`SELECT id FROM documents WHERE id = ${documentId}::uuid AND organization_id = ${actor.organizationId}::uuid FOR UPDATE`;
           const document = await transaction.document.findFirst({
             where: { id: documentId, organizationId: actor.organizationId, deletedAt: null },
@@ -316,13 +379,14 @@ export class DocumentsService {
               revokedSignatureLinks: revokedRequests.count,
             },
           });
+          await this.recovery.complete(transaction, ticket);
           return created;
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
       return this.serializeVersion(version);
     } catch (error) {
-      await this.storage.remove(storageKey);
+      await this.recovery.compensate(ticket, error);
       throw error;
     }
   }

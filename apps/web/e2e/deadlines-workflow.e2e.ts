@@ -65,6 +65,8 @@ for (const viewport of [
       } else if (path === '/v1/calendar-events/event-1' && method === 'PATCH') {
         event = { ...event, ...submitted };
         body = event;
+      } else if (path === '/v1/notifications/push/config' && method === 'GET') {
+        body = { enabled: false, subscriptions: [] };
       } else if (path === '/v1/notifications' && method === 'GET') {
         body = {
           unread: notificationRead ? 0 : 1,

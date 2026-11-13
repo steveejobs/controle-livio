@@ -13,6 +13,7 @@ import {
   type Response,
 } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { AFRelationship, PDFDocument, StandardFonts } from 'pdf-lib';
 import { addMonths, formatDate } from '../../features/shared/format';
 
@@ -964,7 +965,11 @@ test('seletor de cliente: carregamento sob demanda, erro, nova tentativa e lista
         exact: true,
       });
       await expect.poll(() => clientRequestStarted, { timeout: apiOperationTimeoutMs }).toBe(true);
-      await expect(loadingForm.getByRole('status')).toContainText('Carregando clientes');
+      const clientLoadingStatus = loadingForm
+        .getByRole('status')
+        .filter({ hasText: 'Carregando clientes' });
+      await expect(clientLoadingStatus).toHaveCount(1);
+      await expect(clientLoadingStatus).toContainText('Carregando clientes');
       await expect(loadingClientSelect).toBeDisabled();
       markWorkflowStage(page, 'client-select-state-probe', 'loading', {
         fieldLabel: 'Cliente',
@@ -3323,6 +3328,32 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
   browser,
 }) => {
   test.setTimeout(180_000);
+  // Positive and foreign fixtures go through the real API, never direct financial DML.
+  const paymentFixtures = new Map<string, string>();
+  const fixtureContext = await browser.newContext();
+  const fixturePage = await fixtureContext.newPage();
+  try {
+    await login(fixturePage, 'admin.aurora@example.test');
+    for (const clientId of [clientA, clientB]) {
+      const key = 'scope56-' + randomUUID();
+      const result = await browserApi(fixturePage, '/finance/payments', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': key },
+        body: {
+          clientId,
+          reference: key,
+          amount: '1.00',
+          paidAt: new Date().toISOString(),
+          method: 'PIX',
+          allocations: [],
+        },
+      });
+      assertStatus(result, 201, 'Prepare real payment scope fixture');
+      paymentFixtures.set(clientId, bodyAs<{ payment: { id: string } }>(result).payment.id);
+    }
+  } finally {
+    await fixtureContext.close();
+  }
   const scenarios = [
     {
       email: 'admin.aurora@example.test',
@@ -3349,8 +3380,12 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
     },
     {
       email: 'cliente.aurora@example.test',
-      allowed: [['/documents?page=1&pageSize=5', 200]],
-      denied: ['/clients?page=1&pageSize=5'],
+      allowed: [
+        ['/documents?page=1&pageSize=5', 200],
+        ['/clients?page=1&pageSize=5', 200],
+        ['/finance/payments?page=1&pageSize=100', 200],
+      ],
+      denied: ['/admin/users', '/finance/expenses'],
     },
   ] as const;
 
@@ -3363,6 +3398,41 @@ test('perfis admin, advogado, financeiro, secretaria e cliente mantêm permissõ
         for (const [path, expectedStatus] of scenario.allowed) {
           const result = await browserApi(page, path);
           assertStatus(result, expectedStatus, `${scenario.email} ${path} at ${viewport.width}px`);
+          if (
+            scenario.email === 'cliente.aurora@example.test' &&
+            path.startsWith('/finance/payments?')
+          ) {
+            const listed = bodyAs<{ items: Array<{ id: string; clientId: string }> }>(result);
+            expect(
+              listed.items.length,
+              'An existing own-client payment fixture is required',
+            ).toBeGreaterThan(0);
+            expect(listed.items.every((payment) => payment.clientId === clientA)).toBe(true);
+            expect(listed.items.map((payment) => payment.id)).toContain(
+              paymentFixtures.get(clientA),
+            );
+            expect(listed.items.map((payment) => payment.id)).not.toContain(
+              paymentFixtures.get(clientB),
+            );
+            const overridden = await browserApi(page, path + '&clientId=' + clientB);
+            assertStatus(overridden, 200, 'Client filter cannot override actor scope');
+            const narrowed = bodyAs<{ items: Array<{ id: string; clientId: string }> }>(overridden);
+            expect(narrowed.items.map((payment) => payment.id)).toEqual(
+              listed.items.map((payment) => payment.id),
+            );
+          }
+          if (scenario.email === 'cliente.aurora@example.test' && path.startsWith('/clients?')) {
+            const listed = bodyAs<{ items: Array<{ id: string }>; total: number }>(result);
+            expect(listed.items.map((client) => client.id)).toEqual([clientA]);
+            expect(listed.total).toBe(1);
+            const otherClient = await browserApi(page, `/clients/${clientB}`);
+            assertStatus(otherClient, 404, 'Client must not read another client');
+            const forbiddenEdit = await browserApi(page, `/clients/${clientA}`, {
+              method: 'PATCH',
+              body: { displayName: 'FORBIDDEN CHANGE' },
+            });
+            assertStatus(forbiddenEdit, 403, 'Client must not edit own record without permission');
+          }
         }
         for (const path of scenario.denied) {
           const result = await browserApi(page, path);
@@ -3412,8 +3482,10 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
         },
       });
       assertStatus(created, 201, 'fixture de parcela para comprovante');
-      const installmentId = bodyAs<{ installments: Array<{ id: string }> }>(created)
-        .installments[0]!.id;
+      const createdReceivable = bodyAs<{ id: string; installments: Array<{ id: string }> }>(
+        created,
+      );
+      const installmentId = createdReceivable.installments[0]!.id;
       const receiptPdf = async (amount: string) => {
         const document = await PDFDocument.create();
         const page = document.addPage([500, 300]);
@@ -3426,7 +3498,11 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       };
       await navigateTo(financePage, /Receb/);
       await financePage.getByRole('button', { name: 'Receber pagamento' }).click();
-      const paymentForm = await formWithSubmitButton(financePage, 'Confirmar pagamento');
+      const paymentForm = financePage
+        .getByRole('textbox', { name: 'Referência do pagamento', exact: true })
+        .locator('xpath=ancestor::form');
+      await expect(paymentForm).toHaveCount(1);
+      await expect(paymentForm).toBeVisible();
       await selectFormOptionByLabel(
         financePage,
         paymentForm,
@@ -3438,6 +3514,171 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       );
       await paymentForm.getByLabel('Parcela').selectOption(installmentId);
       const upload = await formWithSubmitButton(financePage, 'Enviar e conferir comprovante');
+      const blockedReceiptIds: string[] = [];
+      let previousReceiptsBefore: unknown;
+      // Stage 2: verify the persisted ledger, not only an HTTP rejection.
+      const databaseUrl = process.env.DATABASE_URL;
+      if (
+        !databaseUrl ||
+        !['postgres:', 'postgresql:'].includes(new URL(databaseUrl).protocol) ||
+        !loopbackHosts.has(new URL(databaseUrl).hostname) ||
+        !loopbackHosts.has(new URL(supabaseUrl).hostname) ||
+        process.env.SUPABASE_LOCAL !== 'true' ||
+        process.env.SUPABASE_ENVIRONMENT !== 'test' ||
+        process.env.NODE_ENV !== 'test'
+      )
+        throw new Error('Stage 2 requires disposable loopback PostgreSQL.');
+      const database = new PrismaClient();
+      try {
+        const readLedger = async (receiptId: string) => {
+          const receipt = await database.paymentReceipt.findFirst({
+            where: { id: receiptId, organizationId: organizationA, installmentId },
+            select: {
+              documentId: true,
+              status: true,
+              paymentId: true,
+              reviewHistory: true,
+              extractedFields: true,
+            },
+          });
+          const installment = await database.receivableInstallment.findFirst({
+            where: { id: installmentId, organizationId: organizationA },
+            select: { amount: true, status: true },
+          });
+          const receivable = await database.receivable.findFirst({
+            where: { id: createdReceivable.id, organizationId: organizationA },
+            select: { status: true },
+          });
+          if (!receipt || !installment || !receivable)
+            throw new Error('Disposable ledger fixture is incomplete.');
+          const allocations = await database.paymentAllocation.findMany({
+            where: { organizationId: organizationA, installmentId, reversedAt: null },
+            select: { amount: true },
+          });
+          const allocated = allocations.reduce(
+            (sum, allocation) => sum.plus(allocation.amount),
+            new Prisma.Decimal(0),
+          );
+          return {
+            receiptId,
+            documentId: receipt.documentId,
+            organizationId: organizationA,
+            installmentId,
+            receiptStatus: receipt.status,
+            paymentId: receipt.paymentId,
+            reviewEvents: Array.isArray(receipt.reviewHistory) ? receipt.reviewHistory.length : -1,
+            nonSettlementEvidence: Boolean(
+              (receipt.extractedFields as { nonSettlementEvidence?: boolean })
+                .nonSettlementEvidence,
+            ),
+            paymentsForReceipt: await database.payment.count({
+              where: { organizationId: organizationA, idempotencyKey: `receipt:${receiptId}` },
+            }),
+            clientPayments: await database.payment.count({
+              where: { organizationId: organizationA, clientId: clientA },
+            }),
+            allocationCount: allocations.length,
+            allocationAmounts: allocations.map(({ amount }) => amount.toFixed(4)).sort(),
+            balance: installment.amount.minus(allocated).toFixed(4),
+            installmentStatus: installment.status,
+            receivableStatus: receivable.status,
+            receiptAuditCount: await database.auditLog.count({
+              where: {
+                organizationId: organizationA,
+                resource: 'payment_receipt',
+                resourceId: receiptId,
+              },
+            }),
+            paymentAuditCount: await database.auditLog.count({
+              where: { organizationId: organizationA, resource: 'payment' },
+            }),
+          };
+        };
+        for (const operationState of [
+          'agendado',
+          'pendente',
+          'cancelado',
+          'devolvido',
+          'parcialmente devolvido',
+        ]) {
+          const pdf = await PDFDocument.create();
+          const sheet = pdf.addPage([500, 300]);
+          sheet.drawText(`PIX ${operationState}`, { x: 20, y: 250, size: 18 });
+          sheet.drawText('Valor pago: R$ 25,00', { x: 20, y: 210, size: 18 });
+          sheet.drawText('Data do pagamento: 29/10/2026', { x: 20, y: 170, size: 18 });
+          await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
+            name: `estado-${operationState}.pdf`,
+            mimeType: 'application/pdf',
+            buffer: Buffer.from(await pdf.save()),
+          });
+          const responsePromise = financePage.waitForResponse(
+            (response) =>
+              new URL(response.url()).pathname === '/v1/finance/receipts' &&
+              response.request().method() === 'POST',
+          );
+          await upload.getByRole('button', { name: 'Enviar e conferir comprovante' }).click();
+          const response = await responsePromise;
+          expect(response.status()).toBe(201);
+          const receipt = (await response.json()) as { id: string };
+          blockedReceiptIds.push(receipt.id);
+          const before = await readLedger(receipt.id);
+          expect(before).toMatchObject({
+            receiptStatus: 'PENDING_REVIEW',
+            paymentId: null,
+            reviewEvents: 0,
+            nonSettlementEvidence: true,
+            paymentsForReceipt: 0,
+            allocationCount: 0,
+            balance: '100.0000',
+            receiptAuditCount: 1,
+          });
+          for (const correctionReason of [undefined, 'Revisão sintética']) {
+            const confirmation = await browserApi(
+              financePage,
+              `/finance/receipts/${receipt.id}/confirm`,
+              {
+                method: 'POST',
+                body: {
+                  amount: '25.00',
+                  paidAt: '2026-10-29T15:00:00Z',
+                  method: 'PIX',
+                  reference: `BLOCK-${suffix}`,
+                  ...(correctionReason ? { correctionReason } : {}),
+                },
+              },
+            );
+            assertStatus(confirmation, 400, `non-settlement-${operationState}`);
+            expect(JSON.stringify(confirmation.body)).toContain(
+              'Operação não liquidada ou devolvida',
+            );
+            const after = await readLedger(receipt.id);
+            writeQaArtifact(
+              `workflow-stages/receipt-nonsettlement-${viewport.width}-${operationSlug(operationState)}-${correctionReason ? 'with-reason' : 'without-reason'}.json`,
+              {
+                operationState,
+                correctionReasonProvided: Boolean(correctionReason),
+                httpStatus: confirmation.status,
+                before,
+                after,
+              },
+            );
+            expect(after).toEqual(before);
+          }
+        }
+        previousReceiptsBefore = await database.paymentReceipt.findMany({
+          where: { organizationId: organizationA, id: { in: blockedReceiptIds } },
+          select: {
+            id: true,
+            documentId: true,
+            status: true,
+            paymentId: true,
+            reviewHistory: true,
+          },
+          orderBy: { id: 'asc' },
+        });
+      } finally {
+        await database.$disconnect();
+      }
       const storageBeforeInfected = await storageObjectInventory(organizationA);
       await upload.getByLabel('Anexar comprovante e identificar pagamento').setInputFiles({
         name: `recibo-infectado-${suffix}.pdf`,
@@ -3471,20 +3712,194 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       const uploadedResponse = await uploaded;
       expect(uploadedResponse.status()).toBe(201);
       expect(uploadedResponse.request().postData()).toContain(installmentId);
-      expect(
-        (await uploadedResponse.json()) as { installmentId: string; clientId: string },
-      ).toMatchObject({
+      const partialReceipt = (await uploadedResponse.json()) as {
+        id: string;
+        documentId: string;
+        document: { id: string; title: string };
+        installmentId: string;
+        clientId: string;
+      };
+      expect(partialReceipt).toMatchObject({
         installmentId,
         clientId: clientA,
+        document: {
+          id: partialReceipt.documentId,
+          title: `Comprovante financeiro · recibo-parcial-${suffix}.pdf`,
+        },
       });
-      const preview = financePage.getByRole('region', { name: 'Conferência do comprovante' });
+      expect(blockedReceiptIds).not.toContain(partialReceipt.id);
+      const retrieved = bodyAs<typeof partialReceipt>(
+        await browserApi(financePage, `/finance/receipts/${partialReceipt.id}`),
+      );
+      expect(retrieved).toMatchObject(partialReceipt);
+      const listed = bodyAs<{ items: Array<typeof partialReceipt> }>(
+        await browserApi(financePage, `/finance/receipts?installmentId=${installmentId}`),
+      );
+      expect(listed.items.find(({ id }) => id === partialReceipt.id)).toMatchObject(partialReceipt);
+      const forbiddenRead = await browserApi(
+        financePage,
+        `/finance/receipts/${partialReceipt.id}`,
+        {
+          organizationId: organizationB,
+        },
+      );
+      assertAuthorizationDenial(forbiddenRead, {
+        status: 401,
+        code: 'unauthorized',
+        message: 'Usuário sem vínculo ativo com esta organização',
+        label: 'usuário sem vínculo não acessa os metadados do comprovante',
+      });
+      expect(JSON.stringify(forbiddenRead.body)).not.toContain(partialReceipt.documentId);
+      const preview = upload
+        .locator('xpath=..')
+        .getByRole('region', { name: 'Conferência do comprovante' });
+      await expect(preview).toContainText(`recibo-parcial-${suffix}.pdf`);
       await expect(preview).toContainText('R$ 33,34');
       await expect(preview).toContainText('R$ 66,66');
       const partial = financePage.waitForResponse((response) =>
         /\/v1\/finance\/receipts\/[a-f0-9-]+\/confirm$/.test(new URL(response.url()).pathname),
       );
       await preview.getByRole('button', { name: 'Confirmar pagamento' }).click();
-      expect((await partial).status()).toBe(201);
+      const partialConfirmation = await partial;
+      expect(partialConfirmation.status()).toBe(201);
+      expect(new URL(partialConfirmation.url()).pathname).toBe(
+        `/v1/finance/receipts/${partialReceipt.id}/confirm`,
+      );
+      const partialDatabase = new PrismaClient();
+      try {
+        const beforeRetry = async () => ({
+          receipt: await partialDatabase.paymentReceipt.findFirst({
+            where: { id: partialReceipt.id, organizationId: organizationA, installmentId },
+            select: { status: true, paymentId: true, documentId: true, reviewHistory: true },
+          }),
+          payments: await partialDatabase.payment.findMany({
+            where: {
+              organizationId: organizationA,
+              idempotencyKey: `receipt:${partialReceipt.id}`,
+            },
+            select: { id: true, amount: true },
+          }),
+          allocations: await partialDatabase.paymentAllocation.findMany({
+            where: { organizationId: organizationA, installmentId, reversedAt: null },
+            select: { id: true, paymentId: true, amount: true },
+            orderBy: { id: 'asc' },
+          }),
+          auditCount: await partialDatabase.auditLog.count({
+            where: {
+              organizationId: organizationA,
+              resource: 'payment_receipt',
+              resourceId: partialReceipt.id,
+            },
+          }),
+          previousReceipts: await partialDatabase.paymentReceipt.findMany({
+            where: { organizationId: organizationA, id: { in: blockedReceiptIds } },
+            select: {
+              id: true,
+              documentId: true,
+              status: true,
+              paymentId: true,
+              reviewHistory: true,
+            },
+            orderBy: { id: 'asc' },
+          }),
+        });
+        const receipt = await partialDatabase.paymentReceipt.findFirst({
+          where: { id: partialReceipt.id, organizationId: organizationA, installmentId },
+          select: {
+            status: true,
+            paymentId: true,
+            reviewHistory: true,
+            documentId: true,
+            document: { select: { title: true, paymentId: true } },
+          },
+        });
+        expect(receipt?.status).toBe('CONFIRMED');
+        expect(receipt?.paymentId).toBeTruthy();
+        expect(receipt?.documentId).toBe(partialReceipt.documentId);
+        expect(receipt?.document.title).toContain(`recibo-parcial-${suffix}.pdf`);
+        expect(receipt?.document.paymentId).toBe(receipt?.paymentId);
+        expect(receipt?.reviewHistory).toHaveLength(1);
+        const blocked = await partialDatabase.paymentReceipt.findMany({
+          where: { organizationId: organizationA, id: { in: blockedReceiptIds } },
+          select: { status: true, paymentId: true, reviewHistory: true },
+        });
+        expect(blocked).toHaveLength(5);
+        for (const item of blocked) {
+          expect(item.status).toBe('PENDING_REVIEW');
+          expect(item.paymentId).toBeNull();
+          expect(item.reviewHistory).toHaveLength(0);
+        }
+        expect(
+          await partialDatabase.payment.count({
+            where: {
+              organizationId: organizationA,
+              idempotencyKey: { in: blockedReceiptIds.map((id) => `receipt:${id}`) },
+            },
+          }),
+        ).toBe(0);
+        const payment = await partialDatabase.payment.findFirst({
+          where: { id: receipt!.paymentId!, organizationId: organizationA, clientId: clientA },
+          select: { amount: true },
+        });
+        expect(payment?.amount.toFixed(4)).toBe('33.3400');
+        const paymentCount = await partialDatabase.payment.count({
+          where: { organizationId: organizationA, idempotencyKey: `receipt:${partialReceipt.id}` },
+        });
+        expect(paymentCount).toBe(1);
+        const allocations = await partialDatabase.paymentAllocation.findMany({
+          where: { organizationId: organizationA, installmentId, reversedAt: null },
+          select: { amount: true },
+        });
+        expect(allocations.map(({ amount }) => amount.toFixed(4))).toEqual(['33.3400']);
+        const installment = await partialDatabase.receivableInstallment.findFirst({
+          where: { id: installmentId, organizationId: organizationA },
+          select: { status: true, amount: true },
+        });
+        expect(installment?.status).toBe('PARTIALLY_PAID');
+        expect(installment?.amount.minus(allocations[0]!.amount).toFixed(4)).toBe('66.6600');
+        const receiptAuditCount = await partialDatabase.auditLog.count({
+          where: {
+            organizationId: organizationA,
+            resource: 'payment_receipt',
+            resourceId: partialReceipt.id,
+          },
+        });
+        expect(receiptAuditCount).toBe(2);
+        const snapshot = await beforeRetry();
+        expect(snapshot.previousReceipts).toEqual(previousReceiptsBefore);
+        expect(snapshot.allocations[0]?.paymentId).toBe(receipt?.paymentId);
+        const repeated = await browserApi(
+          financePage,
+          `/finance/receipts/${partialReceipt.id}/confirm`,
+          {
+            method: 'POST',
+            body: partialConfirmation.request().postDataJSON(),
+          },
+        );
+        expect([200, 201, 409]).toContain(repeated.status);
+        expect(await beforeRetry()).toEqual(snapshot);
+        writeQaArtifact(`workflow-stages/receipt-valid-partial-${viewport.width}.json`, {
+          receiptId: partialReceipt.id,
+          document: partialReceipt.document,
+          installmentId,
+          organizationId: organizationA,
+          confirmationPath: new URL(partialConfirmation.url()).pathname,
+          confirmationHttpStatus: partialConfirmation.status(),
+          repeatHttpStatus: repeated.status,
+          snapshot,
+          countsUnchangedAfterRepeat: true,
+          balanceBefore: '100.0000',
+          paymentAmount: payment?.amount.toFixed(4),
+          receiptStatus: receipt?.status,
+          paymentCount,
+          allocationCount: allocations.length,
+          allocationAmounts: allocations.map(({ amount }) => amount.toFixed(4)),
+          balance: installment?.amount.minus(allocations[0]!.amount).toFixed(4),
+          receiptAuditCount,
+        });
+      } finally {
+        await partialDatabase.$disconnect();
+      }
 
       await login(clientPage, 'cliente.aurora@example.test');
       await expect(clientPage.getByRole('heading', { name: /Minha/ })).toBeVisible();
@@ -3657,6 +4072,103 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       expect(
         persisted?.installments[0]?.allocations.map(({ amount }) => amountUnits(amount)),
       ).toEqual([amountUnits('33.34'), amountUnits('66.66')]);
+      const finalDatabase = new PrismaClient();
+      try {
+        const receipt = await finalDatabase.paymentReceipt.findFirst({
+          where: { id: clientReceiptId, organizationId: organizationA, installmentId },
+          select: { status: true, paymentId: true, reviewHistory: true },
+        });
+        expect(receipt?.status).toBe('CONFIRMED');
+        expect(receipt?.paymentId).toBeTruthy();
+        expect(receipt?.reviewHistory).toHaveLength(1);
+        const payments = await finalDatabase.payment.findMany({
+          where: {
+            organizationId: organizationA,
+            id: { in: [receipt!.paymentId!, confirmed.paymentId] },
+          },
+          select: { id: true, amount: true },
+        });
+        expect(payments).toHaveLength(1);
+        expect(payments[0]?.amount.toFixed(4)).toBe('66.6600');
+        const allocations = await finalDatabase.paymentAllocation.findMany({
+          where: { organizationId: organizationA, installmentId, reversedAt: null },
+          select: { amount: true },
+        });
+        expect(allocations.map(({ amount }) => amount.toFixed(4)).sort()).toEqual([
+          '33.3400',
+          '66.6600',
+        ]);
+        const installment = await finalDatabase.receivableInstallment.findFirst({
+          where: { id: installmentId, organizationId: organizationA },
+          select: { status: true, amount: true },
+        });
+        const allocated = allocations.reduce(
+          (sum, allocation) => sum.plus(allocation.amount),
+          new Prisma.Decimal(0),
+        );
+        expect(installment?.status).toBe('PAID');
+        expect(installment?.amount.minus(allocated).toFixed(4)).toBe('0.0000');
+        const paymentCountBeforeRetry = await finalDatabase.payment.count({
+          where: { organizationId: organizationA, idempotencyKey: `receipt:${clientReceiptId}` },
+        });
+        const auditCountBeforeRetry = await finalDatabase.auditLog.count({
+          where: {
+            organizationId: organizationA,
+            resource: 'payment_receipt',
+            resourceId: clientReceiptId,
+          },
+        });
+        expect(paymentCountBeforeRetry).toBe(1);
+        expect(auditCountBeforeRetry).toBe(2);
+        const repeated = await browserApi(financePage, confirmationPath, {
+          method: 'POST',
+          body: confirmationInput,
+        });
+        expect([200, 201]).toContain(repeated.status);
+        expect(
+          await finalDatabase.payment.count({
+            where: { organizationId: organizationA, idempotencyKey: `receipt:${clientReceiptId}` },
+          }),
+        ).toBe(paymentCountBeforeRetry);
+        expect(
+          await finalDatabase.paymentAllocation.count({
+            where: { organizationId: organizationA, installmentId, reversedAt: null },
+          }),
+        ).toBe(2);
+        expect(
+          await finalDatabase.auditLog.count({
+            where: {
+              organizationId: organizationA,
+              resource: 'payment_receipt',
+              resourceId: clientReceiptId,
+            },
+          }),
+        ).toBe(auditCountBeforeRetry);
+        const receiptAfterRetry = await finalDatabase.paymentReceipt.findFirst({
+          where: { id: clientReceiptId, organizationId: organizationA, installmentId },
+          select: { status: true, paymentId: true, reviewHistory: true },
+        });
+        expect(receiptAfterRetry).toEqual(receipt);
+        const installmentAfterRetry = await finalDatabase.receivableInstallment.findFirst({
+          where: { id: installmentId, organizationId: organizationA },
+          select: { status: true, amount: true },
+        });
+        expect(installmentAfterRetry?.status).toBe('PAID');
+        expect(installmentAfterRetry?.amount.minus(allocated).toFixed(4)).toBe('0.0000');
+        writeQaArtifact(`workflow-stages/receipt-valid-final-${viewport.width}.json`, {
+          receiptStatus: receipt?.status,
+          paymentCount: paymentCountBeforeRetry,
+          allocationCount: allocations.length,
+          allocationAmounts: allocations.map(({ amount }) => amount.toFixed(4)).sort(),
+          balance: installment?.amount.minus(allocated).toFixed(4),
+          reviewEvents: Array.isArray(receipt?.reviewHistory) ? receipt.reviewHistory.length : -1,
+          receiptAuditCount: auditCountBeforeRetry,
+          repeatHttpStatus: repeated.status,
+          countsUnchangedAfterRepeat: true,
+        });
+      } finally {
+        await finalDatabase.$disconnect();
+      }
     } finally {
       await otherOrganizationContext.close();
       await concurrentFinanceContext.close();

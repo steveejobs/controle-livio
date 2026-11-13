@@ -15,7 +15,13 @@ import { AuditService } from '../common/audit.service';
 import { pageResult, pageWindow, type PaginationInput } from '../common/schemas';
 import { normalizeAndValidateTaxId } from '../common/tax-id';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  StorageRecoveryService,
+  type UploadTicket,
+} from '../storage-recovery/storage-recovery.service';
+import { sha256 } from '../storage-recovery/storage-recovery.domain';
 import { StorageService } from '../documents/storage.service';
+import { DocumentScannerService } from '../documents/document-scanner.service';
 import type {
   CreateClientInput,
   CreateContactInput,
@@ -51,6 +57,8 @@ export class ClientsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly storage: StorageService,
+    private readonly scanner: DocumentScannerService,
+    private readonly recovery: StorageRecoveryService,
   ) {}
 
   async photoUrl(actor: AuthenticatedActor, id: string) {
@@ -80,10 +88,27 @@ export class ClientsService {
       throw new BadRequestException(
         `Use uma foto JPG, PNG ou WebP de até ${MAX_CLIENT_PHOTO_SIZE_MB} MiB.`,
       );
+    if (file.mimetype !== mimeType)
+      throw new BadRequestException('Tipo de arquivo não corresponde ao conteúdo da foto.');
     const key = `${actor.organizationId}/clients/${id}/${randomUUID()}.${jpeg ? 'jpg' : png ? 'png' : 'webp'}`;
-    await this.storage.upload(key, buffer, mimeType, this.photoBucket);
+    const ticket = await this.recovery.plan({
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      purpose: 'PHOTO',
+      bucket: 'client-photos',
+      key,
+      resourceType: 'client',
+      resourceId: id,
+      expectedSha256: sha256(buffer),
+      idempotencyKey: 'PHOTO:' + key,
+    });
+    let retired: UploadTicket | null = null;
     try {
+      await this.recovery.store(ticket, buffer, mimeType, () =>
+        this.scanner.assertClean(buffer, mimeType),
+      );
       await this.prisma.$transaction(async (transaction) => {
+        await this.recovery.lockForAttachment(transaction, ticket);
         const result = await transaction.client.updateMany({
           where: {
             id,
@@ -104,19 +129,27 @@ export class ClientsService {
           resourceId: id,
           metadata: { operation: 'upload' },
         });
+        if (before.photoStorageKey)
+          retired = await this.recovery.retire(
+            transaction,
+            actor.organizationId,
+            'client-photos',
+            before.photoStorageKey,
+          );
+        await this.recovery.complete(transaction, ticket);
       });
     } catch (error) {
-      await this.storage.remove(key, this.photoBucket);
+      await this.recovery.compensate(ticket, error);
       throw error;
     }
-    if (before.photoStorageKey) await this.storage.remove(before.photoStorageKey, this.photoBucket);
+    if (retired) await this.recovery.compensate(retired);
     return { url: await this.storage.signedUrl(key, 300, this.photoBucket) };
   }
 
   async removePhoto(actor: AuthenticatedActor, id: string) {
     const before = await this.get(actor, id);
     if (!before.photoStorageKey) return { url: null };
-    await this.prisma.$transaction(async (transaction) => {
+    const retired = await this.prisma.$transaction(async (transaction) => {
       const result = await transaction.client.updateMany({
         where: {
           id,
@@ -136,8 +169,14 @@ export class ClientsService {
         resource: 'client_photo',
         resourceId: id,
       });
+      return this.recovery.retire(
+        transaction,
+        actor.organizationId,
+        'client-photos',
+        before.photoStorageKey!,
+      );
     });
-    await this.storage.remove(before.photoStorageKey, this.photoBucket);
+    if (retired) await this.recovery.compensate(retired);
     return { url: null };
   }
 
@@ -502,38 +541,77 @@ export class ClientsService {
 
   async update(actor: AuthenticatedActor, id: string, input: UpdateClientInput) {
     const before = await this.get(actor, id);
-    const { taxId, address, customFields, ...changes } = input;
+    const { taxId, address, customFields, expectedUpdatedAt, ...changes } = input;
     let taxIdNormalized: string | undefined;
     try {
       taxIdNormalized = taxId === undefined ? undefined : normalizeAndValidateTaxId(taxId);
     } catch {
       throw new BadRequestException('CPF/CNPJ inválido');
     }
-    return this.prisma.$transaction(async (transaction) => {
-      const client = await transaction.client.update({
-        where: { id },
-        data: {
-          ...changes,
-          ...(address !== undefined ? { address: address as Prisma.InputJsonValue } : {}),
-          ...(customFields !== undefined
-            ? { customFields: customFields as Prisma.InputJsonValue }
-            : {}),
-          ...(input.email ? { email: input.email.toLowerCase() } : {}),
-          ...(taxId !== undefined ? { taxIdNormalized: taxIdNormalized ?? null } : {}),
-        },
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const client = await transaction.client.update({
+          where: {
+            id,
+            organizationId: actor.organizationId,
+            deletedAt: null,
+            ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}),
+          },
+          data: {
+            ...changes,
+            ...(expectedUpdatedAt
+              ? {
+                  updatedAt: new Date(
+                    Math.max(Date.now(), new Date(expectedUpdatedAt).getTime() + 1),
+                  ),
+                }
+              : {}),
+            ...(address !== undefined ? { address: address as Prisma.InputJsonValue } : {}),
+            ...(customFields !== undefined
+              ? { customFields: customFields as Prisma.InputJsonValue }
+              : {}),
+            ...(input.email !== undefined
+              ? { email: input.email ? input.email.toLowerCase() : null }
+              : {}),
+            ...(input.phone !== undefined ? { phone: input.phone || null } : {}),
+            ...(input.source !== undefined ? { source: input.source || null } : {}),
+            ...(taxId !== undefined ? { taxIdNormalized: taxIdNormalized ?? null } : {}),
+          },
+        });
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'UPDATE',
+          resource: 'client',
+          resourceId: id,
+          before,
+          after: client,
+        });
+        return client;
       });
-      await this.audit.record(transaction, {
-        organizationId: actor.organizationId,
-        actorUserId: actor.userId,
-        actorSessionId: actor.sessionId,
-        action: 'UPDATE',
-        resource: 'client',
-        resourceId: id,
-        before,
-        after: client,
-      });
-      return client;
-    });
+    } catch (error) {
+      if (
+        expectedUpdatedAt &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      )
+        throw new ConflictException(
+          'O cadastro foi alterado em outra sessão. Atualize a ficha antes de salvar.',
+        );
+      if (
+        taxIdNormalized &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002' &&
+        Array.isArray(error.meta?.target) &&
+        error.meta.target.some((field) =>
+          ['tax_id_normalized', 'taxIdNormalized'].includes(String(field)),
+        )
+      ) {
+        throw new ConflictException('Este CPF/CNPJ ja esta cadastrado nesta organizacao.');
+      }
+      throw error;
+    }
   }
 
   async archive(actor: AuthenticatedActor, id: string): Promise<void> {

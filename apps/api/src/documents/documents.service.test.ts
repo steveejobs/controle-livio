@@ -1,3 +1,4 @@
+import { recoveryWriterDouble } from '../storage-recovery/writer-test-double';
 import { createServer, type AddressInfo } from 'node:net';
 import {
   ForbiddenException,
@@ -42,6 +43,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       scanner as never,
+      recoveryWriterDouble(storage as never) as never,
     );
     const bytes = Buffer.from('%PDF-1.7 synthetic QA document');
 
@@ -135,6 +137,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       scanner,
+      recoveryWriterDouble(storage as never) as never,
     );
     try {
       await expect(
@@ -179,6 +182,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble({} as never) as never,
     );
     await service.list(actor, { clientId: 'outro-cliente', page: 1, pageSize: 25 });
     expect(findMany).toHaveBeenCalledWith(
@@ -205,6 +209,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble({} as never) as never,
     );
     await expect(service.getDocument(actor, 'doc-b')).rejects.toBeInstanceOf(NotFoundException);
     expect(findFirst).toHaveBeenCalledWith(
@@ -229,6 +234,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble(storage as never) as never,
     );
     await expect(service.downloadUrl(actor, 'foreign-document')).rejects.toBeInstanceOf(
       NotFoundException,
@@ -283,6 +289,7 @@ describe('documentos privados', () => {
       generator as never,
       settings as never,
       { assertClean: vi.fn() } as never,
+      recoveryWriterDouble(storage as never) as never,
     );
     const generatedResult = {
       id: 'generated-document',
@@ -303,6 +310,7 @@ describe('documentos privados', () => {
       expect.stringMatching(/^organizations\/org-a\/documents\/[0-9a-f-]{36}\//),
       Buffer.from('PK\x03\x04mock'),
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'legal-documents',
     );
     expect(documentCreate.mock.calls[0]![0].data).toMatchObject({
       clientId: actor.clientId,
@@ -333,6 +341,7 @@ describe('documentos privados', () => {
       {} as never,
       {} as never,
       {} as never,
+      recoveryWriterDouble({} as never) as never,
     );
     await expect(
       service.generate(actor, { clientId: actor.clientId!, category: 'HIPOSSUFICIENCIA' }),

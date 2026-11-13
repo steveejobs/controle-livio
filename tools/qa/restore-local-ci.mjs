@@ -3,13 +3,23 @@ import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
+import {
+  assertRecoveryArchive,
+  recoveryPrivateTableQuery,
+  recoveryFunctionQuery,
+  assertRecoveryOwners,
+  recoveryRestoreInventory,
+} from '../storage/recovery/restore-inventory.mjs';
 
 const excludedSchedulerSchemas = ['cron', 'net'];
 const excludedSchedulerExtensions = new Set(['pg_cron', 'pg_net']);
 const expectedRestoreInventory = {
-  sourceOwners: 351,
-  sourceAclRows: 232,
-  restoredAclRows: 216,
+  // DEF-008 adds exactly two public routines, each with an explicit ACL.
+  // No relation/type/index was added; owner and ACL inventories grow by two.
+  // The archive observed in Quality 43038974286 has 234 ACL rows / 218 retained.
+  sourceOwners: 351 + 2,
+  sourceAclRows: 232 + 2,
+  restoredAclRows: 216 + 2,
   restoredDefaultAclRows: 27,
   excludedSchedulerAclRows: 16,
   excludedSchedulerDefaultAclRows: 3,
@@ -336,10 +346,29 @@ writeCheckpoint({ targetDatabase: target });
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
 run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
 restoreStage = 'archive_toc_preflight';
+writeCheckpoint();
 const sourceToc = run('pg_restore', '-l', archive).split('\n');
 const schemaFilteredToc = run(...listArguments(archive)).split('\n');
 const tocOwners = discoverTocOwners(sourceToc);
 const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line, tocOwners) }));
+// Expand counts ONLY after verifying every new ACL's exact reviewed identity.
+// All existing owner/grant/default-ACL/source-vs-target assertions remain intact.
+writeFileSync(join(evidenceDirectory, 'source-archive-toc.txt'), sourceToc.join('\n') + '\n');
+writeFileSync(
+  join(evidenceDirectory, 'schema-filtered-archive-toc.txt'),
+  schemaFilteredToc.join('\n') + '\n',
+);
+const recoveryPrivateTables = JSON.parse(sql('postgres', recoveryPrivateTableQuery));
+const recoveryFunctions = JSON.parse(sql('postgres', recoveryFunctionQuery));
+writeCheckpoint({ recoveryPrivateTables, recoveryFunctions });
+const recoveryAclCount = assertRecoveryArchive(
+  tocEntries.map((row) => row.entry),
+  recoveryPrivateTables,
+  recoveryFunctions,
+);
+expectedRestoreInventory.sourceOwners += recoveryRestoreInventory.owners.length;
+expectedRestoreInventory.sourceAclRows += recoveryAclCount;
+expectedRestoreInventory.restoredAclRows += recoveryAclCount;
 const excludedExtensionEntries = tocEntries.filter(
   ({ entry }) => entry?.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name),
 );
@@ -430,7 +459,7 @@ assert.equal(
 assert.equal(
   filteredTocEvidence.aclRowsRestored,
   expectedRestoreInventory.restoredAclRows,
-  'Restore list does not retain all 216 expected public ACL entries',
+  'Restore list does not retain all 218 expected public ACL entries',
 );
 assert.equal(
   filteredTocEvidence.defaultAclRowsRestored,
@@ -497,6 +526,37 @@ writeCheckpoint({
   excludedSchedulerSchemas,
 });
 run(...effectiveRestoreArgs);
+const restoredRecoveryPrivateTables = JSON.parse(sql(target, recoveryPrivateTableQuery));
+const restoredRecoveryFunctions = JSON.parse(sql(target, recoveryFunctionQuery));
+writeCheckpoint({ restoredRecoveryPrivateTables, restoredRecoveryFunctions });
+assertRecoveryArchive(
+  tocEntries.map((row) => row.entry),
+  restoredRecoveryPrivateTables,
+  restoredRecoveryFunctions,
+);
+const privacyWithoutOwner = (rows) =>
+  rows.map((row) => ({
+    name: row.name,
+    rls: row.rls,
+    forceRls: row.forceRls,
+    ownerOnlyColumnAcl: row.ownerOnlyColumnAcl,
+    serverAccess: row.serverAccess,
+    ownerOnlyAcl: row.ownerOnlyAcl,
+    noBrowserPrivileges: row.noBrowserPrivileges,
+  }));
+assert.deepEqual(
+  privacyWithoutOwner(restoredRecoveryPrivateTables),
+  privacyWithoutOwner(recoveryPrivateTables),
+);
+const functionPrivacy = (rows) =>
+  rows.map((fn) => ({
+    name: fn.name,
+    securityDefiner: fn.securityDefiner,
+    config: fn.config,
+    noBrowserExecute: fn.noBrowserExecute,
+    serverExecute: fn.serverExecute,
+  }));
+assert.deepEqual(functionPrivacy(restoredRecoveryFunctions), functionPrivacy(recoveryFunctions));
 restoreStage = 'validate_recovery';
 writeCheckpoint({
   targetDatabase: target,
@@ -659,6 +719,7 @@ const ownerSnapshot = (database) =>
   );
 const sourceGrantRecords = parsedGrantSnapshot('postgres');
 const sourceOwnerRecords = ownerSnapshot('postgres').split('\n').filter(Boolean);
+assertRecoveryOwners(sourceOwnerRecords);
 writeCheckpoint({
   targetDatabase: target,
   restoreStage,
@@ -809,6 +870,7 @@ assert(
   'Application schema usage grant was not restored',
 );
 const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
+assertRecoveryOwners(restoredOwners);
 assert(restoredOwners.length > 0, 'No public owners were found in the restore target');
 assert.equal(
   restoredOwners.length,

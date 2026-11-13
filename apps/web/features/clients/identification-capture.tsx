@@ -1,26 +1,38 @@
 'use client';
 
 import Image from 'next/image';
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent } from 'react';
 import type Tesseract from 'tesseract.js';
+import { MAX_DOCUMENT_UPLOAD_SIZE_MB } from '@livio/shared';
+import { getDocumentUploadSizeError } from '../shared/document-upload-limit';
 import { parseIdentificationText, type IdentificationData } from './identification-reader';
-
-const maximumImageSize = 8 * 1024 * 1024;
 
 export function IdentificationCapture({
   onImageSelected,
   onUseData,
 }: {
-  onImageSelected: (file: File) => void;
-  onUseData: (data: IdentificationData, file: File) => void;
+  onImageSelected: (file?: File) => void;
+  onUseData: (data: IdentificationData, file: File) => boolean;
 }) {
   const [file, setFile] = useState<File>();
   const [preview, setPreview] = useState<string>();
   const [fields, setFields] = useState<IdentificationData>();
   const [busy, setBusy] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [usedData, setUsedData] = useState(false);
   const [progress, setProgress] = useState('');
   const [feedback, setFeedback] = useState<string>();
+  const reader = useRef<Tesseract.Worker | undefined>(undefined);
+  const generation = useRef(0);
+
+  useEffect(
+    () => () => {
+      generation.current += 1;
+      void reader.current?.terminate().catch(() => undefined);
+      reader.current = undefined;
+    },
+    [],
+  );
 
   useEffect(
     () => () => {
@@ -32,9 +44,12 @@ export function IdentificationCapture({
   const chooseFile = (event: ChangeEvent<HTMLInputElement>) => {
     const selected = event.currentTarget.files?.[0];
     event.currentTarget.value = '';
-    if (!selected) return;
-    if (!['image/jpeg', 'image/png'].includes(selected.type) || selected.size > maximumImageSize) {
-      setFeedback('Escolha uma imagem JPG ou PNG de até 8 MB.');
+    if (!selected || busy) return;
+    if (
+      !['image/jpeg', 'image/png'].includes(selected.type) ||
+      getDocumentUploadSizeError(selected.size)
+    ) {
+      setFeedback(`Escolha uma imagem JPG ou PNG de até ${MAX_DOCUMENT_UPLOAD_SIZE_MB} MiB.`);
       return;
     }
     if (preview) URL.revokeObjectURL(preview);
@@ -48,7 +63,8 @@ export function IdentificationCapture({
   };
 
   const readDocument = async () => {
-    if (!file) return;
+    if (!file || busy) return;
+    const currentGeneration = ++generation.current;
     setBusy(true);
     setApplied(false);
     setFeedback(undefined);
@@ -60,13 +76,23 @@ export function IdentificationCapture({
         workerPath: '/ocr/worker.min.js',
         langPath: '/ocr',
         corePath: '/ocr/tesseract-core.wasm.js',
+        errorHandler: () => {
+          /* recognize rejects and the catch below presents the error */
+        },
         logger: (event) => {
+          if (generation.current !== currentGeneration) return;
           const label =
             event.status === 'recognizing text' ? 'Lendo o documento' : 'Carregando leitor';
           setProgress(`${label}: ${Math.round((event.progress ?? 0) * 100)}%`);
         },
       });
+      if (generation.current !== currentGeneration) {
+        await worker.terminate();
+        return;
+      }
+      reader.current = worker;
       const result = await worker.recognize(file);
+      if (generation.current !== currentGeneration) return;
       const extracted = parseIdentificationText(result.data.text);
       if (!Object.keys(extracted).length) {
         setFeedback(
@@ -75,19 +101,28 @@ export function IdentificationCapture({
         setFields(undefined);
       } else {
         setFields(extracted);
-        setFeedback('Confira os dados encontrados e corrija o que precisar antes de usar.');
+        setFeedback(
+          'Confira os dados encontrados e corrija o que precisar antes de usar.' +
+            (/\bCPF\b/i.test(result.data.text) && !extracted.cpf
+              ? ' O CPF não foi validado; confira o documento e preencha manualmente se necessário.'
+              : ''),
+        );
       }
     } catch {
-      setFeedback('Não foi possível ler a imagem. Confira a conexão e tente novamente.');
+      if (generation.current === currentGeneration)
+        setFeedback('Não foi possível ler a imagem. Confira a conexão e tente novamente.');
     } finally {
       await worker?.terminate().catch(() => undefined);
-      setBusy(false);
-      setProgress('');
+      if (reader.current === worker) reader.current = undefined;
+      if (generation.current === currentGeneration) {
+        setBusy(false);
+        setProgress('');
+      }
     }
   };
 
   const updateField = (key: keyof IdentificationData, value: string) => {
-    setFields((current) => (current ? { ...current, [key]: value || undefined } : current));
+    setFields((current) => (current ? { ...current, [key]: value } : current));
   };
 
   return (
@@ -103,6 +138,7 @@ export function IdentificationCapture({
           <input
             type="file"
             accept="image/jpeg,image/png"
+            disabled={busy}
             onChange={chooseFile}
             aria-label="Escolher foto do documento"
           />
@@ -112,6 +148,7 @@ export function IdentificationCapture({
           <input
             type="file"
             accept="image/jpeg,image/png"
+            disabled={busy}
             capture="environment"
             onChange={chooseFile}
             aria-label="Tirar foto do documento"
@@ -130,6 +167,27 @@ export function IdentificationCapture({
             onClick={() => onUseData({}, file)}
           >
             Anexar imagem ao cadastro
+          </button>
+        )}
+        {file && (
+          <button
+            className="secondary"
+            type="button"
+            onClick={() => {
+              generation.current += 1;
+              void reader.current?.terminate().catch(() => undefined);
+              reader.current = undefined;
+              setBusy(false);
+              setProgress('');
+              setFile(undefined);
+              setPreview(undefined);
+              setFields(undefined);
+              setApplied(false);
+              setFeedback(undefined);
+              onImageSelected(undefined);
+            }}
+          >
+            Descartar imagem e leitura
           </button>
         )}
       </div>
@@ -158,7 +216,9 @@ export function IdentificationCapture({
       {fields && applied && (
         <div className="identification-review">
           <p className="section-note" role="status">
-            Dados aplicados ao cadastro. Confira ou ajuste os campos antes de concluir.
+            {usedData
+              ? 'Dados aplicados ao cadastro. Confira ou ajuste os campos antes de concluir.'
+              : 'Valores atuais preservados. Nenhum dado foi substituído; a imagem continua selecionada para anexar.'}
           </p>
           <button className="secondary" type="button" onClick={() => setApplied(false)}>
             Rever dados extraídos
@@ -224,7 +284,7 @@ export function IdentificationCapture({
             type="button"
             onClick={() => {
               if (!file) return;
-              onUseData(fields, file);
+              setUsedData(onUseData(fields, file));
               setApplied(true);
             }}
           >

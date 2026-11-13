@@ -1,0 +1,1834 @@
+{
+  "scope": "STATIC SOURCE ONLY; effective catalog pending disposable CI",
+  "tables": [
+    {
+      "table": "contracts",
+      "model": "Contract",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "client",
+          "type": "Client",
+          "from": ["clientId"]
+        },
+        {
+          "name": "matter",
+          "type": "Matter",
+          "from": ["matterId"]
+        },
+        {
+          "name": "receivables",
+          "type": "Receivable",
+          "from": []
+        },
+        {
+          "name": "documents",
+          "type": "Document",
+          "from": []
+        }
+      ],
+      "consumers": [
+        "apps/api/src/documents/documents.service.ts",
+        "apps/api/src/finance/finance.service.ts",
+        "apps/api/src/reports/reports.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 318,
+          "text": "CREATE TABLE \"contracts\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 340,
+          "text": "CONSTRAINT \"contracts_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 801,
+          "text": "CREATE INDEX \"contracts_organization_id_client_id_status_idx\" ON \"contracts\"(\"organization_id\", \"client_id\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 804,
+          "text": "CREATE UNIQUE INDEX \"contracts_organization_id_number_key\" ON \"contracts\"(\"organization_id\", \"number\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1026,
+          "text": "ALTER TABLE \"contracts\" ADD CONSTRAINT \"contracts_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1029,
+          "text": "ALTER TABLE \"contracts\" ADD CONSTRAINT \"contracts_client_id_fkey\" FOREIGN KEY (\"client_id\") REFERENCES \"clients\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1032,
+          "text": "ALTER TABLE \"contracts\" ADD CONSTRAINT \"contracts_matter_id_fkey\" FOREIGN KEY (\"matter_id\") REFERENCES \"matters\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1044,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_contract_id_fkey\" FOREIGN KEY (\"contract_id\") REFERENCES \"contracts\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1185,
+          "text": "ALTER TABLE \"contracts\" ADD CONSTRAINT \"contracts_amount_check\" CHECK (\"fixed_amount\" IS NULL OR \"fixed_amount\" >= 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1186,
+          "text": "ALTER TABLE \"contracts\" ADD CONSTRAINT \"contracts_rate_check\" CHECK (\"success_rate\" IS NULL OR (\"success_rate\" >= 0 AND \"success_rate\" <= 1));"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1187,
+          "text": "ALTER TABLE \"contracts\" ADD CONSTRAINT \"contracts_dates_check\" CHECK (\"ends_at\" IS NULL OR \"starts_at\" IS NULL OR \"ends_at\" >= \"starts_at\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1251,
+          "text": "('contracts','clients','client_id'), ('contracts','matters','matter_id'), ('contracts','users','approved_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1252,
+          "text": "('receivables','clients','client_id'), ('receivables','matters','matter_id'), ('receivables','contracts','contract_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 16,
+          "text": "FOREIGN KEY (\"contract_id\") REFERENCES \"contracts\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 26,
+          "text": "FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organization('contracts', 'contract_id');"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 47,
+          "text": "('matter_parties','matters'), ('matter_stage_history','matters'), ('contracts','contracts'),"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 269,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.contracts;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 270,
+          "text": "CREATE POLICY tenant_select ON public.contracts FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 271,
+          "text": "USING (public.can_access_client_resource(organization_id, client_id, 'contracts', 'view'));"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "receivables",
+      "model": "Receivable",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "client",
+          "type": "Client",
+          "from": ["clientId"]
+        },
+        {
+          "name": "matter",
+          "type": "Matter",
+          "from": ["matterId"]
+        },
+        {
+          "name": "contract",
+          "type": "Contract",
+          "from": ["contractId"]
+        },
+        {
+          "name": "installments",
+          "type": "ReceivableInstallment",
+          "from": []
+        },
+        {
+          "name": "originalRenegotiations",
+          "type": "Renegotiation",
+          "from": []
+        },
+        {
+          "name": "resultingRenegotiations",
+          "type": "Renegotiation",
+          "from": []
+        }
+      ],
+      "consumers": [
+        "apps/api/src/dashboard/dashboard.service.ts",
+        "apps/api/src/documents/documents.service.ts",
+        "apps/api/src/finance/finance.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 344,
+          "text": "CREATE TABLE \"receivables\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 362,
+          "text": "CONSTRAINT \"receivables_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 807,
+          "text": "CREATE INDEX \"receivables_organization_id_client_id_status_idx\" ON \"receivables\"(\"organization_id\", \"client_id\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 810,
+          "text": "CREATE INDEX \"receivables_organization_id_due_date_status_idx\" ON \"receivables\"(\"organization_id\", \"due_date\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 813,
+          "text": "CREATE UNIQUE INDEX \"receivables_organization_id_reference_key\" ON \"receivables\"(\"organization_id\", \"reference\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1035,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1038,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_client_id_fkey\" FOREIGN KEY (\"client_id\") REFERENCES \"clients\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1041,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_matter_id_fkey\" FOREIGN KEY (\"matter_id\") REFERENCES \"matters\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1044,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_contract_id_fkey\" FOREIGN KEY (\"contract_id\") REFERENCES \"contracts\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1050,
+          "text": "ALTER TABLE \"receivable_installments\" ADD CONSTRAINT \"receivable_installments_receivable_id_fkey\" FOREIGN KEY (\"receivable_id\") REFERENCES \"receivables\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1086,
+          "text": "ALTER TABLE \"renegotiations\" ADD CONSTRAINT \"renegotiations_original_receivable_id_fkey\" FOREIGN KEY (\"original_receivable_id\") REFERENCES \"receivables\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1089,
+          "text": "ALTER TABLE \"renegotiations\" ADD CONSTRAINT \"renegotiations_resulting_receivable_id_fkey\" FOREIGN KEY (\"resulting_receivable_id\") REFERENCES \"receivables\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1188,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_amount_check\" CHECK (\"original_amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1189,
+          "text": "ALTER TABLE \"receivables\" ADD CONSTRAINT \"receivables_dates_check\" CHECK (\"due_date\" >= \"issue_date\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1252,
+          "text": "('receivables','clients','client_id'), ('receivables','matters','matter_id'), ('receivables','contracts','contract_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1253,
+          "text": "('receivable_installments','receivables','receivable_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1260,
+          "text": "('renegotiations','receivables','original_receivable_id'), ('renegotiations','receivables','resulting_receivable_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1338,
+          "text": "FROM receivable_installments i JOIN receivables r ON r.id = i.receivable_id"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 48,
+          "text": "('receivables','receivables'), ('receivable_installments','receivables'),"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 50,
+          "text": "('financial_adjustments','receivables'), ('renegotiations','receivables'),"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 273,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.receivables;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 274,
+          "text": "CREATE POLICY tenant_select ON public.receivables FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 275,
+          "text": "USING (public.can_access_client_resource(organization_id, client_id, 'receivables', 'view'));"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 280,
+          "text": "public.has_permission(organization_id, 'receivables', 'view')"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 284,
+          "text": "SELECT 1 FROM public.receivables r"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 326,
+          "text": "public.has_permission(organization_id, 'receivables', 'view')"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 331,
+          "text": "JOIN public.receivables r ON r.id = ri.receivable_id AND r.organization_id = ri.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 346,
+          "text": "public.has_permission(organization_id, 'receivables', 'view')"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 350,
+          "text": "SELECT 1 FROM public.receivables r"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 54,
+          "text": "JOIN public.receivables r ON r.id = i.receivable_id"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "receivable_installments",
+      "model": "ReceivableInstallment",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "receivable",
+          "type": "Receivable",
+          "from": ["receivableId"]
+        },
+        {
+          "name": "allocations",
+          "type": "PaymentAllocation",
+          "from": []
+        },
+        {
+          "name": "adjustments",
+          "type": "FinancialAdjustment",
+          "from": []
+        },
+        {
+          "name": "documents",
+          "type": "Document",
+          "from": []
+        },
+        {
+          "name": "receipts",
+          "type": "PaymentReceipt",
+          "from": []
+        }
+      ],
+      "consumers": [
+        "apps/api/src/documents/documents.service.ts",
+        "apps/api/src/finance/finance.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 366,
+          "text": "CREATE TABLE \"receivable_installments\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 382,
+          "text": "CONSTRAINT \"receivable_installments_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 816,
+          "text": "CREATE INDEX \"receivable_installments_organization_id_due_date_status_idx\" ON \"receivable_installments\"(\"organization_id\", \"due_date\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 819,
+          "text": "CREATE UNIQUE INDEX \"receivable_installments_organization_id_receivable_id_seque_key\" ON \"receivable_installments\"(\"organization_id\", \"receivable_id\", \"sequence\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1047,
+          "text": "ALTER TABLE \"receivable_installments\" ADD CONSTRAINT \"receivable_installments_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1050,
+          "text": "ALTER TABLE \"receivable_installments\" ADD CONSTRAINT \"receivable_installments_receivable_id_fkey\" FOREIGN KEY (\"receivable_id\") REFERENCES \"receivables\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1071,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_installment_id_fkey\" FOREIGN KEY (\"installment_id\") REFERENCES \"receivable_installments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1077,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_installment_id_fkey\" FOREIGN KEY (\"installment_id\") REFERENCES \"receivable_installments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1107,
+          "text": "ALTER TABLE \"documents\" ADD CONSTRAINT \"documents_installment_id_fkey\" FOREIGN KEY (\"installment_id\") REFERENCES \"receivable_installments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1190,
+          "text": "ALTER TABLE \"receivable_installments\" ADD CONSTRAINT \"installments_amount_check\" CHECK (\"amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1191,
+          "text": "ALTER TABLE \"receivable_installments\" ADD CONSTRAINT \"installments_sequence_check\" CHECK (\"sequence\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1192,
+          "text": "ALTER TABLE \"receivable_installments\" ADD CONSTRAINT \"installments_version_check\" CHECK (\"version\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1253,
+          "text": "('receivable_installments','receivables','receivable_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1256,
+          "text": "('payment_allocations','payments','payment_id'), ('payment_allocations','receivable_installments','installment_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1258,
+          "text": "('financial_adjustments','receivable_installments','installment_id'), ('financial_adjustments','payments','payment_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1264,
+          "text": "('documents','receivable_installments','installment_id'), ('documents','payments','payment_id'), ('documents','users','created_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1338,
+          "text": "FROM receivable_installments i JOIN receivables r ON r.id = i.receivable_id"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 48,
+          "text": "('receivables','receivables'), ('receivable_installments','receivables'),"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 277,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.receivable_installments;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 278,
+          "text": "CREATE POLICY tenant_select ON public.receivable_installments FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 285,
+          "text": "WHERE r.id = receivable_installments.receivable_id AND r.organization_id = receivable_installments.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 286,
+          "text": "AND r.client_id = public.current_client_id(receivable_installments.organization_id)"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 330,
+          "text": "SELECT 1 FROM public.receivable_installments ri"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 8,
+          "text": "installment_id uuid REFERENCES public.receivable_installments(id) ON DELETE RESTRICT ON UPDATE CASCADE,"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 40,
+          "text": "('receivable_installments', 'installment_id'), ('expenses', 'expense_id'),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 53,
+          "text": "SELECT r.client_id INTO target_client FROM public.receivable_installments i"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "payments",
+      "model": "Payment",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "client",
+          "type": "Client",
+          "from": ["clientId"]
+        },
+        {
+          "name": "allocations",
+          "type": "PaymentAllocation",
+          "from": []
+        },
+        {
+          "name": "adjustments",
+          "type": "FinancialAdjustment",
+          "from": []
+        },
+        {
+          "name": "reversals",
+          "type": "PaymentReversal",
+          "from": []
+        },
+        {
+          "name": "changeRequests",
+          "type": "PaymentChangeRequest",
+          "from": []
+        },
+        {
+          "name": "documents",
+          "type": "Document",
+          "from": []
+        },
+        {
+          "name": "receipts",
+          "type": "PaymentReceipt",
+          "from": []
+        }
+      ],
+      "consumers": [
+        "apps/api/src/documents/documents.service.ts",
+        "apps/api/src/finance/finance.service.ts",
+        "apps/api/src/finance/receipt.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 386,
+          "text": "CREATE TABLE \"payments\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 407,
+          "text": "CONSTRAINT \"payments_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 822,
+          "text": "CREATE INDEX \"payments_organization_id_client_id_status_idx\" ON \"payments\"(\"organization_id\", \"client_id\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 825,
+          "text": "CREATE UNIQUE INDEX \"payments_organization_id_reference_key\" ON \"payments\"(\"organization_id\", \"reference\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 828,
+          "text": "CREATE UNIQUE INDEX \"payments_organization_id_external_id_key\" ON \"payments\"(\"organization_id\", \"external_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 831,
+          "text": "CREATE UNIQUE INDEX \"payments_organization_id_idempotency_key_key\" ON \"payments\"(\"organization_id\", \"idempotency_key\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1053,
+          "text": "ALTER TABLE \"payments\" ADD CONSTRAINT \"payments_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1056,
+          "text": "ALTER TABLE \"payments\" ADD CONSTRAINT \"payments_client_id_fkey\" FOREIGN KEY (\"client_id\") REFERENCES \"clients\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1062,
+          "text": "ALTER TABLE \"payment_reversals\" ADD CONSTRAINT \"payment_reversals_original_payment_id_fkey\" FOREIGN KEY (\"original_payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1068,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_payment_id_fkey\" FOREIGN KEY (\"payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1080,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_payment_id_fkey\" FOREIGN KEY (\"payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1110,
+          "text": "ALTER TABLE \"documents\" ADD CONSTRAINT \"documents_payment_id_fkey\" FOREIGN KEY (\"payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1193,
+          "text": "ALTER TABLE \"payments\" ADD CONSTRAINT \"payments_amount_check\" CHECK (\"amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1194,
+          "text": "ALTER TABLE \"payments\" ADD CONSTRAINT \"payments_version_check\" CHECK (\"version\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1195,
+          "text": "ALTER TABLE \"payments\" ADD CONSTRAINT \"payments_idempotency_hash_check\" CHECK (\"idempotency_hash\" ~ '^[a-f0-9]{64}$');"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1254,
+          "text": "('payments','clients','client_id'), ('payments','users','confirmed_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1255,
+          "text": "('payment_reversals','payments','original_payment_id'), ('payment_reversals','users','reversed_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1256,
+          "text": "('payment_allocations','payments','payment_id'), ('payment_allocations','receivable_installments','installment_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1258,
+          "text": "('financial_adjustments','receivable_installments','installment_id'), ('financial_adjustments','payments','payment_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1264,
+          "text": "('documents','receivable_installments','installment_id'), ('documents','payments','payment_id'), ('documents','users','created_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1306,
+          "text": "RAISE EXCEPTION 'Confirmed payments cannot be deleted' USING ERRCODE = 'integrity_constraint_violation';"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1318,
+          "text": "CREATE TRIGGER \"protect_confirmed_payments\" BEFORE UPDATE OR DELETE ON \"payments\" FOR EACH ROW EXECUTE FUNCTION public.protect_confirmed_payment();"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1336,
+          "text": "FROM payments p WHERE p.id = NEW.payment_id AND p.organization_id = NEW.organization_id FOR UPDATE;"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 49,
+          "text": "('payments','payments'), ('payment_reversals','payments'), ('payment_allocations','payments'),"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 291,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.payments;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 292,
+          "text": "CREATE POLICY tenant_select ON public.payments FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 293,
+          "text": "USING (public.can_access_client_resource(organization_id, client_id, 'payments', 'view'));"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 298,
+          "text": "public.has_permission(organization_id, 'payments', 'view')"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 302,
+          "text": "SELECT 1 FROM public.payments p"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 312,
+          "text": "public.has_permission(organization_id, 'payments', 'view')"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 316,
+          "text": "SELECT 1 FROM public.payments p"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 336,
+          "text": "SELECT 1 FROM public.payments p"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 53,
+          "text": "FOREIGN KEY (\"payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE,"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 61,
+          "text": "FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organization('payments', 'payment_id');"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 10,
+          "text": "payment_id uuid UNIQUE REFERENCES public.payments(id) ON DELETE RESTRICT ON UPDATE CASCADE,"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 41,
+          "text": "('payments', 'payment_id'), ('users', 'submitted_by_id'), ('users', 'reviewed_by_id')"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "payment_allocations",
+      "model": "PaymentAllocation",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "payment",
+          "type": "Payment",
+          "from": ["paymentId"]
+        },
+        {
+          "name": "installment",
+          "type": "ReceivableInstallment",
+          "from": ["installmentId"]
+        }
+      ],
+      "consumers": ["apps/api/src/finance/finance.service.ts"],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 424,
+          "text": "CREATE TABLE \"payment_allocations\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 435,
+          "text": "CONSTRAINT \"payment_allocations_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 840,
+          "text": "CREATE INDEX \"payment_allocations_organization_id_installment_id_idx\" ON \"payment_allocations\"(\"organization_id\", \"installment_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 843,
+          "text": "CREATE UNIQUE INDEX \"payment_allocations_organization_id_payment_id_installment__key\" ON \"payment_allocations\"(\"organization_id\", \"payment_id\", \"installment_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1065,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1068,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_payment_id_fkey\" FOREIGN KEY (\"payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1071,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_installment_id_fkey\" FOREIGN KEY (\"installment_id\") REFERENCES \"receivable_installments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1197,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_amount_check\" CHECK (\"amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1198,
+          "text": "ALTER TABLE \"payment_allocations\" ADD CONSTRAINT \"payment_allocations_reversal_check\" CHECK ((\"reversed_at\" IS NULL) = (\"reversed_by_id\" IS NULL));"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1256,
+          "text": "('payment_allocations','payments','payment_id'), ('payment_allocations','receivable_installments','installment_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1257,
+          "text": "('payment_allocations','users','created_by_id'), ('payment_allocations','users','reversed_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1348,
+          "text": "SELECT COALESCE(SUM(amount), 0) INTO payment_allocated FROM payment_allocations"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1357,
+          "text": "SELECT COALESCE(SUM(amount), 0) INTO installment_allocated FROM payment_allocations"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1366,
+          "text": "CREATE TRIGGER \"validate_payment_allocations\" BEFORE INSERT OR UPDATE OF payment_id, installment_id, amount, reversed_at ON \"payment_allocations\" FOR EACH ROW EXECUTE FUNCTION public.validate_payment_allocation();"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 49,
+          "text": "('payments','payments'), ('payment_reversals','payments'), ('payment_allocations','payments'),"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 62,
+          "text": "IF relation.table_name NOT IN ('matter_stage_history', 'payment_reversals', 'payment_allocations', 'document_versions', 'task_history', 'audit_logs', 'activity_events') THEN"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 309,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.payment_allocations;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 310,
+          "text": "CREATE POLICY tenant_select ON public.payment_allocations FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 317,
+          "text": "WHERE p.id = payment_allocations.payment_id AND p.organization_id = payment_allocations.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 318,
+          "text": "AND p.client_id = public.current_client_id(payment_allocations.organization_id)"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "payment_reversals",
+      "model": "PaymentReversal",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "originalPayment",
+          "type": "Payment",
+          "from": ["originalPaymentId"]
+        }
+      ],
+      "consumers": ["apps/api/src/finance/finance.service.ts"],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 411,
+          "text": "CREATE TABLE \"payment_reversals\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 420,
+          "text": "CONSTRAINT \"payment_reversals_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 834,
+          "text": "CREATE UNIQUE INDEX \"payment_reversals_original_payment_id_key\" ON \"payment_reversals\"(\"original_payment_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 837,
+          "text": "CREATE INDEX \"payment_reversals_organization_id_reversed_at_idx\" ON \"payment_reversals\"(\"organization_id\", \"reversed_at\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1059,
+          "text": "ALTER TABLE \"payment_reversals\" ADD CONSTRAINT \"payment_reversals_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1062,
+          "text": "ALTER TABLE \"payment_reversals\" ADD CONSTRAINT \"payment_reversals_original_payment_id_fkey\" FOREIGN KEY (\"original_payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1196,
+          "text": "ALTER TABLE \"payment_reversals\" ADD CONSTRAINT \"payment_reversals_amount_check\" CHECK (\"amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1255,
+          "text": "('payment_reversals','payments','original_payment_id'), ('payment_reversals','users','reversed_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1299,
+          "text": "CREATE TRIGGER \"immutable_payment_reversals\" BEFORE UPDATE OR DELETE ON \"payment_reversals\" FOR EACH ROW EXECUTE FUNCTION public.reject_immutable_mutation();"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 49,
+          "text": "('payments','payments'), ('payment_reversals','payments'), ('payment_allocations','payments'),"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 62,
+          "text": "IF relation.table_name NOT IN ('matter_stage_history', 'payment_reversals', 'payment_allocations', 'document_versions', 'task_history', 'audit_logs', 'activity_events') THEN"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 295,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.payment_reversals;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 296,
+          "text": "CREATE POLICY tenant_select ON public.payment_reversals FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 303,
+          "text": "WHERE p.id = payment_reversals.original_payment_id AND p.organization_id = payment_reversals.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 304,
+          "text": "AND p.client_id = public.current_client_id(payment_reversals.organization_id)"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "payment_change_requests",
+      "model": "PaymentChangeRequest",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "No explicit browser grant; platform defaults require runtime check",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "payment",
+          "type": "Payment",
+          "from": ["paymentId"]
+        }
+      ],
+      "consumers": ["apps/api/src/finance/finance.service.ts"],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 5,
+          "text": "CREATE TABLE \"payment_change_requests\" ("
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 17,
+          "text": "CONSTRAINT \"payment_change_requests_pkey\" PRIMARY KEY (\"id\"),"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 18,
+          "text": "CONSTRAINT \"payment_change_requests_reason_check\" CHECK (length(btrim(\"reason\")) BETWEEN 3 AND 500),"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 19,
+          "text": "CONSTRAINT \"payment_change_requests_proposed_data_check\" CHECK (jsonb_typeof(\"proposed_data\") = 'object'),"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 20,
+          "text": "CONSTRAINT \"payment_change_requests_review_check\" CHECK ("
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 26,
+          "text": "CREATE INDEX \"payment_change_requests_organization_id_status_created_at_idx\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 27,
+          "text": "ON \"payment_change_requests\"(\"organization_id\", \"status\", \"created_at\");"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 28,
+          "text": "CREATE INDEX \"payment_change_requests_organization_id_payment_id_created_at_idx\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 29,
+          "text": "ON \"payment_change_requests\"(\"organization_id\", \"payment_id\", \"created_at\");"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 49,
+          "text": "ALTER TABLE \"payment_change_requests\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 50,
+          "text": "ADD CONSTRAINT \"payment_change_requests_organization_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 52,
+          "text": "ADD CONSTRAINT \"payment_change_requests_payment_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 54,
+          "text": "ADD CONSTRAINT \"payment_change_requests_created_by_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 56,
+          "text": "ADD CONSTRAINT \"payment_change_requests_reviewed_by_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 59,
+          "text": "CREATE TRIGGER \"tenant_payment_change_requests_payment_id\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 60,
+          "text": "BEFORE INSERT OR UPDATE OF \"organization_id\", \"payment_id\" ON \"payment_change_requests\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 62,
+          "text": "CREATE TRIGGER \"tenant_payment_change_requests_created_by_id\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 63,
+          "text": "BEFORE INSERT OR UPDATE OF \"organization_id\", \"created_by_id\" ON \"payment_change_requests\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 65,
+          "text": "CREATE TRIGGER \"tenant_payment_change_requests_reviewed_by_id\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 66,
+          "text": "BEFORE INSERT OR UPDATE OF \"organization_id\", \"reviewed_by_id\" ON \"payment_change_requests\""
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 69,
+          "text": "ALTER TABLE \"payment_change_requests\" ENABLE ROW LEVEL SECURITY;"
+        },
+        {
+          "path": "supabase/migrations/20261021150000_access_alerts_and_payment_change_requests.sql",
+          "line": 70,
+          "text": "ALTER TABLE \"payment_change_requests\" FORCE ROW LEVEL SECURITY;"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "financial_adjustments",
+      "model": "FinancialAdjustment",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "installment",
+          "type": "ReceivableInstallment",
+          "from": ["installmentId"]
+        },
+        {
+          "name": "payment",
+          "type": "Payment",
+          "from": ["paymentId"]
+        }
+      ],
+      "consumers": ["apps/api/src/finance/finance.service.ts"],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 439,
+          "text": "CREATE TABLE \"financial_adjustments\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 453,
+          "text": "CONSTRAINT \"financial_adjustments_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 846,
+          "text": "CREATE INDEX \"financial_adjustments_organization_id_installment_id_idx\" ON \"financial_adjustments\"(\"organization_id\", \"installment_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 849,
+          "text": "CREATE INDEX \"financial_adjustments_organization_id_payment_id_idx\" ON \"financial_adjustments\"(\"organization_id\", \"payment_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1074,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1077,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_installment_id_fkey\" FOREIGN KEY (\"installment_id\") REFERENCES \"receivable_installments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1080,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_payment_id_fkey\" FOREIGN KEY (\"payment_id\") REFERENCES \"payments\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1199,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_amount_check\" CHECK (\"amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1200,
+          "text": "ALTER TABLE \"financial_adjustments\" ADD CONSTRAINT \"financial_adjustments_target_check\" CHECK (num_nonnulls(\"installment_id\", \"payment_id\") = 1);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1258,
+          "text": "('financial_adjustments','receivable_installments','installment_id'), ('financial_adjustments','payments','payment_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1259,
+          "text": "('financial_adjustments','users','created_by_id'), ('financial_adjustments','users','approved_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1355,
+          "text": "INTO installment_adjusted FROM financial_adjustments"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 50,
+          "text": "('financial_adjustments','receivables'), ('renegotiations','receivables'),"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 323,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.financial_adjustments;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 324,
+          "text": "CREATE POLICY tenant_select ON public.financial_adjustments FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 332,
+          "text": "WHERE ri.id = financial_adjustments.installment_id AND ri.organization_id = financial_adjustments.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 333,
+          "text": "AND r.client_id = public.current_client_id(financial_adjustments.organization_id)"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 337,
+          "text": "WHERE p.id = financial_adjustments.payment_id AND p.organization_id = financial_adjustments.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 338,
+          "text": "AND p.client_id = public.current_client_id(financial_adjustments.organization_id)"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "renegotiations",
+      "model": "Renegotiation",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "originalReceivable",
+          "type": "Receivable",
+          "from": ["originalReceivableId"]
+        },
+        {
+          "name": "resultingReceivable",
+          "type": "Receivable",
+          "from": ["resultingReceivableId"]
+        }
+      ],
+      "consumers": ["apps/api/src/finance/finance.service.ts"],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 457,
+          "text": "CREATE TABLE \"renegotiations\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 470,
+          "text": "CONSTRAINT \"renegotiations_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 852,
+          "text": "CREATE INDEX \"renegotiations_organization_id_original_receivable_id_statu_idx\" ON \"renegotiations\"(\"organization_id\", \"original_receivable_id\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1083,
+          "text": "ALTER TABLE \"renegotiations\" ADD CONSTRAINT \"renegotiations_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1086,
+          "text": "ALTER TABLE \"renegotiations\" ADD CONSTRAINT \"renegotiations_original_receivable_id_fkey\" FOREIGN KEY (\"original_receivable_id\") REFERENCES \"receivables\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1089,
+          "text": "ALTER TABLE \"renegotiations\" ADD CONSTRAINT \"renegotiations_resulting_receivable_id_fkey\" FOREIGN KEY (\"resulting_receivable_id\") REFERENCES \"receivables\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1260,
+          "text": "('renegotiations','receivables','original_receivable_id'), ('renegotiations','receivables','resulting_receivable_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1261,
+          "text": "('renegotiations','users','created_by_id'), ('renegotiations','users','approved_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 50,
+          "text": "('financial_adjustments','receivables'), ('renegotiations','receivables'),"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 343,
+          "text": "DROP POLICY IF EXISTS tenant_select ON public.renegotiations;"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 344,
+          "text": "CREATE POLICY tenant_select ON public.renegotiations FOR SELECT TO authenticated"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 351,
+          "text": "WHERE r.id = renegotiations.original_receivable_id AND r.organization_id = renegotiations.organization_id"
+        },
+        {
+          "path": "supabase/migrations/20260809120000_auth_memberships_hardening.sql",
+          "line": 352,
+          "text": "AND r.client_id = public.current_client_id(renegotiations.organization_id)"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "expenses",
+      "model": "Expense",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "matter",
+          "type": "Matter",
+          "from": ["matterId"]
+        },
+        {
+          "name": "client",
+          "type": "Client",
+          "from": ["clientId"]
+        },
+        {
+          "name": "responsibleUser",
+          "type": "User",
+          "from": ["responsibleUserId"]
+        },
+        {
+          "name": "rejectedBy",
+          "type": "User",
+          "from": ["rejectedById"]
+        },
+        {
+          "name": "documents",
+          "type": "Document",
+          "from": []
+        },
+        {
+          "name": "receipts",
+          "type": "PaymentReceipt",
+          "from": []
+        }
+      ],
+      "consumers": [
+        "apps/api/src/documents/documents.service.ts",
+        "apps/api/src/finance/finance.service.ts",
+        "apps/api/src/finance/receipt.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 474,
+          "text": "CREATE TABLE \"expenses\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 492,
+          "text": "CONSTRAINT \"expenses_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 855,
+          "text": "CREATE INDEX \"expenses_organization_id_status_due_date_idx\" ON \"expenses\"(\"organization_id\", \"status\", \"due_date\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 858,
+          "text": "CREATE INDEX \"expenses_organization_id_matter_id_idx\" ON \"expenses\"(\"organization_id\", \"matter_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1092,
+          "text": "ALTER TABLE \"expenses\" ADD CONSTRAINT \"expenses_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1095,
+          "text": "ALTER TABLE \"expenses\" ADD CONSTRAINT \"expenses_matter_id_fkey\" FOREIGN KEY (\"matter_id\") REFERENCES \"matters\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1201,
+          "text": "ALTER TABLE \"expenses\" ADD CONSTRAINT \"expenses_amount_check\" CHECK (\"amount\" > 0);"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1262,
+          "text": "('expenses','matters','matter_id'), ('expenses','users','approved_by_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 3,
+          "text": "ALTER TABLE \"expenses\" ADD COLUMN \"client_id\" UUID;"
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 7,
+          "text": "CREATE INDEX \"expenses_organization_id_client_id_idx\" ON \"expenses\"(\"organization_id\", \"client_id\");"
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 11,
+          "text": "ALTER TABLE \"expenses\""
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 12,
+          "text": "ADD CONSTRAINT \"expenses_client_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 19,
+          "text": "FOREIGN KEY (\"expense_id\") REFERENCES \"expenses\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 21,
+          "text": "CREATE TRIGGER \"tenant_expenses_client_id\""
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 22,
+          "text": "BEFORE INSERT OR UPDATE OF \"organization_id\", \"client_id\" ON \"expenses\""
+        },
+        {
+          "path": "supabase/migrations/20260807170000_finance_document_links.sql",
+          "line": 29,
+          "text": "FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organization('expenses', 'expense_id');"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 51,
+          "text": "('expenses','expenses'), ('documents','documents'), ('document_versions','documents'),"
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 5,
+          "text": "ALTER TABLE public.\"expenses\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 16,
+          "text": "WHERE conrelid = 'public.expenses'::regclass"
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 17,
+          "text": "AND conname = 'expenses_responsible_user_id_fkey'"
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 19,
+          "text": "ALTER TABLE public.\"expenses\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 20,
+          "text": "ADD CONSTRAINT \"expenses_responsible_user_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 27,
+          "text": "WHERE conrelid = 'public.expenses'::regclass"
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 28,
+          "text": "AND conname = 'expenses_rejected_by_id_fkey'"
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 30,
+          "text": "ALTER TABLE public.\"expenses\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 31,
+          "text": "ADD CONSTRAINT \"expenses_rejected_by_id_fkey\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 38,
+          "text": "CREATE INDEX IF NOT EXISTS \"expenses_organization_id_status_paid_at_idx\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 39,
+          "text": "ON public.\"expenses\"(\"organization_id\", \"status\", \"paid_at\");"
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 40,
+          "text": "CREATE INDEX IF NOT EXISTS \"expenses_organization_id_responsible_user_id_status_idx\""
+        },
+        {
+          "path": "supabase/migrations/20261027150000_expense_workflow.sql",
+          "line": 41,
+          "text": "ON public.\"expenses\"(\"organization_id\", \"responsible_user_id\", \"status\");"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 9,
+          "text": "expense_id uuid REFERENCES public.expenses(id) ON DELETE RESTRICT ON UPDATE CASCADE,"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 40,
+          "text": "('receivable_installments', 'installment_id'), ('expenses', 'expense_id'),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 57,
+          "text": "SELECT e.client_id INTO target_client FROM public.expenses e"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "payment_receipts",
+      "model": "PaymentReceipt",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "No explicit browser grant; platform defaults require runtime check",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        },
+        {
+          "name": "client",
+          "type": "Client",
+          "from": ["clientId"]
+        },
+        {
+          "name": "document",
+          "type": "Document",
+          "from": ["documentId"]
+        },
+        {
+          "name": "installment",
+          "type": "ReceivableInstallment",
+          "from": ["installmentId"]
+        },
+        {
+          "name": "expense",
+          "type": "Expense",
+          "from": ["expenseId"]
+        },
+        {
+          "name": "payment",
+          "type": "Payment",
+          "from": ["paymentId"]
+        },
+        {
+          "name": "submittedBy",
+          "type": "User",
+          "from": ["submittedById"]
+        },
+        {
+          "name": "reviewedBy",
+          "type": "User",
+          "from": ["reviewedById"]
+        }
+      ],
+      "consumers": [
+        "apps/api/src/finance/finance.service.ts",
+        "apps/api/src/finance/receipt.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 3,
+          "text": "CREATE TABLE public.payment_receipts ("
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 22,
+          "text": "CONSTRAINT payment_receipts_target_check CHECK (num_nonnulls(installment_id, expense_id) = 1),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 23,
+          "text": "CONSTRAINT payment_receipts_status_check CHECK (status IN ('PENDING_REVIEW', 'CONFIRMED', 'REJECTED', 'NEEDS_CORRECTION')),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 24,
+          "text": "CONSTRAINT payment_receipts_hash_check CHECK (sha256 ~ '^[0-9a-f]{64}$'),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 25,
+          "text": "CONSTRAINT payment_receipts_organization_hash_key UNIQUE (organization_id, sha256),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 26,
+          "text": "CONSTRAINT payment_receipts_fields_check CHECK (jsonb_typeof(extracted_fields) = 'object'),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 27,
+          "text": "CONSTRAINT payment_receipts_reconciliation_check CHECK (jsonb_typeof(reconciliation) = 'object'),"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 28,
+          "text": "CONSTRAINT payment_receipts_history_check CHECK (jsonb_typeof(review_history) = 'array')"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 31,
+          "text": "CREATE INDEX payment_receipts_organization_client_status_idx ON public.payment_receipts(organization_id, client_id, status);"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 32,
+          "text": "CREATE INDEX payment_receipts_organization_installment_status_idx ON public.payment_receipts(organization_id, installment_id, status);"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 33,
+          "text": "CREATE INDEX payment_receipts_organization_expense_status_idx ON public.payment_receipts(organization_id, expense_id, status);"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 43,
+          "text": "EXECUTE format('CREATE TRIGGER %I BEFORE INSERT OR UPDATE OF organization_id, %I ON public.payment_receipts FOR EACH ROW EXECUTE FUNCTION public.enforce_same_organization(%L, %L)',"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 44,
+          "text": "'tenant_payment_receipts_' || item.column_name, item.column_name, item.parent_table, item.column_name);"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 70,
+          "text": "CREATE TRIGGER payment_receipts_validate_target BEFORE INSERT OR UPDATE OF organization_id, client_id, document_id, installment_id, expense_id"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 71,
+          "text": "ON public.payment_receipts FOR EACH ROW EXECUTE FUNCTION public.validate_payment_receipt_target();"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 73,
+          "text": "ALTER TABLE public.payment_receipts ENABLE ROW LEVEL SECURITY;"
+        },
+        {
+          "path": "supabase/migrations/20261031120000_payment_receipts.sql",
+          "line": 74,
+          "text": "ALTER TABLE public.payment_receipts FORCE ROW LEVEL SECURITY;"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 56,
+          "text": "OR EXISTS (SELECT 1 FROM public.payment_receipts r WHERE r.document_id=d.id)"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    },
+    {
+      "table": "audit_logs",
+      "model": "AuditLog",
+      "owner": "NOT_OBSERVED; migration executor owns versioned CREATE TABLE; disposable runner postgres expected",
+      "effectivePrivileges": "NOT_EXECUTED; financial-security-ci collects relation/column ACL, inherited roles, RLS, triggers, constraints",
+      "versionedGrant": "20260812150000 grants authenticated SELECT/INSERT/UPDATE/DELETE; 20261101100000 preserves financial DML",
+      "clientAfter": "DML revoked from PUBLIC,anon,authenticated, explicit column checks; restrictive INSERT/UPDATE/DELETE; SELECT untouched",
+      "relations": [
+        {
+          "name": "organization",
+          "type": "Organization",
+          "from": ["organizationId"]
+        }
+      ],
+      "consumers": [
+        "apps/api/src/audit/audit.controller.ts",
+        "apps/api/src/common/audit.service.ts",
+        "apps/api/src/finance/finance.service.ts"
+      ],
+      "sqlReferences": [
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 670,
+          "text": "CREATE TABLE \"audit_logs\" ("
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 686,
+          "text": "CONSTRAINT \"audit_logs_pkey\" PRIMARY KEY (\"id\")"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 921,
+          "text": "CREATE INDEX \"audit_logs_organization_id_resource_resource_id_created_at_idx\" ON \"audit_logs\"(\"organization_id\", \"resource\", \"resource_id\", \"created_at\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 924,
+          "text": "CREATE INDEX \"audit_logs_organization_id_actor_user_id_created_at_idx\" ON \"audit_logs\"(\"organization_id\", \"actor_user_id\", \"created_at\");"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1176,
+          "text": "ALTER TABLE \"audit_logs\" ADD CONSTRAINT \"audit_logs_organization_id_fkey\" FOREIGN KEY (\"organization_id\") REFERENCES \"organizations\"(\"id\") ON DELETE RESTRICT ON UPDATE CASCADE;"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1272,
+          "text": "('notifications','users','user_id'), ('audit_logs','users','actor_user_id'), ('audit_logs','sessions','actor_session_id'),"
+        },
+        {
+          "path": "supabase/migrations/20260807134500_initial_foundation.sql",
+          "line": 1296,
+          "text": "CREATE TRIGGER \"immutable_audit_logs\" BEFORE UPDATE OR DELETE ON \"audit_logs\" FOR EACH ROW EXECUTE FUNCTION public.reject_immutable_mutation();"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 54,
+          "text": "('calendar_events','calendar'), ('notifications','notifications'), ('audit_logs','audit'),"
+        },
+        {
+          "path": "supabase/migrations/20260807180000_supabase_auth_rls.sql",
+          "line": 62,
+          "text": "IF relation.table_name NOT IN ('matter_stage_history', 'payment_reversals', 'payment_allocations', 'document_versions', 'task_history', 'audit_logs', 'activity_events') THEN"
+        },
+        {
+          "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+          "line": 7,
+          "text": "FOREACH t IN ARRAY ARRAY['contracts','receivables','receivable_installments','payments','payment_allocations','payment_reversals','payment_change_requests','financial_adjustments','renegotiations','expenses','payment_receipts','audit_logs',"
+        }
+      ],
+      "domain": "API controller permission/actor tenant, FinanceService or ReceiptService serializable transactions and AuditService; API read filters remain mandatory"
+    }
+  ]
+}
