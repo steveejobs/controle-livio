@@ -5,6 +5,39 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { isAbsolute } from 'node:path';
 assert.ok(process.argv[2] && isAbsolute(process.argv[2]));
+const foundation = readFileSync(
+  new URL('../../../supabase/migrations/20260807134500_initial_foundation.sql', import.meta.url),
+  'utf8',
+);
+const actualTable = (name) => {
+  const ddl = foundation.match(new RegExp('CREATE TABLE "' + name + '" \\([\\s\\S]*?\\n\\);'));
+  assert.ok(ddl, 'Missing foundation table ' + name);
+  return ddl[0];
+};
+const migration = readFileSync(
+  new URL(
+    '../../../supabase/migrations/20261113100000_persistent_storage_recovery.sql',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const permissionBlock = (source) =>
+  source.slice(
+    source.lastIndexOf('INSERT INTO public.permissions('),
+    source.lastIndexOf('INSERT INTO public.role_permissions('),
+  );
+async function noInventedDefaults() {
+  const rows = (
+    await db.query(
+      "SELECT table_name,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name IN ('permissions','audit_logs') AND column_name='id' ORDER BY table_name",
+    )
+  ).rows;
+  assert.equal(rows.length, 2);
+  for (const row of rows) {
+    assert.equal(row.is_nullable, 'NO');
+    assert.equal(row.column_default, null, 'Do not invent UUID SQL defaults');
+  }
+}
 const { PGlite } = createRequire(import.meta.url)(process.argv[2]);
 const db = new PGlite(),
   checks = [];
@@ -29,11 +62,75 @@ try {
     CREATE TABLE public.clients(id uuid PRIMARY KEY,organization_id uuid,photo_storage_key text);
     CREATE TABLE public.document_signing_requests(id uuid PRIMARY KEY,organization_id uuid,signature_storage_key text,signature_sha256 text);
     CREATE TABLE public.notifications(id uuid PRIMARY KEY,organization_id uuid);
-    CREATE TABLE public.audit_logs(id uuid DEFAULT gen_random_uuid(),organization_id uuid,actor_user_id uuid,action text,resource text,resource_id uuid,"after" jsonb,metadata jsonb);
-    CREATE TABLE public.permissions(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),organization_id uuid,resource text,action text,description text,UNIQUE(organization_id,resource,action));
     CREATE TABLE public.roles(id uuid PRIMARY KEY,organization_id uuid,key text,is_system boolean);
     CREATE TABLE public.role_permissions(organization_id uuid,role_id uuid,permission_id uuid,UNIQUE(organization_id,role_id,permission_id));
     INSERT INTO organizations VALUES('${org}');INSERT INTO users VALUES('${user}','${org}');`);
+  await db.exec(foundation.match(/CREATE TYPE "AuditAction" AS ENUM [^;]+;/)[0]);
+  await db.exec(actualTable('permissions'));
+  await db.exec(actualTable('audit_logs'));
+  for (const ddl of foundation.match(/CREATE (?:UNIQUE )?INDEX [^;]+;/g) ?? [])
+    if (/ ON "(?:permissions|audit_logs)"\(/.test(ddl)) await db.exec(ddl);
+  for (const ddl of foundation.match(
+    /ALTER TABLE "(?:permissions|audit_logs)" ADD CONSTRAINT [^;]+;/g,
+  ) ?? [])
+    await db.exec(ddl);
+  await check('actual foundation DDL requires UUID ids without SQL defaults', noInventedDefaults);
+  await check(
+    'invented UUID defaults are detected and rolled back in the test database',
+    async () => {
+      for (const table of ['permissions', 'audit_logs']) {
+        await db.exec(
+          'BEGIN; ALTER TABLE ' + table + ' ALTER COLUMN id SET DEFAULT gen_random_uuid();',
+        );
+        try {
+          await assert.rejects(noInventedDefaults);
+        } finally {
+          await db.exec('ROLLBACK');
+        }
+      }
+      await noInventedDefaults();
+    },
+  );
+  await check(
+    'native pg_catalog UUID generator is present and returns distinct UUIDs',
+    async () => {
+      const r = (await db.query('SELECT gen_random_uuid()::text AS id FROM generate_series(1,16)'))
+        .rows;
+      assert.equal(new Set(r.map((x) => x.id)).size, 16);
+      assert.ok(
+        r.every((x) =>
+          /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(x.id),
+        ),
+      );
+      assert.ok(
+        (
+          await db.query(
+            "SELECT to_regprocedure('pg_catalog.gen_random_uuid()') IS NOT NULL AS present",
+          )
+        ).rows[0].present,
+      );
+    },
+  );
+  await check(
+    'three published pre-fix SQL inserts reproduce 23502 with the original DDL',
+    async () => {
+      for (const sql of [
+        "INSERT INTO permissions(organization_id,resource,action) VALUES('" +
+          org +
+          "','storage_recovery','view')",
+        "INSERT INTO permissions(organization_id,resource,action,description) VALUES('" +
+          org +
+          "','storage_recovery','manage','synthetic seed regression')",
+        "INSERT INTO audit_logs(organization_id,action,resource) VALUES('" +
+          org +
+          "','UPDATE','storage_recovery')",
+      ])
+        await assert.rejects(
+          db.exec(sql),
+          (error) => error.code === '23502' && error.column === 'id',
+        );
+    },
+  );
   await check('expansion executes on minimal PostgreSQL schema', () =>
     db.exec(
       readFileSync(
@@ -222,6 +319,88 @@ try {
       );
     },
   );
+  await check(
+    'permission migration and seed blocks are idempotent and keep existing UUIDs',
+    async () => {
+      const seed = readFileSync(new URL('../../../supabase/seed.sql', import.meta.url), 'utf8');
+      const query =
+        "SELECT id::text,organization_id::text,resource,action FROM permissions WHERE resource='storage_recovery' ORDER BY action";
+      const before = (await db.query(query)).rows;
+      assert.equal(before.length, 2);
+      for (let i = 0; i < 2; i++) {
+        await db.exec(permissionBlock(migration));
+        await db.exec(permissionBlock(seed));
+      }
+      assert.deepEqual((await db.query(query)).rows, before);
+      assert.equal(new Set(before.map((x) => x.id)).size, 2);
+      await assert.rejects(
+        db.exec(
+          'INSERT INTO permissions(id,organization_id,resource,action) SELECT gen_random_uuid(),organization_id,resource,action FROM permissions LIMIT 1',
+        ),
+        (error) => error.code === '23505',
+      );
+      await assert.rejects(
+        db.exec(
+          "INSERT INTO permissions(id,organization_id,resource,action) SELECT id,organization_id,resource||'_different',action FROM permissions LIMIT 1",
+        ),
+        (error) => error.code === '23505',
+      );
+    },
+  );
+  await check(
+    'transition audit UUIDs are distinct and actor organization event semantics survive',
+    async () => {
+      const auditOp = 'b1000000-0000-4000-8000-000000000063';
+      await db.exec(
+        "SET livio.recovery_actor='" +
+          user +
+          "'; INSERT INTO storage_upload_intents(id,organization_id,purpose,bucket,object_key,resource_type,resource_id,expected_sha256,idempotency_key,owner_token,lease_until,due_at) VALUES('" +
+          auditOp +
+          "','" +
+          org +
+          "','DOCUMENT','legal-documents','organizations/" +
+          org +
+          "/documents/audit/synthetic.pdf','document','" +
+          resource +
+          "','" +
+          hash +
+          "','audit-real-ddl',gen_random_uuid(),now()+interval '1 hour',now()); UPDATE storage_upload_intents SET state='UPLOADING' WHERE id='" +
+          auditOp +
+          "';",
+      );
+      const rows = (
+        await db.query(
+          'SELECT id::text,organization_id::text,actor_user_id::text,action::text,resource,resource_id::text,"after" FROM audit_logs WHERE resource_id=$1::uuid ORDER BY created_at,id',
+          [auditOp],
+        )
+      ).rows;
+      assert.equal(rows.length, 2);
+      assert.equal(new Set(rows.map((r) => r.id)).size, 2);
+      assert.ok(
+        rows.every(
+          (r) =>
+            r.organization_id === org &&
+            r.actor_user_id === user &&
+            r.action === 'UPDATE' &&
+            r.resource === 'storage_recovery',
+        ),
+      );
+      assert.deepEqual(rows.map((r) => r.after.state).sort(), ['PLANNED', 'UPLOADING']);
+      assert.equal(
+        (
+          await db.query(
+            "SELECT count(*)::int AS n FROM storage_recovery_events WHERE operation_id='" +
+              auditOp +
+              "' AND actor_user_id='" +
+              user +
+              "'",
+          )
+        ).rows[0].n,
+        2,
+      );
+    },
+  );
+  await noInventedDefaults();
   const ownerObjects = (
     await db.query(`SELECT 'RELATION:public.'||relname AS object FROM pg_class WHERE relnamespace='public'::regnamespace AND relname LIKE 'storage_%' AND relkind IN ('r','i')
     UNION ALL SELECT 'TYPE:public.'||typname FROM pg_type WHERE typnamespace='public'::regnamespace AND (typname LIKE 'storage_%' OR typname LIKE '_storage_%')

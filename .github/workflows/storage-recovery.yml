@@ -46,25 +46,18 @@ jobs:
       - name: Install hash-pinned qpdf
         run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
       - name: Prepare own disposable PostgreSQL Auth and Storage with versioned migrations
+        id: recovery-bootstrap
         run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
       - name: Start own loopback ClamAV
         run: node tools/qa/start-clamav-ci.mjs
       - name: Validate real scanner readiness
         run: node tools/qa/validate-clamav-ci.mjs --ready
       - name: Recovery contracts; missing mandatory proofs keep this step non-green
+        id: recovery-run
         env:
           QA_TIMINGS: 'false'
           LIVIO_QA_OUTPUT: ${{ runner.temp }}/livio-storage-recovery
         run: node tools/storage/recovery/run-ci.mjs
-      - name: Preserve sanitized recovery evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: storage-recovery-stage61
-          path: |
-            ${{ runner.temp }}/livio-storage-recovery/*.json
-            ${{ runner.temp }}/livio-storage-recovery/financial-api.log
-          if-no-files-found: ignore
       - name: Stop only the recorded disposable restore destination
         if: always()
         env:
@@ -73,7 +66,52 @@ jobs:
         run: node tools/storage/recovery/cleanup-target.mjs
       - name: Stop only own disposable Supabase
         if: always()
-        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || true
+        run: |
+          stop_code=0
+          npx --no-install supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || stop_code=$?
+          node tools/qa/supabase-start-diagnostics.mjs --cleanup-check "$stop_code"
+          exit "$stop_code"
       - name: Stop only own ClamAV
         if: always()
         run: node tools/qa/stop-clamav-ci.mjs
+      - name: Record sanitized evidence availability without raw fallback
+        if: always()
+        env:
+          LIVIO_QA_OUTPUT: ${{ runner.temp }}/livio-storage-recovery
+          BOOTSTRAP_OUTCOME: ${{ steps.recovery-bootstrap.outcome }}
+          CONTRACTS_OUTCOME: ${{ steps.recovery-run.outcome }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
+          import { resolve, relative, isAbsolute } from 'node:path';
+          assert.equal(process.platform, 'linux');
+          assert.equal(process.env.GITHUB_ACTIONS, 'true');
+          assert.ok(process.env.RUNNER_TEMP && process.env.LIVIO_QA_OUTPUT);
+          const out = resolve(process.env.LIVIO_QA_OUTPUT);
+          const boundary = relative(resolve(process.env.RUNNER_TEMP), out);
+          assert.ok(!boundary.startsWith('..') && !isAbsolute(boundary));
+          const diagnostics = resolve(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
+          const files = existsSync(diagnostics) ? readdirSync(diagnostics).filter(name => /^ci-prebuilt-.*\.json$/.test(name)) : [];
+          const present = file => existsSync(resolve(out, file));
+          const report = {
+            bootstrap: { outcome: process.env.BOOTSTRAP_OUTCOME, sanitizedDiagnostics: files },
+            financial: { present: present('workflow-stages/financial-stage3.json') },
+            recovery: { outcome: process.env.CONTRACTS_OUTCOME, present: present('storage-recovery-stage61.json') },
+            cleanup: { present: present('recovery-cleanup.json') },
+            unavailableReason: 'Missing files were not produced; consult recorded bootstrap/contracts outcomes. No raw CLI/log fallback is collected.'
+          };
+          mkdirSync(out, { recursive: true });
+          writeFileSync(resolve(out, 'evidence-availability.json'), JSON.stringify(report, null, 2) + '\n');
+          NODE
+      - name: Preserve sanitized recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: storage-recovery-stage61
+          path: |
+            ${{ runner.temp }}/livio-storage-recovery/*.json
+            ${{ runner.temp }}/livio-storage-recovery/workflow-stages/*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*.json
+            ${{ runner.temp }}/livio-storage-recovery/financial-api.log
+          if-no-files-found: ignore

@@ -285,8 +285,8 @@ VALUES ('17000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-00000000
 ON CONFLICT (id) DO NOTHING;
 
 -- Recovery administration: no browser table grants, only canonical Administrator.
-INSERT INTO public.permissions(organization_id,resource,action,description)
- SELECT o.id,'storage_recovery',a.action,'Storage recovery administration'
+INSERT INTO public.permissions(id,organization_id,resource,action,description)
+ SELECT gen_random_uuid(),o.id,'storage_recovery',a.action,'Storage recovery administration'
  FROM public.organizations o CROSS JOIN (VALUES ('view'),('manage')) a(action)
  ON CONFLICT(organization_id,resource,action) DO NOTHING;
 INSERT INTO public.role_permissions(organization_id,role_id,permission_id)

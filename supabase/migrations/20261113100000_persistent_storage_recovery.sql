@@ -188,8 +188,8 @@ BEGIN
     VALUES (NEW.organization_id,NEW.id,previous,NEW.state,
       CASE WHEN TG_OP='UPDATE' AND NEW.legal_hold AND NOT OLD.legal_hold THEN 'LEGAL_HOLD_APPLIED' WHEN TG_OP='UPDATE' AND NEW.abandoned_at IS NOT NULL AND OLD.abandoned_at IS NULL THEN 'UPLOAD_ABANDONED' ELSE coalesce(NEW.last_error_code,NEW.state) END,
       NEW.attempts,NEW.generation,actor);
-  INSERT INTO public.audit_logs(organization_id,actor_user_id,action,resource,resource_id,"after",metadata)
-    VALUES(NEW.organization_id,actor,'UPDATE','storage_recovery',NEW.id,
+  INSERT INTO public.audit_logs(id,organization_id,actor_user_id,action,resource,resource_id,"after",metadata)
+    VALUES(gen_random_uuid(),NEW.organization_id,actor,'UPDATE','storage_recovery',NEW.id,
       jsonb_build_object('from',previous,'state',NEW.state,'attempt',NEW.attempts,'generation',NEW.generation),
       jsonb_build_object('automated',actor IS NULL,'code',NEW.last_error_code));
   RETURN NEW;
@@ -298,8 +298,8 @@ REVOKE ALL ON FUNCTION public.storage_recovery_intent_guard(),public.storage_rec
   public.storage_recovery_append_only(),public.storage_recovery_reference_fence(),public.storage_recovery_object_fence(),public.storage_recovery_incident_guard()
   FROM PUBLIC,anon,authenticated,service_role;
 
-INSERT INTO public.permissions(organization_id,resource,action,description)
- SELECT o.id,'storage_recovery',a.action,'Recuperação administrativa de arquivos'
+INSERT INTO public.permissions(id,organization_id,resource,action,description)
+ SELECT gen_random_uuid(),o.id,'storage_recovery',a.action,'Recuperação administrativa de arquivos'
  FROM public.organizations o CROSS JOIN (VALUES ('view'),('manage')) a(action)
  ON CONFLICT(organization_id,resource,action) DO NOTHING;
 INSERT INTO public.role_permissions(organization_id,role_id,permission_id)
