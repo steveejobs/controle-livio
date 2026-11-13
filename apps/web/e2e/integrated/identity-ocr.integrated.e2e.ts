@@ -72,11 +72,18 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     ].map((name) => [name, 'NOT_EXECUTED']),
   );
   evidence.stages = stages;
+  // Evidence only: retain exact PostgreSQL int8 values without Number coercion.
+  const serializeEvidence = () =>
+    JSON.stringify(
+      evidence,
+      (_key, value: unknown) => (typeof value === 'bigint' ? value.toString() : value),
+      2,
+    );
   const checkpoint = (name: string, status = 'FAIL') => {
     stages[name] = status;
     evidence.lastCheckpoint = { name, status };
     mkdirSync(resolve(process.env.LIVIO_QA_OUTPUT!, 'workflow-stages'), { recursive: true });
-    writeFileSync(out, JSON.stringify(evidence, null, 2) + '\n');
+    writeFileSync(out, serializeEvidence() + '\n');
   };
   const org = '10000000-0000-4000-8000-000000000001';
   const approvedCpf = syntheticCpf(),
@@ -475,12 +482,12 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     if (!hadPrimaryFailure && secondaryFailure) evidence.status = 'FAIL';
     try {
       mkdirSync(resolve(process.env.LIVIO_QA_OUTPUT!, 'workflow-stages'), { recursive: true });
-      writeFileSync(out, JSON.stringify(evidence, null, 2) + '\n');
+      writeFileSync(out, serializeEvidence() + '\n');
     } catch (captureError) {
       captureFailure('write', captureError);
       evidence.status = 'FAIL';
       // The controlled synthetic evidence falls back to the CI log if disk writing fails.
-      console.error('LIVIO_SYNTHETIC_OCR_CAPTURE_FAILURE ' + JSON.stringify(evidence));
+      console.error('LIVIO_SYNTHETIC_OCR_CAPTURE_FAILURE ' + serializeEvidence());
     }
   }
   if (hadPrimaryFailure) throw primaryFailure;
