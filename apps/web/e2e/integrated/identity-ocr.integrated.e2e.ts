@@ -225,6 +225,8 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     const uploaded = await uploadedResponse;
     expect(uploaded.status()).toBe(201);
     const row = await db.client.findUniqueOrThrow({ where: { id: body.id } });
+    evidence.clientId = row.id;
+    evidence.organizationId = row.organizationId;
     checkpoint('postgresql');
     expect(row.displayName).toBe(name);
     expect(row.taxIdNormalized).toBe(approvedCpf);
@@ -242,6 +244,7 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
       where: { clientId: row.id },
       include: { versions: true },
     });
+    evidence.documentId = document.id;
     checkpoint('document');
     expect(document.organizationId).toBe(org);
     expect(document.versions).toHaveLength(1);
@@ -285,11 +288,29 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
       '1980-01-01',
     );
     checkpoint('reopen', 'PASS');
-    await page
-      .locator('#primary-navigation')
-      .getByRole('button', { name: 'Clientes', exact: true })
-      .click();
-    await page.getByRole('button', { name: 'Novo cliente', exact: true }).click();
+    const navigation = {
+      detailOpen: false,
+      listVisible: false,
+      newClientVisible: false,
+      formOpen: false,
+    };
+    evidence.duplicateNavigation = navigation;
+    const backToList = page.getByRole('button', { name: 'Voltar à lista', exact: true });
+    await expect(backToList).toHaveCount(1);
+    await expect(backToList).toBeVisible();
+    navigation.detailOpen = true;
+    await backToList.click();
+    const originalClientRow = page.getByRole('row').filter({ hasText: name });
+    await expect(originalClientRow).toHaveCount(1);
+    await expect(originalClientRow).toBeVisible();
+    navigation.listVisible = true;
+    const newClient = page.getByRole('button', { name: 'Novo cliente', exact: true });
+    await expect(newClient).toHaveCount(1);
+    await expect(newClient).toBeVisible();
+    navigation.newClientVisible = true;
+    await newClient.click();
+    await expect(form.getByLabel('Nome completo', { exact: true })).toBeVisible();
+    navigation.formOpen = true;
     await form.getByLabel('Nome completo', { exact: true }).fill(name + ' DUPLICADO');
     await form.getByLabel('CPF', { exact: true }).fill(approvedCpf);
     await form
@@ -303,18 +324,84 @@ test('identity: real image, Tesseract, field decisions, API, PostgreSQL and reop
     const objectsBefore = await db.$queryRaw<
       Array<{ count: number }>
     >`SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'`;
+    const originalSnapshot = async () => {
+      const [client, linkedDocument, versions, audit, history] = await Promise.all([
+        db.client.findUniqueOrThrow({ where: { id: row.id } }),
+        db.document.findUniqueOrThrow({
+          where: { id: document.id },
+          include: { versions: { orderBy: { id: 'asc' } } },
+        }),
+        db.documentVersion.count({ where: { organizationId: org } }),
+        db.auditLog.findMany({
+          where: {
+            organizationId: org,
+            OR: [
+              { resource: 'client', action: 'CREATE' },
+              { resourceId: { in: [row.id, document.id] }, action: { not: 'VIEW' } },
+            ],
+          },
+          select: { id: true, action: true, resource: true, resourceId: true, createdAt: true },
+          orderBy: { id: 'asc' },
+        }),
+        db.activityEvent.findMany({
+          where: { organizationId: org, subjectType: 'client', subjectId: row.id },
+          select: { id: true, type: true, subjectId: true, occurredAt: true },
+          orderBy: { id: 'asc' },
+        }),
+      ]);
+      return { client, linkedDocument, versions, audit, history };
+    };
+    const originalBefore = await originalSnapshot();
+    expect(
+      originalBefore.audit.some(
+        (entry) =>
+          entry.resource === 'client' && entry.resourceId === row.id && entry.action === 'CREATE',
+      ),
+    ).toBe(true);
+    const duplicateEvidence = {
+      http: null as number | null,
+      before: {
+        clients: clientsBeforeFailure,
+        documents: beforeFailure,
+        objects: objectsBefore[0]!.count,
+        original: originalBefore,
+      },
+      after: null as unknown,
+    };
+    evidence.duplicateAttempt = duplicateEvidence;
     const duplicateResponse = page.waitForResponse(
       (r) => r.request().method() === 'POST' && new URL(r.url()).pathname === '/v1/clients',
     );
     await form.getByRole('button', { name: 'Cadastrar e abrir cliente' }).click();
     checkpoint('duplicate');
-    expect((await duplicateResponse).status()).toBe(409);
+    duplicateEvidence.http = (await duplicateResponse).status();
+    checkpoint('duplicate');
+    expect(duplicateEvidence.http).toBe(409);
     await expect(form.getByRole('alert')).toBeVisible();
-    expect(await db.client.count({ where: { organizationId: org } })).toBe(clientsBeforeFailure);
-    expect(await db.document.count({ where: { organizationId: org } })).toBe(beforeFailure);
-    expect(
-      await db.$queryRaw`SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'`,
-    ).toEqual(objectsBefore);
+    const clientsAfter = await db.client.count({ where: { organizationId: org } });
+    const documentsAfter = await db.document.count({ where: { organizationId: org } });
+    const objectsAfter = await db.$queryRaw<
+      Array<{ count: number }>
+    >`SELECT count(*)::int AS count FROM storage.objects WHERE bucket_id='legal-documents'`;
+    const originalAfter = await originalSnapshot();
+    const retained = await admin.storage
+      .from('legal-documents')
+      .download(document.versions[0]!.storageKey);
+    expect(retained.error).toBeNull();
+    const retainedHash = hash(Buffer.from(await retained.data!.arrayBuffer()));
+    duplicateEvidence.after = {
+      clients: clientsAfter,
+      documents: documentsAfter,
+      objects: objectsAfter[0]!.count,
+      original: originalAfter,
+      originalFileSha256: retainedHash,
+    };
+    checkpoint('duplicate');
+    expect(clientsAfter).toBe(clientsBeforeFailure);
+    expect(documentsAfter).toBe(beforeFailure);
+    expect(objectsAfter).toEqual(objectsBefore);
+    expect(originalAfter).toEqual(originalBefore);
+    expect(retainedHash).toBe(hash(png));
     checkpoint('duplicate', 'PASS');
     evidence.status = 'PASS';
     evidence.clientId = row.id;
