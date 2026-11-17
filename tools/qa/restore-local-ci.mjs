@@ -1,3 +1,8 @@
+import {
+  canonicalStructureEntry,
+  checkCatalogQuery,
+  canonicalCheckCatalog,
+} from './restore-check-constraints.mjs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -326,7 +331,7 @@ const run = (...args) =>
     maxBuffer: 8 * 1024 * 1024,
   }).trim();
 const sql = (database, query) =>
-  run('psql', '-U', 'supabase_admin', '-d', database, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query);
+  run('psql', '-U', 'supabase_admin', '-d', database, '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', query);
 const started = Date.now();
 const evidenceDirectory = join(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
 mkdirSync(evidenceDirectory, { recursive: true });
@@ -1085,28 +1090,23 @@ const structureSnapshot = (database) =>
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
     ) objects`,
   );
-const reparsedCheckConstraints = new Set([
-  'CONSTRAINT:document_signing_requests:document_signing_requests_status_check',
-  'CONSTRAINT:payment_receipts:payment_receipts_status_check',
-  'CONSTRAINT:service_catalog_items:service_catalog_items_area_check',
-]);
-const normalizeStructureEntry = (entry) => {
-  const constraintName = entry.split(':', 3).join(':');
-  if (!reparsedCheckConstraints.has(constraintName)) return entry;
-  // pg_restore reparses these three varchar-array CHECKs and moves the implicit text cast
-  // from the array to each element. Preserve strict comparison for every other object.
-  return entry
-    .replaceAll('::character varying::text', '::character varying')
-    .replaceAll(']::text[]', ']');
-};
+const checkCatalog = (database) => JSON.parse(sql(database, checkCatalogQuery));
+const sourceChecks = checkCatalog('postgres'),
+  restoredChecks = checkCatalog(target);
+writeCheckpoint({ checkConstraints: { source: sourceChecks, restored: restoredChecks } });
+assert.deepEqual(
+  canonicalCheckCatalog(restoredChecks),
+  canonicalCheckCatalog(sourceChecks),
+  'Restored CHECK catalog differs',
+);
 const sourceStructure = structureSnapshot('postgres')
   .split('\n')
   .filter(Boolean)
-  .map(normalizeStructureEntry);
+  .map(canonicalStructureEntry);
 const recoveredStructure = structureSnapshot(target)
   .split('\n')
   .filter(Boolean)
-  .map(normalizeStructureEntry);
+  .map(canonicalStructureEntry);
 const sourceStructureSet = new Set(sourceStructure);
 const recoveredStructureSet = new Set(recoveredStructure);
 const structureComparison = {
@@ -1156,6 +1156,7 @@ writeFileSync(
       grantsAndDefaultAclsCompared: true,
       grantSnapshotEvidence,
       foreignKeysComparedAndValidated: true,
+      checkConstraints: { source: sourceChecks, restored: restoredChecks },
       financialTotalsCompared: recoveredFinancials,
       effectiveRestoreArguments: effectiveRestoreArgs,
       schedulerExtensionRowsRemoved: excludedExtensionEntries.length,

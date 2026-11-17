@@ -13,6 +13,215 @@ import { api as recoveryApi, assertRecoveryErrorResponse } from './transversal.m
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
 
+test('REC67 X05 uses an explicit audited soft-delete fixture and preserves every reference', async () => {
+  const source = readFileSync(new URL('./transversal.mjs', import.meta.url), 'utf8');
+  const block = source
+    .slice(
+      source.indexOf("case 'REC-X05': {") + "case 'REC-X05': {".length,
+      source.indexOf("case 'REC-X06':"),
+    )
+    .replace(/\s*break;\s*}\s*$/, '');
+  const run = new Function(
+    'r',
+    'row',
+    'fixture',
+    'invokeWriter',
+    'snapshot',
+    'independentRecovery',
+    'assert',
+    'return (async()=>{' + block + '})()',
+  );
+  const require = createRequire(import.meta.url);
+  const { DocumentsService } = require(resolve('apps/api/dist/documents/documents.service.js'));
+  assert.equal(typeof DocumentsService.prototype.remove, 'undefined');
+  assert.throws(() => DocumentsService.prototype.remove(), TypeError);
+  let softDeleted = false,
+    audited = false,
+    recovered = false,
+    mutate = false;
+  const state = () => ({
+    versions: [
+      { id: 'v1', sha256: 'a'.repeat(64), sizeBytes: 100n },
+      { id: 'v2', sha256: 'b'.repeat(64), sizeBytes: 101n },
+    ],
+    photos: [],
+    signatures: [],
+    objects: [
+      { observation: { status: 'PRESENT', sha256: mutate && recovered ? 'bad' : 'a'.repeat(64) } },
+    ],
+    intents: [{ id: 'op', legalHold: true, state: recovered ? 'RETAINED' : 'COMPLETE' }],
+    events: [{ operationId: 'op', toState: 'RETAINED' }],
+    audit: [{ resourceId: 'op' }],
+  });
+  const tx = {
+    document: {
+      findFirstOrThrow: async () => ({ id: 'doc', title: 'SYNTHETIC RECOVERY TEST' }),
+      update: async ({ data }) => {
+        softDeleted = data.deletedAt instanceof Date;
+      },
+    },
+  };
+  const r = {
+    db: {
+      $transaction: async (fn) => fn(tx),
+      document: {
+        findUniqueOrThrow: async () => ({ id: 'doc', deletedAt: softDeleted ? new Date() : null }),
+      },
+      documentVersion: { count: async () => 2 },
+      auditLog: { count: async () => (audited ? 1 : 0) },
+      storageUploadIntent: { updateMany: async () => {} },
+    },
+    audit: {
+      record: async (_tx, record) => {
+        assert.equal(record.metadata.syntheticFixture, 'REC-X05_LEGACY_SOFT_DELETE');
+        assert.equal(record.resourceId, 'doc');
+        audited = true;
+      },
+    },
+  };
+  const fixture = async (_r, purpose) => {
+    recovered = false;
+    return { purpose, actor: { organizationId: 'org' }, documentId: 'doc' };
+  };
+  const recover = async () => {
+    recovered = true;
+  };
+  const row = {};
+  await run(
+    r,
+    row,
+    fixture,
+    async () => {},
+    async () => state(),
+    recover,
+    assert,
+  );
+  assert.equal(row.retention.length, 3);
+  assert.equal(row.softDeleteFixture.auditCount, 1);
+  mutate = true;
+  await assert.rejects(
+    run(
+      r,
+      {},
+      fixture,
+      async () => {},
+      async () => state(),
+      recover,
+      assert,
+    ),
+    { code: 'ERR_ASSERTION' },
+  );
+});
+
+test('REC67 admission without roles differs from permission denial for an admitted administrator', () => {
+  const require = createRequire(import.meta.url);
+  const { hasValidMembershipScope } = require(resolve('apps/api/dist/auth/client-scope.js'));
+  const { PermissionGuard } = require(resolve('apps/api/dist/auth/permission.guard.js'));
+  const { REQUIRED_ADMINISTRATOR_KEY } = require(
+    resolve('apps/api/dist/auth/require-administrator.decorator.js'),
+  );
+  const { REQUIRED_PERMISSION_KEY } = require(
+    resolve('apps/api/dist/auth/require-permission.decorator.js'),
+  );
+  const org = '10000000-0000-4000-8000-000000000001';
+  assert.equal(hasValidMembershipScope({ organizationId: org, roles: [] }), false);
+  assert.equal(
+    hasValidMembershipScope({
+      organizationId: org,
+      roles: [{ organizationId: org, role: { key: 'administrator', organizationId: org } }],
+    }),
+    true,
+  );
+  const guard = new PermissionGuard({
+    getAllAndOverride: (key) =>
+      key === REQUIRED_PERMISSION_KEY
+        ? 'storage_recovery:view'
+        : key === REQUIRED_ADMINISTRATOR_KEY,
+  });
+  const context = {
+    getHandler: () => null,
+    getClass: () => null,
+    switchToHttp: () => ({
+      getRequest: () => ({
+        actor: { organizationId: org, isAdministrator: true, permissions: [] },
+      }),
+    }),
+  };
+  assert.throws(
+    () => guard.canActivate(context),
+    (e) => e.getStatus() === 403,
+  );
+});
+
+test('REC67 restore fixture rejects the old revoked invitation and signs only a fresh current-version request', async () => {
+  const source = readFileSync(new URL('./restore-fixture.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf("  const input = await fixture(r, 'SIGNED_PDF'");
+  const end = source.indexOf('  const bytes = Buffer.from(input.bytes', start);
+  const run = new Function(
+    'r',
+    'fixture',
+    'invokeWriter',
+    'assert',
+    'return (async()=>{' + source.slice(start, end) + 'return input;})()',
+  );
+  let oldStatus = 'PENDING',
+    signed = false,
+    freshCreated = false;
+  const input = {
+    signingId: 'old',
+    token: 'old',
+    documentId: 'doc',
+    actor: { organizationId: 'org' },
+  };
+  const r = {
+    db: {
+      documentSigningRequest: {
+        findUniqueOrThrow: async ({ where }) =>
+          where.id === 'old'
+            ? { status: oldStatus }
+            : { organizationId: 'org', documentId: 'doc', status: 'PENDING', sourceVersion: 2 },
+      },
+      document: { findUniqueOrThrow: async () => ({ currentVersion: 2 }) },
+    },
+    signing: {
+      createRequest: async () => {
+        assert.equal(oldStatus, 'REVOKED');
+        freshCreated = true;
+        return { id: 'fresh', token: 'fresh' };
+      },
+    },
+  };
+  const invoke = async (_r, value) => {
+    if (value.purpose === 'VERSION') {
+      oldStatus = 'REVOKED';
+      return;
+    }
+    if (value.purpose === 'PHOTO') return;
+    if (value.token === 'old') throw Object.assign(new Error('Revoked'), { getStatus: () => 410 });
+    assert.equal(value.token, 'fresh');
+    assert.equal(freshCreated, true);
+    signed = true;
+  };
+  await run(r, async () => ({ ...input }), invoke, assert);
+  assert.equal(signed, true);
+  const require = createRequire(import.meta.url);
+  const { DocumentSigningService } = require(
+    resolve('apps/api/dist/documents/document-signing.service.js'),
+  );
+  const signing = new DocumentSigningService(
+    { documentSigningRequest: { findUnique: async () => ({ status: 'REVOKED' }) } },
+    {},
+    {},
+    {},
+    {},
+  );
+  signing.throttle = async () => {}; // Isolate limiter only; actual revoked-token check remains.
+  await assert.rejects(
+    signing.sign('a'.repeat(64), { consent: true }),
+    (e) => e.getStatus() === 410,
+  );
+});
+
 // Uses the actual compiled global filter. API build is required before these
 // support tests, as it is in the disposable Recovery workflow. No server/DB is
 // constructed by invoking the filter with this synthetic HTTP context.
@@ -570,7 +779,7 @@ test('REC65 suspended admission remains 401 while admitted missing permission re
   );
   assert.deepEqual(
     [...section.matchAll(/row.http.at\(-1\).http, (\d+)/g)].map((m) => Number(m[1])),
-    [400, 201, 409, 404, 401, 401, 403],
+    [400, 201, 409, 404, 401, 401, 403, 403, 201, 409],
   );
   assert.ok(section.includes('suspendedBefore'));
   const guard = readFileSync(
@@ -681,7 +890,8 @@ test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (l
   let memberStatus = 'ACTIVE',
     permitted = true,
     terminalDecision = false,
-    mutateOnDenial = false;
+    mutateOnDenial = false,
+    retained = false;
   const persisted = { generation: 0, audit: 0 };
   const server = createServer((req, res) => {
     req.resume(); // Drain the synthetic request without retaining its body.
@@ -696,7 +906,11 @@ test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (l
       status = 201;
       persisted.generation = 1;
       persisted.audit = 1;
-    } else if (number === 4) status = 409;
+    } else if (number === 4 || number === 11) status = 409;
+    else if (number === 10) {
+      status = 201;
+      retained = true;
+    }
     if (mutateOnDenial && status === 401) persisted.generation++;
     res.writeHead(status, { 'Content-Type': 'application/json' });
     res.end(
@@ -711,21 +925,35 @@ test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (l
       storageUploadIntent: {
         findUniqueOrThrow: async () => ({
           generation: persisted.generation,
-          state: 'RECONCILE_PENDING',
+          state: retained ? 'RETAINED' : 'RECONCILE_PENDING',
+          legalHold: retained,
+          objectKey: 'synthetic',
+          bucket: 'legal-documents',
+          expectedSha256: 'a'.repeat(64),
         }),
       },
       auditLog: { count: async () => persisted.audit },
       organizationMember: {
+        findUniqueOrThrow: async () => ({
+          roles: [{ role: { id: 'admin', key: 'administrator' } }],
+        }),
         update: async ({ data }) => {
           memberStatus = data.status;
         },
       },
-      organizationMemberRole: {
+      rolePermission: {
+        findMany: async () => [
+          { organizationId: own.actor.organizationId, roleId: 'admin', permissionId: 'view' },
+        ],
         deleteMany: async () => {
           permitted = false;
         },
+        createMany: async () => {
+          permitted = true;
+        },
       },
     },
+    storage: { inspect: async () => ({ sha256: 'a'.repeat(64) }) },
     admin: {
       overview: async () => {
         throw new Error('SYNTHETIC_AUTHORIZATION_DENIED');
@@ -737,7 +965,11 @@ test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (l
     },
   };
   const exhaustedDouble = async (_r, input) =>
-    input === own ? { id: 'own-incident', operationId: 'operation' } : { id: 'foreign-incident' };
+    input === own
+      ? { id: 'own-incident', operationId: 'operation' }
+      : requests.length > 8
+        ? { id: 'retained-incident', operationId: 'retained-op' }
+        : { id: 'foreign-incident' };
   try {
     const row = {};
     await run(
@@ -753,9 +985,9 @@ test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (l
     );
     assert.deepEqual(
       row.http.map((result) => result.http),
-      [200, 400, 201, 409, 404, 401, 401, 403],
+      [200, 400, 201, 409, 404, 401, 401, 403, 403, 201, 409],
     );
-    assert.equal(requests.length, 8);
+    assert.equal(requests.length, 11);
     assert.equal(terminalDecision, true);
     assert.equal(own.authToken, 'synthetic-token');
     assert.deepEqual(persisted, { generation: 1, audit: 1 });

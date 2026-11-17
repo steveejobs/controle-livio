@@ -8,6 +8,27 @@ import { snapshot } from './runtime.mjs';
 export async function restoreFixture(r) {
   const input = await fixture(r, 'SIGNED_PDF', { restoreCredentials: true });
   await invokeWriter(r, { ...input, purpose: 'VERSION' });
+  const revoked = await r.db.documentSigningRequest.findUniqueOrThrow({
+    where: { id: input.signingId },
+  });
+  assert.equal(revoked.status, 'REVOKED');
+  await assert.rejects(invokeWriter(r, input), (error) => error.getStatus?.() === 410);
+  // Versioning legitimately revokes invitations for the old content. Request
+  // a fresh invitation through the public service for the current version.
+  const current = await r.signing.createRequest(input.actor, input.documentId, {
+    signerName: 'SYNTHETIC RECOVERY TEST',
+    expiresInDays: 1,
+  });
+  input.token = current.token;
+  input.signingId = current.id;
+  const invitation = await r.db.documentSigningRequest.findUniqueOrThrow({
+    where: { id: current.id },
+  });
+  assert.equal(invitation.organizationId, input.actor.organizationId);
+  assert.equal(invitation.documentId, input.documentId);
+  assert.equal(invitation.status, 'PENDING');
+  const sourceDocument = await r.db.document.findUniqueOrThrow({ where: { id: input.documentId } });
+  assert.equal(invitation.sourceVersion, sourceDocument.currentVersion);
   await invokeWriter(r, { ...input, purpose: 'PHOTO', bytes: input.signature, mime: 'image/png' });
   await invokeWriter(r, input);
   const bytes = Buffer.from(input.bytes, 'base64'),

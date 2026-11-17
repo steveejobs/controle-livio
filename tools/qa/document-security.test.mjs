@@ -4,6 +4,185 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import {
+  canonicalCheck,
+  canonicalCheckCatalog,
+  canonicalStructureEntry,
+} from './restore-check-constraints.mjs';
+
+test('REC67 only reviewed literal-array cast representations canonicalize; real changes still differ', () => {
+  const names = [
+    ['storage_recovery_incidents', 'storage_recovery_incidents_resolution_check'],
+    ['storage_recovery_incidents', 'storage_recovery_incidents_state_check'],
+    ...[
+      'bucket_check',
+      'check',
+      'check1',
+      'check2',
+      'purpose_check',
+      'resource_type_check',
+      'state_check',
+    ].map((n) => ['storage_upload_intents', 'storage_upload_intents_' + n]),
+  ];
+  for (const [table, name] of names) {
+    const a =
+      "CHECK (state::text = ANY (ARRAY['A'::character varying, 'B'::character varying]::text[]))";
+    const b =
+      "CHECK (state::text = ANY (ARRAY['A'::character varying::text, 'B'::character varying::text]))";
+    const normalize = (text) => canonicalCheck('public', table, name, text);
+    assert.notEqual(a, b);
+    assert.equal(normalize(a), normalize(b));
+    for (const change of [
+      b.replace("'B'", "'C'"),
+      b.replace('= ANY', '<> ALL'),
+      b.replace('state::text', 'state::text COLLATE "C"'),
+      b.replace('::character varying::text', '::character varying(2)::text'),
+    ])
+      assert.notEqual(normalize(a), normalize(change));
+    assert.notEqual(
+      canonicalCheck('foreign', table, name, a),
+      canonicalCheck('foreign', table, name, b),
+    );
+    assert.notEqual(
+      canonicalCheck('public', table, 'unknown', a),
+      canonicalCheck('public', table, 'unknown', b),
+    );
+    const row = {
+      schema: 'public',
+      table,
+      name,
+      definition: a,
+      expression: a,
+      validated: true,
+      columns: ['state'],
+      dependencies: [{ identity: 'column state' }],
+    };
+    assert.deepEqual(
+      canonicalCheckCatalog([row]),
+      canonicalCheckCatalog([{ ...row, definition: b, expression: b }]),
+    );
+    for (const patch of [
+      { validated: false },
+      { columns: ['other'] },
+      { dependencies: [] },
+      { no_inherit: true },
+    ])
+      assert.notDeepEqual(
+        canonicalCheckCatalog([row]),
+        canonicalCheckCatalog([{ ...row, ...patch }]),
+      );
+    assert.equal(
+      canonicalStructureEntry('CONSTRAINT:' + table + ':' + name + ':' + a),
+      'CONSTRAINT:' + table + ':' + name + ':' + normalize(a),
+    );
+  }
+  const literal = "ARRAY['quoted''::character varying'::character varying]::text[]";
+  assert.equal(
+    canonicalCheck('public', names[0][0], names[0][1], literal),
+    "ARRAY['quoted''::character varying'::text]",
+  );
+  const quoted = "CHECK (note = 'ARRAY[''A''::character varying]::text[]')";
+  assert.equal(canonicalCheck('public', names[0][0], names[0][1], quoted), quoted);
+});
+
+test('REC67 anonymous document visibility is distinct from UPDATE; actual HTTP attempt is still required', async () => {
+  const { inspectActorDocument, documentRelinkBarrier } =
+    await import('./storage-authorization-proof.mjs');
+  let selectAttempted = false;
+  const tx = {
+    $executeRawUnsafe: async () => {},
+    $queryRawUnsafe: async (query) => {
+      if (query.includes('set_config')) return [];
+      if (query.includes('current_user'))
+        return [
+          {
+            role: 'anon',
+            profile_id: null,
+            rolsuper: false,
+            rolbypassrls: false,
+            owns_table: false,
+            can_assume_privileged: false,
+            relrowsecurity: true,
+            can_select: false,
+            can_update: false,
+            can_update_client: false,
+          },
+        ];
+      if (query.includes('FROM public.documents')) {
+        selectAttempted = true;
+        throw new Error('42501');
+      }
+      throw new Error('Unreviewed SQL');
+    },
+  };
+  const db = {
+    $queryRawUnsafe: async (query) =>
+      query.includes('FROM public.documents') ? [{ id: 'doc', organization_id: 'org' }] : [],
+    $transaction: async (fn) => fn(tx),
+  };
+  const proof = await inspectActorDocument(db, null, 'doc', 'org');
+  assert.equal(selectAttempted, false);
+  assert.equal(proof.visibility, 'SELECT_NOT_GRANTED');
+  assert.equal(proof.visible, null);
+  assert.equal(documentRelinkBarrier(proof, null), true);
+  // A catalog proof alone never counts as an executed or successful matrix cell.
+  assert.equal(
+    diagnoseMatrixAttempt({ operation: 'relink', writeBarrier: true, operationSent: false })
+      .securityProven,
+    false,
+  );
+  const { createServer } = await import('node:http');
+  const { once } = await import('node:events');
+  let reached = false;
+  const server = createServer((req, res) => {
+    assert.equal(req.method, 'PATCH');
+    assert.equal(req.url, '/rest/v1/documents?id=eq.doc');
+    reached = true;
+    req.resume();
+    res.writeHead(401, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ code: '42501', message: 'permission denied for table documents' }));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    // Execute the actual matrix transport, not a lookalike request. This local
+    // HTTP control is not a real PostgREST/Storage security result.
+    const source = readFileSync('tools/qa/document-storage-matrix.mjs', 'utf8');
+    const begin = source.indexOf('  async function attempt('),
+      end = source.indexOf('  const actors =', begin);
+    const send = new Function(
+      'env',
+      'bucket',
+      'changed',
+      'document',
+      'second',
+      'sanitizeProviderPayload',
+      'storageDenial',
+      source.slice(begin, end) + "return attempt(undefined,'relink','synthetic-source','unused');",
+    );
+    const attempt = await send(
+      {
+        NEXT_PUBLIC_SUPABASE_URL: 'http://127.0.0.1:' + server.address().port,
+        NEXT_PUBLIC_SUPABASE_ANON_KEY: 'synthetic-anon',
+      },
+      'legal-documents',
+      Buffer.from('synthetic'),
+      { id: 'doc' },
+      { body: { id: 'other-client' } },
+      (value) => value,
+      storageDenial,
+    );
+    assert.equal(reached, true);
+    assert.equal(attempt.http, 401);
+    assert.equal(attempt.code, '42501');
+    assert.equal(attempt.requestBody.client_id, 'other-client');
+    assert.equal(attempt.kind, 'AUTHORIZATION_DENIED');
+  } finally {
+    server.close();
+    server.closeAllConnections();
+    await once(server, 'close');
+  }
+});
+import {
   storageDenial,
   diagnoseMatrixAttempt,
   storageWriteBarrier,

@@ -449,7 +449,7 @@ try {
         new URL('../../qa/storage-authorization-proof.mjs', import.meta.url)
       );
       await db.exec(
-        "BEGIN; CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$; GRANT USAGE ON SCHEMA auth TO anon; CREATE TABLE public.documents(id uuid PRIMARY KEY, organization_id uuid, client_id uuid); ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY; ALTER TABLE public.documents FORCE ROW LEVEL SECURITY; GRANT SELECT ON public.documents TO anon; CREATE POLICY fixture_select ON public.documents FOR SELECT TO anon USING(true); INSERT INTO public.documents VALUES ('" +
+        "BEGIN; CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$; GRANT USAGE ON SCHEMA auth TO anon; CREATE TABLE public.documents(id uuid PRIMARY KEY, organization_id uuid, client_id uuid); ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY; ALTER TABLE public.documents FORCE ROW LEVEL SECURITY; CREATE POLICY fixture_select ON public.documents FOR SELECT TO anon USING(true); INSERT INTO public.documents VALUES ('" +
           resource +
           "','" +
           org +
@@ -472,9 +472,21 @@ try {
       };
       try {
         const proof = await inspectActorDocument(adapter, null, resource, org);
-        assert.equal(proof.visible.length, 1);
+        assert.equal(proof.visible, null);
+        assert.equal(proof.visibility, 'SELECT_NOT_GRANTED');
+        assert.equal(proof.session.can_select, false);
+        await db.exec('SET LOCAL ROLE anon');
+        await assert.rejects(
+          db.query('SELECT id FROM public.documents'),
+          (e) => e.code === '42501',
+        );
+        await db.exec('ROLLBACK TO SAVEPOINT rec65_role');
         assert.equal(documentRelinkBarrier(proof, null), true);
         assert.equal(proof.session.role, 'anon');
+        await db.exec('GRANT SELECT ON public.documents TO anon');
+        const visible = await inspectActorDocument(adapter, null, resource, org);
+        assert.equal(visible.visible.length, 1);
+        assert.equal(visible.visibility, 'VISIBLE');
         await db.exec('GRANT UPDATE(client_id) ON public.documents TO anon');
         const changed = await inspectActorDocument(adapter, null, resource, org);
         assert.equal(documentRelinkBarrier(changed, null), false);
@@ -483,6 +495,40 @@ try {
       } finally {
         await db.exec('ROLLBACK');
       }
+    },
+  );
+  await check(
+    'REC67 actual migration CHECK catalog captures identity, dependencies and validation',
+    async () => {
+      const { checkCatalogQuery, canonicalCheckCatalog } = await import(
+        new URL('../../qa/restore-check-constraints.mjs', import.meta.url)
+      );
+      const rows = (await db.exec(checkCatalogQuery)).at(-1).rows[0].coalesce;
+      const observed = typeof rows === 'string' ? JSON.parse(rows) : rows;
+      const checks = observed.filter((c) =>
+        ['storage_upload_intents', 'storage_recovery_incidents'].includes(c.table),
+      );
+      assert.ok(checks.length >= 9);
+      for (const c of checks) {
+        assert.equal(c.schema, 'public');
+        assert.equal(c.type, 'c');
+        assert.equal(c.validated, true);
+        assert.ok(
+          c.definition && c.expression && Array.isArray(c.columns) && Array.isArray(c.dependencies),
+        );
+        assert.equal(c.inspection_search_path, 'pg_catalog, public');
+      }
+      const base = canonicalCheckCatalog(checks);
+      assert.notDeepEqual(
+        base,
+        canonicalCheckCatalog(checks.map((c, i) => (i ? c : { ...c, validated: false }))),
+      );
+      assert.notDeepEqual(
+        base,
+        canonicalCheckCatalog(
+          checks.map((c, i) => (i ? c : { ...c, definition: 'CHECK (false)' })),
+        ),
+      );
     },
   );
   const ownerObjects = (

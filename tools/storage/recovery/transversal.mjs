@@ -174,7 +174,47 @@ export async function transversal(r, row, fixture, independentRecovery) {
       for (const purpose of ['VERSION', 'PHOTO', 'SIGNATURE']) {
         const f = await fixture(r, purpose);
         await invokeWriter(r, f);
-        if (purpose === 'VERSION') await r.docs.remove(f.actor, f.documentId);
+        if (purpose === 'VERSION') {
+          // No public document-delete API exists. This is a synthetic legacy
+          // soft-delete fixture, not a product operation or proof of that API.
+          await r.db.$transaction(async (tx) => {
+            const document = await tx.document.findFirstOrThrow({
+              where: { id: f.documentId, organizationId: f.actor.organizationId, deletedAt: null },
+            });
+            assert.equal(document.title, 'SYNTHETIC RECOVERY TEST');
+            const deletedAt = new Date();
+            await tx.document.update({ where: { id: document.id }, data: { deletedAt } });
+            await r.audit.record(tx, {
+              organizationId: f.actor.organizationId,
+              actorUserId: f.actor.userId,
+              action: 'UPDATE',
+              resource: 'document',
+              resourceId: document.id,
+              before: { deletedAt: null },
+              after: { deletedAt: deletedAt.toISOString() },
+              metadata: { syntheticFixture: 'REC-X05_LEGACY_SOFT_DELETE' },
+            });
+          });
+          const document = await r.db.document.findUniqueOrThrow({ where: { id: f.documentId } });
+          assert.ok(document.deletedAt);
+          assert.equal(
+            await r.db.documentVersion.count({ where: { documentId: f.documentId } }),
+            2,
+          );
+          row.softDeleteFixture = {
+            documentId: document.id,
+            deletedAt: document.deletedAt,
+            auditCount: await r.db.auditLog.count({
+              where: {
+                resource: 'document',
+                resourceId: document.id,
+                organizationId: f.actor.organizationId,
+                metadata: { path: ['syntheticFixture'], equals: 'REC-X05_LEGACY_SOFT_DELETE' },
+              },
+            }),
+          };
+          assert.equal(row.softDeleteFixture.auditCount, 1);
+        }
         await r.db.storageUploadIntent.updateMany({
           where: { organizationId: f.actor.organizationId },
           data: { legalHold: true, dueAt: new Date(0), leaseUntil: new Date(0) },
@@ -183,6 +223,18 @@ export async function transversal(r, row, fixture, independentRecovery) {
         await independentRecovery(f);
         const after = await snapshot(r, f.actor.organizationId);
         assert.deepEqual(after.versions, before.versions);
+        assert.deepEqual(after.photos, before.photos);
+        assert.deepEqual(after.signatures, before.signatures);
+        assert.deepEqual(after.objects, before.objects);
+        assert.ok(after.intents.every((op) => op.legalHold && op.state === 'RETAINED'));
+        for (const op of after.intents) {
+          assert.ok(
+            after.events.some(
+              (event) => event.operationId === op.id && event.toState === 'RETAINED',
+            ),
+          );
+          assert.ok(after.audit.some((entry) => entry.resourceId === op.id));
+        }
         for (const object of after.objects) assert.equal(object.observation.status, 'PRESENT');
         row.retention ??= [];
         row.retention.push({ purpose, before, after });
@@ -430,14 +482,81 @@ export async function transversal(r, row, fixture, independentRecovery) {
         where: { id: input.memberId },
         data: { status: 'ACTIVE' },
       });
-      await r.db.organizationMemberRole.deleteMany({ where: { membershipId: input.memberId } });
+      const membership = await r.db.organizationMember.findUniqueOrThrow({
+        where: { id: input.memberId },
+        include: { roles: { include: { role: true } } },
+      });
+      assert.ok(membership.roles.some(({ role }) => role.key === 'administrator'));
+      const permissionWhere = {
+        organizationId: org,
+        roleId: { in: membership.roles.map(({ role }) => role.id) },
+        permission: { resource: 'storage_recovery' },
+      };
+      const recoveryPermissions = await r.db.rolePermission.findMany({ where: permissionWhere });
+      assert.ok(recoveryPermissions.length);
+      // Keep admission and the canonical administrator role. Remove only the
+      // specific recovery permissions, never every membership role.
+      await r.db.rolePermission.deleteMany({ where: permissionWhere });
       const unpermittedBefore = await snapshot(r, org);
       row.http.push(await api(input, '/storage-recovery'));
+      assert.equal(row.http.at(-1).http, 403);
+      row.http.push(
+        await api(input, decisionPath, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'RETRY', reason: 'SYNTHETIC forbidden decision' }),
+        }),
+      );
       assert.equal(row.http.at(-1).http, 403);
       await assert.rejects(
         r.admin.decide(input.actor, incident.id, 'RETAIN', 'SYNTHETIC forbidden foreign incident'),
       );
       assert.deepEqual(await snapshot(r, org), unpermittedBefore);
+      await r.db.rolePermission.createMany({ data: recoveryPermissions });
+      // With permissions restored, exercise an actual RETAIN decision as well
+      // as the RETRY and concurrent-decision contracts in X09/X11.
+      const retainInput = await fixture(r, 'DOCUMENT');
+      const retained = await exhausted(r, retainInput);
+      const retainPath = `/storage-recovery/incidents/${retained.id}/decisions`;
+      row.http.push(
+        await api(retainInput, retainPath, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'RETAIN', reason: 'SYNTHETIC authorized retention' }),
+        }),
+      );
+      assert.equal(row.http.at(-1).http, 201);
+      const retainedOperation = await r.db.storageUploadIntent.findUniqueOrThrow({
+        where: { id: retained.operationId },
+      });
+      assert.equal(retainedOperation.state, 'RETAINED');
+      assert.equal(retainedOperation.legalHold, true);
+      assert.equal(
+        (await r.storage.inspect(retainedOperation.objectKey, retainedOperation.bucket)).sha256,
+        retainedOperation.expectedSha256,
+      );
+      assert.ok(
+        await r.db.auditLog.count({
+          where: {
+            organizationId: retainInput.actor.organizationId,
+            resource: 'storage_recovery_incident',
+            resourceId: retained.id,
+            actorUserId: retainInput.actor.userId,
+          },
+        }),
+      );
+      const retainAfter = await snapshot(r, retainInput.actor.organizationId);
+      row.http.push(
+        await api(retainInput, retainPath, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'RETAIN', reason: 'SYNTHETIC repeated retention' }),
+        }),
+      );
+      assert.equal(row.http.at(-1).http, 409);
+      assert.deepEqual(await snapshot(r, retainInput.actor.organizationId), retainAfter);
+      row.retainedOperation = {
+        id: retainedOperation.id,
+        state: retainedOperation.state,
+        legalHold: true,
+      };
       break;
     }
     case 'REC-X12': {

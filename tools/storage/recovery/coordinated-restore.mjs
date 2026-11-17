@@ -1,3 +1,4 @@
+import { checkCatalogQuery, canonicalCheckCatalog } from '../../qa/restore-check-constraints.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
@@ -134,9 +135,18 @@ function catalog(project) {
     `SELECT pg_get_userbyid(d.defaclrole),coalesce(n.nspname,''),d.defaclobjtype,d.defaclacl::text FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid=d.defaclnamespace ORDER BY 1,2,3`,
     `SELECT rolname,rolsuper,rolinherit,rolcreaterole,rolcreatedb,rolcanlogin,rolreplication,rolbypassrls FROM pg_roles WHERE rolname NOT LIKE 'pg_%' ORDER BY 1`,
     `SELECT pg_get_userbyid(roleid),pg_get_userbyid(member),admin_option FROM pg_auth_members ORDER BY 1,2`,
-    `SELECT n.nspname,c.relname,k.conname,pg_get_constraintdef(k.oid),k.convalidated FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN (${schemas}) ORDER BY 1,2,3`,
+    `SELECT n.nspname,c.relname,k.conname,pg_get_constraintdef(k.oid),k.convalidated FROM pg_constraint k JOIN pg_class c ON c.oid=k.conrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN (${schemas}) AND (k.contype<>'c' OR n.nspname<>'public') ORDER BY 1,2,3`,
   ];
-  return queries.map((q) => hash(sql(project, q + ';')));
+  const checks = JSON.parse(sql(project, checkCatalogQuery).toString());
+  // Persist raw definitions before any caller compares catalogs. No secrets or OIDs.
+  writeFileSync(
+    join(process.env.LIVIO_QA_OUTPUT, 'check-catalog-' + project + '.json'),
+    JSON.stringify(checks, null, 2),
+  );
+  return [
+    ...queries.map((q) => hash(sql(project, q + ';'))),
+    hash(JSON.stringify(canonicalCheckCatalog(checks))),
+  ];
 }
 function foreignKeys(project) {
   // Re-scan restored rows: convalidated=true alone proves nothing when restore

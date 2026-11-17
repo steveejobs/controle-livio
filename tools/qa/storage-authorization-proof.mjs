@@ -257,10 +257,15 @@ export async function inspectActorDocument(db, identity, documentId, organizatio
       const [session] = await tx.$queryRawUnsafe(
         "SELECT current_user::text AS role,auth.uid()::text AS profile_id,r.rolsuper,r.rolbypassrls,(pg_has_role(current_user,c.relowner,'USAGE') OR pg_has_role(current_user,c.relowner,'SET')) AS owns_table,c.relrowsecurity,c.relforcerowsecurity,pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl,has_table_privilege(current_user,c.oid,'SELECT') AS can_select,has_table_privilege(current_user,c.oid,'UPDATE') AS can_update,has_column_privilege(current_user,c.oid,'client_id','UPDATE') AS can_update_client,EXISTS (SELECT 1 FROM pg_roles privileged WHERE (privileged.rolsuper OR privileged.rolbypassrls) AND pg_has_role(current_user,privileged.oid,'SET')) AS can_assume_privileged FROM pg_roles r CROSS JOIN pg_class c WHERE r.rolname=current_user AND c.oid='public.documents'::regclass",
       );
-      const visible = await tx.$queryRawUnsafe(
-        'SELECT id::text,organization_id::text,client_id::text FROM public.documents WHERE id=$1::uuid',
-        documentId,
-      );
+      // A missing SELECT grant is a visibility boundary, not a failed fixture.
+      // Do not issue a forbidden SELECT and abort the transaction before PATCH.
+      // UPDATE is proved independently from both table and client_id grants.
+      const visible = session.can_select
+        ? await tx.$queryRawUnsafe(
+            'SELECT id::text,organization_id::text,client_id::text FROM public.documents WHERE id=$1::uuid',
+            documentId,
+          )
+        : null;
       const permissions = identity
         ? await tx.$queryRawUnsafe(
             "SELECT public.has_permission($1::uuid,'documents','update') AS can_update",
@@ -278,6 +283,11 @@ export async function inspectActorDocument(db, identity, documentId, organizatio
         targetExists: rows.length === 1,
         targetOrganizationId: rows[0]?.organization_id ?? null,
         actorOrganizationId: identity?.org ?? null,
+        visibility: session.can_select
+          ? visible.length
+            ? 'VISIBLE'
+            : 'RLS_HIDDEN'
+          : 'SELECT_NOT_GRANTED',
         method:
           'Read-only catalog, server existence and role-bound SELECT; no DML or arbitrary policy evaluation',
       };
