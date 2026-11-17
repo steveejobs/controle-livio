@@ -3,6 +3,91 @@ import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { roleSessionProbeSql, assertRoleSessionProof } from './restore-session-proof.mjs';
+
+function sessionRows(role = 'anon') {
+  return ['before', 'during', 'after'].map((stage, index) => ({
+    stage,
+    sessionUser: 'supabase_admin',
+    currentUser: index === 1 ? role : 'supabase_admin',
+    roleSetting: index === 1 ? role : 'none',
+    searchPath: '"$user", public',
+  }));
+}
+const sessionOptions = { role: 'anon', executor: 'supabase_admin', searchPath: '"$user", public' };
+test('REC69 effective SET/RESET proof accepts quiet JSON or informational tags, never tags alone', () => {
+  assert.throws(() => assert.deepEqual(['supabase_admin'], ['SET', 'supabase_admin', 'RESET']));
+  const rows = sessionRows().map(JSON.stringify);
+  for (const output of [rows.join('\n'), [rows[0], 'SET', rows[1], 'RESET', rows[2]].join('\n')])
+    assert.equal(assertRoleSessionProof(output, sessionOptions).resetVerified, true);
+  assert.throws(() => assertRoleSessionProof('SET\nanon\nRESET', sessionOptions));
+  assert.match(roleSessionProbeSql('anon'), /current_setting\('role'\)/);
+  assert.match(readFileSync('tools/qa/restore-local-ci.mjs', 'utf8'), /ON_ERROR_STOP=1/);
+  assert.throws(() => roleSessionProbeSql('anon"; invalid SQL'));
+});
+for (const [name, mutate] of [
+  [
+    'wrong effective role',
+    (rows) => {
+      rows[1].currentUser = 'postgres';
+    },
+  ],
+  [
+    'wrong session executor',
+    (rows) => {
+      rows[1].sessionUser = 'postgres';
+    },
+  ],
+  [
+    'SET not effective',
+    (rows) => {
+      rows[1].roleSetting = 'none';
+    },
+  ],
+  [
+    'RESET omitted',
+    (rows) => {
+      rows[2].currentUser = 'anon';
+      rows[2].roleSetting = 'anon';
+    },
+  ],
+  [
+    'wrong search_path',
+    (rows) => {
+      rows[1].searchPath = 'unreviewed';
+    },
+  ],
+  [
+    'after observation omitted',
+    (rows) => {
+      rows.pop();
+    },
+  ],
+  [
+    'unexpected protected field',
+    (rows) => {
+      rows[1].password = 'synthetic-should-not-appear';
+    },
+  ],
+])
+  test('REC69 session rejects ' + name, () => {
+    const rows = sessionRows();
+    mutate(rows);
+    assert.throws(() =>
+      assertRoleSessionProof(rows.map(JSON.stringify).join('\n'), sessionOptions),
+    );
+  });
+test('REC69 same-executor SET still requires real RESET; malformed JSON remains FAIL', () => {
+  const rows = sessionRows('supabase_admin');
+  rows[2].roleSetting = 'supabase_admin';
+  assert.throws(() =>
+    assertRoleSessionProof(rows.map(JSON.stringify).join('\n'), {
+      ...sessionOptions,
+      role: 'supabase_admin',
+    }),
+  );
+  assert.throws(() => assertRoleSessionProof('{broken json}', sessionOptions), SyntaxError);
+});
 import {
   canonicalCheck,
   canonicalCheckCatalog,

@@ -1,3 +1,4 @@
+import { roleSessionProbeSql, assertRoleSessionProof } from './restore-session-proof.mjs';
 import {
   canonicalStructureEntry,
   checkCatalogQuery,
@@ -790,17 +791,23 @@ const requiredRoles = sql(
 assert.equal(requiredRoles, '4', 'Required Supabase roles are missing from the restore target');
 const restoreExecutorRole = sql(target, 'SELECT current_user');
 assert.equal(restoreExecutorRole, 'supabase_admin', 'Restore must run as supabase_admin');
+const sourceSessionSearchPath = sql('postgres', 'SHOW search_path');
+assert.equal(
+  sql(target, 'SHOW search_path'),
+  sourceSessionSearchPath,
+  'Restored session search_path differs',
+);
 const roleSessionChecks = ['supabase_admin', 'anon', 'authenticated', 'service_role'].map(
   (role) => {
-    const currentRole = sql(target, `SET ROLE "${role}"; SELECT current_user; RESET ROLE`);
-    assert.deepEqual(
-      currentRole.split('\n'),
-      ['SET', role, 'RESET'],
-      `Restore target could not set and use role ${role}`,
-    );
-    return { role, canAssumeSessionRole: true, observedCurrentUser: currentRole };
+    const output = sql(target, roleSessionProbeSql(role));
+    return assertRoleSessionProof(output, {
+      role,
+      executor: 'supabase_admin',
+      searchPath: sourceSessionSearchPath,
+    });
   },
 );
+writeCheckpoint({ roleSessionChecks, sourceSessionSearchPath });
 const destinationGrantRecords = parsedGrantSnapshot(target);
 const sourceNormalizedGrantRecords = normalizeRestoredGrantSemantics(sourceGrantRecords);
 const destinationNormalizedGrantRecords = normalizeRestoredGrantSemantics(destinationGrantRecords);

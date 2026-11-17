@@ -531,6 +531,83 @@ try {
       );
     },
   );
+  const { roleSessionProbeSql, assertRoleSessionProof } = await import(
+    new URL('../../qa/restore-session-proof.mjs', import.meta.url)
+  );
+  const expectedPath = (await db.query("SELECT current_setting('search_path') AS path")).rows[0]
+    .path;
+  const probeOutput = async (query) =>
+    (await db.exec(query))
+      .flatMap((r) => r.rows ?? [])
+      .map((row) => Object.values(row)[0])
+      .join('\n');
+  for (const role of ['postgres', 'anon', 'authenticated', 'service_role'])
+    await check('REC69 effective SET/RESET session ' + role, async () => {
+      try {
+        assertRoleSessionProof(await probeOutput(roleSessionProbeSql(role)), {
+          role,
+          executor: 'postgres',
+          searchPath: expectedPath,
+        });
+      } finally {
+        await db.exec('RESET ROLE');
+      }
+    });
+  await check('REC69 invalid SET and SQL failures are not ignored', async () => {
+    await assert.rejects(
+      db.exec('SET ROLE "__nonexistent_recovery_test_role"'),
+      (e) => e.code === '22023',
+    );
+    await assert.rejects(db.exec('SELECT 1/0'), (e) => e.code === '22012');
+  });
+  await check('REC69 omitted RESET is detected even when SET equals executor', async () => {
+    try {
+      const output = await probeOutput(roleSessionProbeSql('postgres').replace('RESET ROLE;', ''));
+      assert.throws(() =>
+        assertRoleSessionProof(output, {
+          role: 'postgres',
+          executor: 'postgres',
+          searchPath: expectedPath,
+        }),
+      );
+    } finally {
+      await db.exec('RESET ROLE');
+    }
+  });
+  await check('REC69 unexpected actual session search_path is rejected', async () => {
+    try {
+      const query = roleSessionProbeSql('anon').replace(
+        'SET ROLE "anon";',
+        'SET ROLE "anon"; SET search_path=pg_catalog;',
+      );
+      const output = await probeOutput(query);
+      assert.throws(() =>
+        assertRoleSessionProof(output, {
+          role: 'anon',
+          executor: 'postgres',
+          searchPath: expectedPath,
+        }),
+      );
+    } finally {
+      await db.exec('RESET ROLE');
+      await db.query("SELECT set_config('search_path',$1,false)", [expectedPath]);
+    }
+  });
+  await check(
+    'REC69 function diagnostic metadata query is valid and omits raw definitions',
+    async () => {
+      const { recoveryFunctionMetadataQuery, functionCatalogDetails } = await import(
+        new URL('./restore-diagnostics.mjs', import.meta.url)
+      );
+      const raw = (await db.query(recoveryFunctionMetadataQuery)).rows[0].coalesce;
+      const rows = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const safe = functionCatalogDetails(rows);
+      assert.ok(safe.some((f) => f.name === 'storage_recovery_intent_guard'));
+      assert.ok(
+        safe.every((f) => !Object.hasOwn(f, 'definition') && f.definitionSha256.length === 64),
+      );
+    },
+  );
   const ownerObjects = (
     await db.query(`SELECT 'RELATION:public.'||relname AS object FROM pg_class WHERE relnamespace='public'::regnamespace AND relname LIKE 'storage_%' AND relkind IN ('r','i')
     UNION ALL SELECT 'TYPE:public.'||typname FROM pg_type WHERE typnamespace='public'::regnamespace AND (typname LIKE 'storage_%' OR typname LIKE '_storage_%')

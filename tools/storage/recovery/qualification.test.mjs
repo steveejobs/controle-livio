@@ -12,6 +12,250 @@ import { cleanupTarget } from './cleanup-target.mjs';
 import { api as recoveryApi, assertRecoveryErrorResponse } from './transversal.mjs';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
+import { execFileSync } from 'node:child_process';
+import {
+  createRestoreDiagnostics,
+  restoreCommand,
+  restoreErrorDetails,
+  catalogRecord,
+  catalogDifferences,
+  functionCatalogDetails,
+} from './restore-diagnostics.mjs';
+
+for (const stage of [
+  'TARGET_CREATED',
+  'TARGET_MIGRATED',
+  'TARGET_SCHEMA_VERIFIED',
+  'DATA_RESTORE_STARTED',
+  'STORAGE_COPY_STARTED',
+]) {
+  test('REC69 captures first failure at ' + stage + ' before controlled cleanup', () => {
+    const snapshots = [];
+    const d = createRestoreDiagnostics({
+      runId: '69',
+      write: (s) => snapshots.push(structuredClone(s)),
+      identities: () => ({
+        source: { project: 'livio-legal-crm', cluster: '111' },
+        target: {
+          project: 'livio-recovery-69-abcdef12',
+          cluster: '222',
+          password: 'NEVER_EXPORTED',
+        },
+      }),
+    });
+    d.begin('BACKUP_VERIFIED', 'backup.verify', stage);
+    d.pass(['backup.sha256']);
+    d.begin(stage, 'controlled.operation', 'next');
+    const primary = Object.assign(new Error('SYNTHETIC primary failure'), {
+      code: 'SYNTHETIC_FAILURE',
+    });
+    d.fail(primary);
+    assert.equal(snapshots.at(-1).failedStage, stage);
+    assert.equal(snapshots.at(-1).lastPassedBeforeFailure, 'BACKUP_VERIFIED');
+    d.begin('CLEANUP_COMPLETED', 'cleanup.owned-only', null, true);
+    d.cleanupError(new Error('SYNTHETIC secondary cleanup failure'));
+    assert.equal(d.state.primaryError.message, 'SYNTHETIC primary failure');
+    assert.equal(d.state.cleanupErrors.length, 1);
+    assert.equal(JSON.stringify(snapshots).includes('NEVER_EXPORTED'), false);
+  });
+}
+test('REC69 actual failed child exports exit/pid/cause but never raw stdout/stderr', () => {
+  let failure;
+  try {
+    restoreCommand('postgresql.pg_restore', () =>
+      execFileSync(
+        process.execPath,
+        [
+          '-e',
+          "process.stdout.write('SYNTHETIC_SECRET_STDOUT');process.stderr.write('SQLSTATE 23505 password=synthetic-password');process.exit(7)",
+        ],
+        { stdio: ['ignore', 'pipe', 'pipe'] },
+      ),
+    );
+  } catch (error) {
+    failure = error;
+  }
+  const detail = restoreErrorDetails(failure);
+  assert.equal(detail.exitCode, 7);
+  assert.equal(detail.logicalCommand, 'postgresql.pg_restore');
+  assert.equal(detail.cause.sqlState, '23505');
+  assert.ok(detail.cause.subprocessPid > 0);
+  assert.ok(detail.cause.stderrSha256);
+  assert.equal(detail.cause.message, '[SUBPROCESS_OUTPUT_WITHHELD]');
+  assert.equal(JSON.stringify(detail).includes('synthetic-password'), false);
+  assert.equal(JSON.stringify(detail).includes('SYNTHETIC_SECRET_STDOUT'), false);
+});
+test('REC69 child timeout preserves signal without inventing an exit status', () => {
+  let failure;
+  try {
+    restoreCommand('storage.volume_copy', () =>
+      execFileSync(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {
+        timeout: 150,
+        killSignal: 'SIGTERM',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    );
+  } catch (error) {
+    failure = error;
+  }
+  const detail = restoreErrorDetails(failure);
+  assert.equal(detail.signal, 'SIGTERM');
+  assert.equal(detail.exitCode, null);
+});
+test('REC69 catalog mismatch identifies the named query while exact hashes still fail', () => {
+  const source = [
+    catalogRecord('relations_owners_acl_rls', Buffer.from('public|intent|postgres|rls=true')),
+  ];
+  const target = [
+    catalogRecord('relations_owners_acl_rls', Buffer.from('public|intent|foreign|rls=false')),
+  ];
+  const differences = catalogDifferences(source, target);
+  assert.equal(differences.length, 1);
+  assert.equal(differences[0].name, 'relations_owners_acl_rls');
+  assert.throws(() =>
+    assert.deepEqual(
+      target.map((r) => r.sha256),
+      source.map((r) => r.sha256),
+    ),
+  );
+  assert.deepEqual(catalogDifferences(source, source), []);
+  const functions = catalogRecord('functions', Buffer.from('SYNTHETIC_PRIVATE_FUNCTION_BODY'));
+  assert.equal(functions.rows, '[FUNCTION_BODIES_WITHHELD]');
+  const details = functionCatalogDetails([
+    {
+      schema: 'public',
+      name: 'f',
+      arguments: '',
+      owner: 'postgres',
+      acl: null,
+      securityDefiner: true,
+      volatility: 's',
+      parallel: 'u',
+      configuration: ['search_path=public', 'secret=synthetic-config-secret'],
+      definition: 'SYNTHETIC_PRIVATE_FUNCTION_BODY',
+      password: 'synthetic-password',
+    },
+  ]);
+  assert.deepEqual(details[0].searchPath, ['search_path=public']);
+  for (const secret of [
+    'SYNTHETIC_PRIVATE_FUNCTION_BODY',
+    'synthetic-config-secret',
+    'synthetic-password',
+  ])
+    assert.equal(JSON.stringify(details).includes(secret), false);
+  assert.equal(details[0].definitionSha256.length, 64);
+});
+test('REC69 secret-bearing cause chain is sanitized and cycles bounded', () => {
+  const error = new Error(
+    'password=synthetic-pass token=synthetic-token cookie=synthetic-cookie https://loopback.invalid/?token=synthetic-cap',
+  );
+  error.cause = error;
+  const text = JSON.stringify(restoreErrorDetails(error));
+  for (const secret of ['synthetic-pass', 'synthetic-token', 'synthetic-cookie', 'synthetic-cap'])
+    assert.equal(text.includes(secret), false);
+  assert.match(text, /CauseChainTruncated/);
+});
+test('REC69 diagnostic writer failure preserves original error instead of masking it', () => {
+  const primary = new Error('SYNTHETIC original');
+  const d = createRestoreDiagnostics({
+    runId: '69',
+    write: () => {
+      throw Object.assign(new Error('SYNTHETIC write denied'), { code: 'EACCES' });
+    },
+  });
+  assert.throws(() => d.begin('DATA_RESTORE_STARTED', 'restore', 'next'));
+  assert.doesNotThrow(() => d.fail(primary));
+  assert.equal(d.state.primaryError.message, primary.message);
+  assert.ok(d.state.captureErrors.length);
+});
+
+test('REC69 actual restore finally preserves primary failure and blocks unverified target cleanup', async () => {
+  const source = readFileSync(
+    new URL('./coordinated-restore.mjs', import.meta.url),
+    'utf8',
+  ).replaceAll('\r\n', '\n');
+  const start = source.search(/ {2}} finally \{\n\s*diagnostics\.begin\(/);
+  assert.ok(start > 0);
+  const end = source.indexOf("  assert.equal(evidence.result, 'PASS');", start);
+  const close = start + /\n {2}}\n {2}if \(primaryError\)/.exec(source.slice(start)).index;
+  const body = source.slice(start + '  } finally {'.length, close);
+  const rethrow = source.slice(close + '\n  }'.length, end);
+  const run = new Function(
+    'r',
+    'diagnostics',
+    'evidence',
+    'targetStarted',
+    'target',
+    'source',
+    'assertFreshDestination',
+    'cli',
+    'env',
+    'project',
+    'primaryError',
+    'assert',
+    'return(async()=>{try{}finally{' + body + '}' + rethrow + '})()',
+  );
+  const primary = new Error('SYNTHETIC primary restore failure');
+  for (const scenario of [
+    'missing-target',
+    'foreign-volume',
+    'stop-error',
+    'disconnect-error',
+    'never-started',
+  ]) {
+    const d = createRestoreDiagnostics({ runId: '69', write: () => {} }),
+      evidence = { result: 'FAIL' };
+    d.begin('TARGET_SCHEMA_VERIFIED', 'catalog.compare', 'DATA_RESTORE_STARTED');
+    d.fail(primary);
+    let stopped = 0,
+      guarded = 0;
+    await assert.rejects(
+      run(
+        {
+          db: {
+            $disconnect: async () => {
+              if (scenario === 'disconnect-error') throw new Error('SYNTHETIC disconnected');
+            },
+          },
+        },
+        d,
+        evidence,
+        scenario !== 'never-started',
+        scenario === 'missing-target' ? null : { project: 'livio-recovery-69-abcdef12' },
+        { project: 'livio-legal-crm' },
+        () => {
+          guarded++;
+          if (scenario === 'foreign-volume') throw new Error('FOREIGN_VOLUME');
+        },
+        (args) => {
+          stopped++;
+          assert.deepEqual(args, [
+            'stop',
+            '--project-id',
+            'livio-recovery-69-abcdef12',
+            '--no-backup',
+          ]);
+          if (scenario === 'stop-error') throw new Error('SYNTHETIC stop failed');
+        },
+        {},
+        'livio-recovery-69-abcdef12',
+        primary,
+        assert,
+      ),
+      (error) => error === primary,
+    );
+    assert.equal(d.state.primaryError.message, primary.message);
+    if (['missing-target', 'foreign-volume', 'never-started'].includes(scenario))
+      assert.equal(stopped, 0);
+    if (scenario === 'missing-target') assert.equal(guarded, 0);
+    if (scenario === 'disconnect-error')
+      assert.equal(stopped, 1, 'Disconnect failure must not prevent guarded cleanup');
+    if (scenario === 'never-started') {
+      assert.equal(evidence.targetCleanup.status, 'NOT_EXECUTED');
+      assert.equal(d.state.checkpoints.at(-1).result, 'NOT_EXECUTED');
+    }
+  }
+});
 
 test('REC67 X05 uses an explicit audited soft-delete fixture and preserves every reference', async () => {
   const source = readFileSync(new URL('./transversal.mjs', import.meta.url), 'utf8');
@@ -1021,4 +1265,16 @@ test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (l
     server.closeAllConnections();
     await once(server, 'close');
   }
+});
+
+test('REC69 coordinated restore module imports without executing a rehearsal', async () => {
+  const module = await import('./coordinated-restore.mjs');
+  assert.equal(typeof module.coordinatedRestore, 'function');
+});
+
+test('REC69 HTTP exception status is never reported as a process exit code', () => {
+  const e = Object.assign(new Error('SYNTHETIC forbidden'), { status: 403, getStatus: () => 403 });
+  const d = restoreErrorDetails(e);
+  assert.equal(d.httpStatus, 403);
+  assert.equal(d.exitCode, null);
 });

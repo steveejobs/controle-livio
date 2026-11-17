@@ -1,3 +1,12 @@
+import {
+  restoreCommand,
+  restoreErrorDetails,
+  createRestoreDiagnostics,
+  catalogRecord,
+  catalogDifferences,
+  functionCatalogDetails,
+  recoveryFunctionMetadataQuery,
+} from './restore-diagnostics.mjs';
 import { checkCatalogQuery, canonicalCheckCatalog } from '../../qa/restore-check-constraints.mjs';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -8,30 +17,58 @@ import { join, resolve } from 'node:path';
 import { runtime, snapshot } from './runtime.mjs';
 import { restoreFixture } from './restore-fixture.mjs';
 import { independentRecovery } from './independent-process.mjs';
-import {
-  assertOwnedStack,
-  docker,
-  ownContainer,
-  sql,
-  storageVolumeIdentity,
-} from './stack-identity.mjs';
+import { assertOwnedStack, ownContainer, storageVolumeIdentity } from './stack-identity.mjs';
 import { validateRecoveryEnvironment } from './environment.mjs';
 import { withFinancialApi } from '../../qa/run-financial-integrity-ci.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const quote = (name) => '"' + name.replaceAll('"', '""') + '"';
 const schemas = "'public','auth','storage','supabase_migrations'";
+function docker(args, options = {}) {
+  const logical = args.includes('pg_restore')
+    ? 'postgresql.pg_restore'
+    : args.includes('pg_dump')
+      ? 'postgresql.pg_dump'
+      : args.includes('psql')
+        ? 'postgresql.sql'
+        : args[0] === 'run'
+          ? 'storage.volume_copy'
+          : 'docker.' + args[0];
+  return restoreCommand(logical, () =>
+    execFileSync('docker', args, {
+      maxBuffer: 128 * 1024 * 1024,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      ...options,
+    }),
+  );
+}
+function sql(project, query) {
+  return docker(
+    [
+      'exec',
+      '-i',
+      ownContainer('db', project).Id,
+      'psql',
+      '-X',
+      '-qAt',
+      '-v',
+      'ON_ERROR_STOP=1',
+      '-U',
+      'postgres',
+      '-d',
+      'postgres',
+    ],
+    { input: query },
+  );
+}
 function cli(args, env) {
-  // CLI output includes local credentials. Never print it, including on error.
-  try {
-    return execFileSync(resolve('node_modules/.bin/supabase'), args, {
+  return restoreCommand('supabase.' + args[0] + (args[0] === 'db' ? '.' + args[1] : ''), () =>
+    execFileSync(resolve('node_modules/.bin/supabase'), args, {
       env,
       maxBuffer: 32 * 1024 * 1024,
       stdio: ['ignore', 'pipe', 'pipe'],
-    });
-  } catch {
-    throw new Error('DISPOSABLE_RESTORE_CLI_FAILED');
-  }
+    }),
+  );
 }
 function services(project) {
   const names = docker([
@@ -120,7 +157,7 @@ function sequenceState(project) {
       .trim(),
   }));
 }
-function catalog(project) {
+function catalog(project, diagnostics) {
   // OIDs differ across independent clusters. Compare names and definitions.
   const queries = [
     `SELECT nspname,pg_get_userbyid(nspowner),nspacl::text FROM pg_namespace WHERE nspname IN (${schemas}) ORDER BY 1`,
@@ -143,10 +180,55 @@ function catalog(project) {
     join(process.env.LIVIO_QA_OUTPUT, 'check-catalog-' + project + '.json'),
     JSON.stringify(checks, null, 2),
   );
-  return [
-    ...queries.map((q) => hash(sql(project, q + ';'))),
-    hash(JSON.stringify(canonicalCheckCatalog(checks))),
+  const names = [
+    'schemas',
+    'sequences',
+    'enums',
+    'relations_owners_acl_rls',
+    'functions',
+    'policies',
+    'triggers',
+    'column_acl',
+    'default_acl',
+    'roles',
+    'role_memberships',
+    'non_public_checks_and_other_constraints',
   ];
+  const records = [];
+  const evidencePath = join(process.env.LIVIO_QA_OUTPUT, 'catalog-' + project + '.json');
+  const saveCatalog = () =>
+    writeFileSync(evidencePath, JSON.stringify({ project, pid: process.pid, records }, null, 2));
+  saveCatalog();
+  for (const [index, query] of queries.entries()) {
+    diagnostics.command('catalog.' + names[index]);
+    try {
+      records.push(catalogRecord(names[index], sql(project, query + ';')));
+      if (names[index] === 'functions') {
+        try {
+          const details = JSON.parse(sql(project, recoveryFunctionMetadataQuery).toString());
+          records.at(-1).functions = functionCatalogDetails(details);
+        } catch (metadataError) {
+          records.at(-1).metadataUnavailable = restoreErrorDetails(metadataError);
+        }
+      }
+    } catch (error) {
+      writeFileSync(
+        evidencePath,
+        JSON.stringify(
+          { project, records, failedQuery: names[index], error: restoreErrorDetails(error) },
+          null,
+          2,
+        ),
+      );
+      throw error;
+    }
+    saveCatalog();
+  }
+  records.push(
+    catalogRecord('public_checks', Buffer.from(JSON.stringify(canonicalCheckCatalog(checks)))),
+  );
+  saveCatalog();
+  return records.map((r) => r.sha256);
 }
 function foreignKeys(project) {
   // Re-scan restored rows: convalidated=true alone proves nothing when restore
@@ -262,14 +344,38 @@ export async function coordinatedRestore(env) {
     fixtureData,
     source,
     target,
-    targetEnv;
+    targetEnv,
+    primaryError;
+  const identity = (value) =>
+    value
+      ? Object.fromEntries(
+          ['project', 'cluster', 'databaseContainer', 'volume', 'backendPath'].map((k) => [
+            k,
+            value[k],
+          ]),
+        )
+      : null;
+  const diagnostics = createRestoreDiagnostics({
+    runId: env.GITHUB_RUN_ID,
+    identities: () => ({
+      source: identity(source),
+      target: identity(target),
+      targetProject: project,
+    }),
+    write: (state) => {
+      evidence.diagnostics = state;
+      save();
+    },
+  });
   try {
+    diagnostics.begin('SOURCE_VERIFIED', 'source.identity', 'SOURCE_QUIESCED');
     r = await runtime(env);
     source = await assertOwnedStack(r.db, env);
     assert.equal(source.project, 'livio-legal-crm');
     evidence.source = source;
     evidence.phase = 'SOURCE_IDENTITY_VERIFIED';
-    save();
+    diagnostics.pass([source.project + '-storage-identity.json']);
+    diagnostics.begin('SOURCE_QUIESCED', 'source.fixture-and-quiesce', 'BACKUP_CREATED');
     fixtureData = await restoreFixture(r);
     await r.db.$disconnect();
     r = null;
@@ -290,7 +396,9 @@ export async function coordinatedRestore(env) {
         0,
         'Commercial/scheduled jobs must be absent in this rehearsal',
       );
-    const sourceCatalog = catalog(source.project),
+    diagnostics.pass();
+    diagnostics.begin('BACKUP_CREATED', 'source.backup', 'BACKUP_VERIFIED');
+    const sourceCatalog = catalog(source.project, diagnostics),
       sourceRows = inventory(source.project);
     evidence.sourceCatalog = sourceCatalog;
     evidence.sourceRows = sourceRows;
@@ -339,6 +447,13 @@ export async function coordinatedRestore(env) {
     evidence.before = fixtureData.before;
     evidence.crash = fixtureData.crash;
     save();
+    diagnostics.pass([
+      'coordinated-restore.json#backup.archiveSha256',
+      'coordinated-restore.json#backup.objects',
+    ]);
+    diagnostics.begin('BACKUP_VERIFIED', 'backup.hashes-recorded', 'TARGET_CREATED');
+    diagnostics.pass(['coordinated-restore.json']);
+    diagnostics.begin('TARGET_CREATED', 'supabase.start-owned-target', 'TARGET_MIGRATED');
     evidence.phase = 'TARGET_CREATION';
     let config = readFileSync('supabase/config.toml', 'utf8')
       .replace(/^project_id\s*=.*$/m, `project_id = "${project}"`)
@@ -385,6 +500,13 @@ export async function coordinatedRestore(env) {
     } finally {
       await fresh.$disconnect();
     }
+    evidence.target = target;
+    diagnostics.pass([project + '-storage-identity.json']);
+    diagnostics.begin(
+      'TARGET_MIGRATED',
+      'supabase.db.reset-owned-target',
+      'TARGET_SCHEMA_VERIFIED',
+    );
     cli(['db', 'reset', '--local', '--yes', '--workdir', scratch], env);
     r = await runtime(targetEnv);
     target = await assertOwnedStack(r.db, targetEnv);
@@ -399,16 +521,42 @@ export async function coordinatedRestore(env) {
       source.tenantId,
       'Provider namespace must match the physical archive layout',
     );
+    evidence.target = target;
+    diagnostics.pass([project + '-storage-identity.json']);
+    diagnostics.begin(
+      'TARGET_SCHEMA_VERIFIED',
+      'catalog.source-target-comparison',
+      'DATA_RESTORE_STARTED',
+    );
     targetEnv.LIVIO_RECOVERY_CLUSTER = target.cluster;
     const targetServices = quiesce(project);
+    const migratedCatalog = catalog(project, diagnostics);
+    const sourceCatalogRows = JSON.parse(
+      readFileSync(join(env.LIVIO_QA_OUTPUT, 'catalog-' + source.project + '.json'), 'utf8'),
+    ).records;
+    const targetCatalogRows = JSON.parse(
+      readFileSync(join(env.LIVIO_QA_OUTPUT, 'catalog-' + project + '.json'), 'utf8'),
+    ).records;
+    evidence.catalogComparison = {
+      source: sourceCatalogRows,
+      target: targetCatalogRows,
+      differences: catalogDifferences(sourceCatalogRows, targetCatalogRows),
+    };
+    save();
+    diagnostics.command('catalog.compare-before-data-restore');
     assert.deepEqual(
-      catalog(project),
+      migratedCatalog,
       sourceCatalog,
       'Migrations, owners, grants, RLS and functions must match before data restore',
     );
+    diagnostics.pass(['catalog-' + source.project + '.json', 'catalog-' + project + '.json']);
     evidence.target = target;
     evidence.phase = 'RESTORE';
-    save();
+    diagnostics.begin(
+      'DATA_RESTORE_STARTED',
+      'postgresql.pg_restore-data-only',
+      'DATA_RESTORE_COMPLETED',
+    );
     assertFreshDestination(target, source);
     // Explicit tables only, no CASCADE, no shared/hosted URL and no schema DROP.
     const targetRows = inventory(project);
@@ -444,8 +592,19 @@ export async function coordinatedRestore(env) {
       sourceRows,
       'Every restored row must match before services mutate timestamps',
     );
+    const restoredCatalog = catalog(project, diagnostics);
+    const restoredRecords = JSON.parse(
+      readFileSync(join(env.LIVIO_QA_OUTPUT, 'catalog-' + project + '.json'), 'utf8'),
+    ).records;
+    evidence.restoredCatalogComparison = {
+      source: sourceCatalogRows,
+      target: restoredRecords,
+      differences: catalogDifferences(sourceCatalogRows, restoredRecords),
+    };
+    save();
+    diagnostics.command('catalog.compare-after-data-restore');
     assert.deepEqual(
-      catalog(project),
+      restoredCatalog,
       sourceCatalog,
       'Restore cannot relax owners/grants/RLS/triggers',
     );
@@ -455,6 +614,18 @@ export async function coordinatedRestore(env) {
       'Sequence values and is_called must restore exactly',
     );
     evidence.foreignKeysRescanned = foreignKeys(project);
+    diagnostics.pass();
+    diagnostics.begin(
+      'DATA_RESTORE_COMPLETED',
+      'restored-database-invariants',
+      'STORAGE_COPY_STARTED',
+    );
+    diagnostics.pass(['restored-row-catalog-fk-sequence-checks']);
+    diagnostics.begin(
+      'STORAGE_COPY_STARTED',
+      'storage.volume-copy-owned-target',
+      'STORAGE_COPY_COMPLETED',
+    );
     assertFreshDestination(target, source);
     const restoredObjects = copyVolume(
       target.storageImage,
@@ -463,6 +634,14 @@ export async function coordinatedRestore(env) {
       privateRoot,
     );
     assert.deepEqual(restoredObjects, objects, 'Physical Storage files and hashes differ');
+    diagnostics.pass();
+    diagnostics.begin('STORAGE_COPY_COMPLETED', 'storage.hashes-verified', 'POST_RESTORE_VERIFIED');
+    diagnostics.pass(['coordinated-restore.json#backup.objects']);
+    diagnostics.begin(
+      'POST_RESTORE_VERIFIED',
+      'restored.auth-api-and-snapshots',
+      'RECOVERY_RESUMED',
+    );
     docker(['start', ...targetServices]);
     const deadline = Date.now() + 60000;
     let ready = false;
@@ -541,6 +720,12 @@ export async function coordinatedRestore(env) {
         evidence.api.foreignHttp = foreign.status;
       },
     );
+    diagnostics.pass(['restored-auth-api-snapshots']);
+    diagnostics.begin(
+      'RECOVERY_RESUMED',
+      'reconciler.independent-process',
+      'FINAL_INTEGRITY_VERIFIED',
+    );
     for (const org of fixtureData.organizations) {
       await r.db.storageUploadIntent.updateMany({
         where: { organizationId: org },
@@ -559,6 +744,12 @@ export async function coordinatedRestore(env) {
       const child = await independentRecovery({ actor: { organizationId: org } }, targetEnv);
       evidence.recovered.push(child);
     }
+    diagnostics.pass(['coordinated-restore.json#recovered']);
+    diagnostics.begin(
+      'FINAL_INTEGRITY_VERIFIED',
+      'restored.final-postconditions',
+      'CLEANUP_COMPLETED',
+    );
     r = await runtime(targetEnv);
     const after = [];
     for (const org of fixtureData.organizations) after.push(await snapshot(r, org));
@@ -609,22 +800,89 @@ export async function coordinatedRestore(env) {
     evidence.after = after;
     evidence.result = 'PASS';
     evidence.phase = 'COMPLETE';
+    diagnostics.pass(['final-snapshots']);
   } catch (error) {
-    evidence.error = { name: error.name, code: error.code ?? null, checkpoint: evidence.phase };
-    throw error;
+    primaryError = error;
+    evidence.error = { ...restoreErrorDetails(error), checkpoint: evidence.phase };
+    diagnostics.fail(error); // Persist primary before optional status probes.
+    const status = (value) => {
+      if (!value?.project) return { status: 'NOT_IDENTIFIED' };
+      try {
+        const db = ownContainer('db', value.project, false);
+        return {
+          project: value.project,
+          databaseContainer: db.Id,
+          running: db.State.Running,
+          status: db.State.Status,
+        };
+      } catch (observationError) {
+        return {
+          project: value.project,
+          status: 'UNAVAILABLE',
+          error: restoreErrorDetails(observationError),
+        };
+      }
+    };
+    evidence.stackStatusAtFailure = {
+      source: status(source),
+      target: status(target ?? (targetStarted ? { project } : null)),
+    };
+    evidence.error = { ...restoreErrorDetails(error), checkpoint: evidence.phase };
+    diagnostics.fail(error); // Include observed stack status, preserving the same primary.
   } finally {
-    await r?.db.$disconnect();
+    diagnostics.begin('CLEANUP_COMPLETED', 'cleanup.owned-target-only', null, true);
+    const cleanupErrors = [];
+    try {
+      await r?.db.$disconnect();
+    } catch (error) {
+      cleanupErrors.push(error);
+      diagnostics.cleanupError(error);
+    }
     if (targetStarted) {
       try {
+        // A partial target without a proven cluster/volume identity is left for
+        // the separately guarded cleanup-target workflow, never stopped blindly.
+        assert.ok(target && source, 'RESTORE_CLEANUP_IDENTITY_UNCONFIRMED');
+        assertFreshDestination(target, source);
         cli(['stop', '--project-id', project, '--no-backup'], env);
         evidence.targetStopped = true;
-      } catch {
+        evidence.targetCleanup = {
+          status: 'STOP_COMMAND_SUCCEEDED',
+          physicalAbsence: 'NOT_VERIFIED_HERE; consult recovery-cleanup.json',
+        };
+      } catch (error) {
+        cleanupErrors.push(error);
         evidence.cleanupFailure = true;
         evidence.result = 'FAIL';
+        diagnostics.cleanupError(error);
       }
+    } else evidence.targetCleanup = { status: 'NOT_EXECUTED', reason: 'TARGET_NOT_STARTED' };
+    try {
+      if (!cleanupErrors.length) {
+        if (targetStarted) diagnostics.pass(['coordinated-restore.json#targetStopped']);
+        else diagnostics.skip('TARGET_NOT_STARTED');
+      }
+    } catch (error) {
+      cleanupErrors.push(error);
+      diagnostics.cleanupError(error);
     }
-    save();
+    if (diagnostics.state.captureErrors.length && !cleanupErrors.length) {
+      const error = new Error('RESTORE_DIAGNOSTIC_CAPTURE_FAILED');
+      cleanupErrors.push(error);
+      diagnostics.cleanupError(error);
+    }
+    if (cleanupErrors.length) evidence.result = 'FAIL';
+    if (cleanupErrors.length && !primaryError) {
+      evidence.error = {
+        ...restoreErrorDetails(cleanupErrors[0]),
+        checkpoint: 'CLEANUP_COMPLETED',
+      };
+      diagnostics.fail(cleanupErrors[0]);
+      primaryError = cleanupErrors[0];
+    }
+    diagnostics.flush();
   }
+  if (primaryError) throw primaryError;
   assert.equal(evidence.result, 'PASS');
   return evidence;
 }
