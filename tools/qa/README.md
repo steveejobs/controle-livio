@@ -151,6 +151,16 @@ node --env-file=.env --import tsx tools/qa/validate-pool2-navigation.ts
 
 O pool 2 fica candidato exclusivamente para uma instância local. Não configure Vercel até verificar o host e limite efetivos do `DATABASE_URL` publicado, o máximo de instâncias/concurrency da Function, limites de clientes/servidores do Supavisor e conexões utilizadas por outros serviços. `pg_stat_activity` conta conexões do PostgreSQL e não substitui os limites de clientes do pooler.
 
+### Auditoria financeira da etapa 3
+
+`financial-integrity-ci.mjs` é acionado pelo novo teste integrado `financial-integrity.integrated.e2e.ts`, somente na rodada completa do Quality existente. Não é um comando de Production. Exige consentimento explícito de execução descartável, ambiente de teste, Auth/API/PostgreSQL loopback, ClamAV local do runner, credenciais exclusivas locais e ausência de arquivos dotenv; recusa sobrescrever evidência anterior. Não muda workflows, grants, migrations ou rate limits.
+
+Os 30 casos financeiros geram `workflow-stages/financial-stage3.json`, já incluído no upload sanitizado existente. A barreira SQL exige observar as requisições bloqueadas no PostgreSQL antes de liberá-las. Injeções de falha são wrappers locais dos serviços compilados sobre transações e Storage reais; somente a conexão PostgreSQL aberta pelo próprio teste pode ser encerrada. Nenhum audit log é apagado.
+
+Validação local do harness sem banco: `node --test tools/qa/financial-integrity-support.test.mjs` após build da API. Testa o preflight e os payloads contra schemas reais; não comprova persistência. A execução integrada requer autorização de commit/push e runner descartável. Ver `docs/auditoria-2026-11-04/ETAPA_3_FINANCEIRO.md` para riscos, escopos e resultados.
+
+`catalog-financial-audit.mjs` relaciona os candidatos existentes a funções financeiras. Recusa substituir os catálogos gerados sem `--overwrite` explícito e nunca altera o inventário original. A contagem de funções não é contagem de testes nem total global do produto.
+
 ### Captura SMTP descartável na CI
 
 O job integrado usa `prepare-local-supabase-ci.mjs --smtp-capture`. Esta opção explícita só é aceita no runner Linux GitHub, em checkout sem vínculo cloud e sem credenciais Supabase externas ou variáveis SMTP. Ela habilita o Mailpit local sem relay e grava `otp_expiry=60` somente no config do checkout descartável. O ensaio de restore continua sem e-mail.
@@ -158,3 +168,11 @@ O job integrado usa `prepare-local-supabase-ci.mjs --smtp-capture`. Esta opção
 `verify-smtp-capture-ci.mjs` exige esse ambiente e destinos HTTP loopback nas portas 54321/54324/3010. Usa apenas conta aleatória `@example.test`, captura convite/recuperação via API Mailpit, verifica senha anterior/nova, uso único, destino permitido e expiração após 65 segundos reais. Não encaminha mensagens nem registra corpos, endereços, links ou tokens. O único artefato contém status e booleanos sanitizados.
 
 Escopo: transporte Auth → caixa local e consumo dos links pelo Auth. Não valida o provedor hospedado, a entrega externa, o template comercial nem a página SSR final (`frontendLandingVerified=false`). O callback web exige `code` ou `token_hash` + `type`; homologar templates compatíveis com ele antes da liberação, pois o fluxo padrão com tokens no fragmento da URL não pode ser lido pelo callback de servidor. Não alterar templates cloud nesta etapa.
+
+## DEF-008 preflight (Etapa 3.3)
+
+The existing disposable financial runner imports financial-security-ci.mjs and financial-write-matrix.mjs. They never load dotenv; the entry point validates loopback URLs, test flags and absence of external credentials before connecting. Financial and indirect write attempts use valid synthetic rows and real local Auth JWTs; HTTP/RLS/ACL/domain failures are recorded separately. See docs/auditoria-2026-11-04/PREFLIGHT_CI_DEF008_ETAPA3_3.md for the reviewable scope and release limitations.
+
+Local support checks: node --test tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs.
+
+Optional SQL grammar/ACL rehearsal: node tools/qa/financial-sql-probe.mjs <absolute-local-PGlite-module-path>. PGlite is not a repository dependency and is never installed automatically by the script. The probe creates only in-memory synthetic databases, closes them at completion and has no database URL or remote connection. Validated locally with @electric-sql/pglite 0.3.14 / PostgreSQL 17.5; this does not validate the full application schema, Supabase or integrated concurrency.

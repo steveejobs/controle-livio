@@ -1,4 +1,5 @@
 import { createConnection } from 'node:net';
+import { loadImage } from '@napi-rs/canvas';
 import {
   Inject,
   Injectable,
@@ -46,6 +47,14 @@ export class DocumentScannerService {
     if (!host) throw new ServiceUnavailableException('A varredura de segurança está indisponível.');
 
     await this.scanBuffer(file, host);
+    if (mimeType && ['image/png', 'image/jpeg', 'image/webp'].includes(mimeType)) {
+      try {
+        const image = await loadImage(file);
+        if (!image.width || !image.height) throw new Error('Empty raster image');
+      } catch {
+        throw new UnprocessableEntityException('A imagem está corrompida ou não pode ser lida.');
+      }
+    }
     if (mimeType !== 'application/pdf') return;
 
     const { pageContents, embeddedFiles } = await extractPdfScanTargets(file);

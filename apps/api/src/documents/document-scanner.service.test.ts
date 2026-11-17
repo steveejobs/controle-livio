@@ -522,3 +522,42 @@ describe('document malware scan', () => {
     }
   }, 30_000);
 });
+
+it('rejects a truncated PNG even after a clean malware verdict', async () => {
+  const clean = await scanner('stream: OK\0');
+  try {
+    const service = new DocumentScannerService(
+      config({ CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: clean.port, CLAMAV_TIMEOUT_MS: 2000 }),
+    );
+    await expect(
+      service.assertClean(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]), 'image/png'),
+    ).rejects.toBeInstanceOf(UnprocessableEntityException);
+    expect(clean.requests()).toBe(1);
+  } finally {
+    await new Promise<void>((resolve) => clean.server.close(() => resolve()));
+  }
+});
+
+it.each(['image/png', 'image/jpeg', 'image/webp'] as const)(
+  'preserves valid %s after scanning and decoding',
+  async (mime) => {
+    const clean = await scanner('stream: OK\0');
+    try {
+      const canvas = createCanvas(64, 64);
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, 64, 64);
+      ctx.fillStyle = '#111';
+      ctx.fillText('TEST', 1, 25);
+      const service = new DocumentScannerService(
+        config({ CLAMAV_HOST: '127.0.0.1', CLAMAV_PORT: clean.port, CLAMAV_TIMEOUT_MS: 2000 }),
+      );
+      await expect(
+        service.assertClean(canvas.toBuffer(mime), 'image/' + mime.split('/')[1]),
+      ).resolves.toBeUndefined();
+      expect(clean.requests()).toBe(1);
+    } finally {
+      await new Promise<void>((resolve) => clean.server.close(() => resolve()));
+    }
+  },
+);

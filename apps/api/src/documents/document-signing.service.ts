@@ -8,6 +8,7 @@ import {
   HttpException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import type { AuthenticatedActor } from '@livio/shared';
@@ -15,8 +16,9 @@ import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DocumentScannerService } from './document-scanner.service';
 import { StorageService } from './storage.service';
+import { StorageRecoveryService } from '../storage-recovery/storage-recovery.service';
+import { recoveryLeaseMs } from '../storage-recovery/storage-recovery.domain';
 
-const signatureBucket = 'document-signatures';
 const signatureMime = 'image/png';
 const signatureLimit = 500 * 1024;
 
@@ -45,6 +47,7 @@ export class DocumentSigningService {
     private readonly storage: StorageService,
     private readonly audit: AuditService,
     private readonly scanner: DocumentScannerService,
+    private readonly recovery: StorageRecoveryService,
   ) {}
 
   async createRequest(
@@ -184,7 +187,7 @@ export class DocumentSigningService {
 
   async publicDetails(token: string) {
     const hashed = tokenHash(token);
-    const request = await this.prisma.documentSigningRequest.findUnique({
+    let request = await this.prisma.documentSigningRequest.findUnique({
       where: { tokenHash: hashed },
       include: { document: { select: { title: true } }, sourceDocumentVersion: true },
     });
@@ -197,17 +200,14 @@ export class DocumentSigningService {
         signedAt: request.signedAt,
       };
     if (request.status === 'PROCESSING') {
-      const staleBefore = new Date(Date.now() - 3 * 60 * 1000);
-      if (request.updatedAt <= staleBefore) {
-        const recovered = await this.prisma.documentSigningRequest.updateMany({
-          where: { id: request.id, status: 'PROCESSING', updatedAt: { lte: staleBefore } },
-          data: { status: 'PENDING' },
-        });
-        if (recovered.count === 0)
-          return { status: 'PROCESSING', documentTitle: request.document.title };
-      } else {
+      await this.recovery.releaseSigningGroup(request.id);
+      request = await this.prisma.documentSigningRequest.findUnique({
+        where: { tokenHash: hashed },
+        include: { document: { select: { title: true } }, sourceDocumentVersion: true },
+      });
+      if (!request) throw new NotFoundException('Link indisponível ou expirado.');
+      if (request.status === 'PROCESSING')
         return { status: 'PROCESSING', documentTitle: request.document.title };
-      }
     }
     if (
       request.status === 'REVOKED' ||
@@ -260,22 +260,54 @@ export class DocumentSigningService {
     if (!input.consent)
       throw new BadRequestException('Confirme que leu o documento e deseja assiná-lo.');
     const signature = this.decodeSignature(input.signature);
-    const claimed = await this.prisma.documentSigningRequest.updateMany({
-      where: { id: request.id, status: 'PENDING', expiresAt: { gt: new Date() } },
-      data: { status: 'PROCESSING' },
-    });
-    if (claimed.count !== 1)
-      throw new ConflictException('Este link já está sendo usado ou expirou.');
-
     const signedAt = new Date();
     const signatureHash = sha256(signature);
     const signatureStorageKey = `organizations/${request.organizationId}/signatures/${request.id}/${randomUUID()}.png`;
     const signedDocumentId = randomUUID();
     const signedStorageKey = `organizations/${request.organizationId}/documents/${signedDocumentId}/${randomUUID()}-assinado.pdf`;
-    let signatureStored = false;
-    let signedDocumentStored = false;
+
+    const groupId = randomUUID();
+    const tickets = await this.prisma.$transaction(async (transaction) => {
+      const claimed = await transaction.documentSigningRequest.updateMany({
+        where: { id: request.id, status: 'PENDING', expiresAt: { gt: new Date() } },
+        data: {
+          status: 'PROCESSING',
+          processingGroupId: groupId,
+          processingLeaseUntil: new Date(Date.now() + recoveryLeaseMs),
+        },
+      });
+      if (claimed.count !== 1)
+        throw new ConflictException('Este link já está sendo usado ou expirou.');
+      const signatureTicket = await this.recovery.planInTransaction(transaction, {
+        organizationId: request.organizationId,
+        actorUserId: request.createdById,
+        purpose: 'SIGNATURE',
+        bucket: 'document-signatures',
+        key: signatureStorageKey,
+        resourceType: 'document_signing_request',
+        resourceId: request.id,
+        groupId,
+        expectedSha256: signatureHash,
+        idempotencyKey: 'SIGNATURE:' + groupId,
+      });
+      const pdfTicket = await this.recovery.planInTransaction(transaction, {
+        organizationId: request.organizationId,
+        actorUserId: request.createdById,
+        purpose: 'SIGNED_PDF',
+        bucket: 'legal-documents',
+        key: signedStorageKey,
+        resourceType: 'document',
+        resourceId: signedDocumentId,
+        groupId,
+        expectedSha256: null,
+        idempotencyKey: 'SIGNED_PDF:' + groupId,
+      });
+      return { signatureTicket, pdfTicket };
+    });
     try {
       const original = await this.storage.download(request.sourceDocumentVersion.storageKey);
+      if (sha256(original) !== request.sourceDocumentVersion.sha256)
+        throw new ServiceUnavailableException('Integridade do PDF original não comprovada.');
       await this.scanner.assertClean(original, request.sourceDocumentVersion.mimeType);
       await this.scanner.assertClean(signature, signatureMime);
       const signedPdf = await this.appendSignature(original, signature, {
@@ -287,12 +319,18 @@ export class DocumentSigningService {
         signatureSha256: signatureHash,
       });
       await this.scanner.assertClean(signedPdf, 'application/pdf');
-      await this.storage.upload(signatureStorageKey, signature, signatureMime, signatureBucket);
-      signatureStored = true;
-      await this.storage.upload(signedStorageKey, signedPdf, 'application/pdf');
-      signedDocumentStored = true;
+      // All three scans above MUST pass before the first of the two uploads.
+      await this.recovery.store(tickets.signatureTicket, signature, signatureMime, async () => {});
+      await this.recovery.store(tickets.pdfTicket, signedPdf, 'application/pdf', async () => {});
 
       await this.prisma.$transaction(async (transaction) => {
+        // Lock order: signing request, then operation IDs. Expiration uses the same order.
+        await transaction.$queryRaw`SELECT id FROM document_signing_requests WHERE id=${request.id}::uuid FOR UPDATE`;
+        for (const ticket of [tickets.signatureTicket, tickets.pdfTicket].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ))
+          await this.recovery.lockForAttachment(transaction, ticket);
+
         await transaction.document.create({
           data: {
             id: signedDocumentId,
@@ -322,8 +360,14 @@ export class DocumentSigningService {
           },
         });
         const updated = await transaction.documentSigningRequest.updateMany({
-          where: { id: request.id, status: 'PROCESSING' },
+          where: {
+            id: request.id,
+            status: 'PROCESSING',
+            processingGroupId: groupId,
+            processingLeaseUntil: { gt: new Date() },
+          },
           data: {
+            processingLeaseUntil: null,
             status: 'SIGNED',
             signedAt,
             signatureStorageKey,
@@ -352,15 +396,20 @@ export class DocumentSigningService {
             signatureSha256: signatureHash,
           },
         });
+        await this.recovery.complete(transaction, tickets.signatureTicket);
+        await this.recovery.complete(transaction, tickets.pdfTicket);
       });
       return { status: 'SIGNED', signedAt, signedDocumentId };
     } catch (error) {
-      if (signatureStored) await this.storage.remove(signatureStorageKey, signatureBucket);
-      if (signedDocumentStored) await this.storage.remove(signedStorageKey);
-      await this.prisma.documentSigningRequest.updateMany({
-        where: { id: request.id, status: 'PROCESSING' },
-        data: { status: 'PENDING' },
-      });
+      const abandoned = await this.recovery.releaseSigningGroup(request.id, groupId);
+      const cleanup = await Promise.allSettled(
+        abandoned.map((ticket) => this.recovery.compensate(ticket, error)),
+      );
+      if (cleanup.some((result) => result.status === 'rejected'))
+        throw new ServiceUnavailableException(
+          'A assinatura falhou e há arquivos cuja recuperação exige revisão administrativa.',
+          { cause: error },
+        );
       throw error;
     }
   }

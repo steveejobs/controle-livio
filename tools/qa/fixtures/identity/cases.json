@@ -1,0 +1,155 @@
+[
+  {
+    "id": "ID-T01",
+    "type": "RG",
+    "text": "NOME: PESSOA SINTETICA ARAUJO\nCPF: 529.982.247-25\nRG: MG-1234567\nSSP/MG\nNASCIMENTO: 24/05/1990",
+    "expected": {
+      "name": "PESSOA SINTETICA ARAUJO",
+      "cpf": "52998224725",
+      "rg": "MG-1234567",
+      "issuingAuthority": "SSP/MG",
+      "birthDate": "1990-05-24"
+    }
+  },
+  {
+    "id": "ID-T02",
+    "type": "RG",
+    "text": "RG:\nSSP/MA",
+    "expected": { "issuingAuthority": "SSP/MA" }
+  },
+  {
+    "id": "ID-T03",
+    "type": "RG",
+    "text": "RG: 12.345.678-X\nCPF: 52998224725",
+    "expected": { "rg": "12.345.678-X", "cpf": "52998224725" }
+  },
+  {
+    "id": "ID-T04",
+    "type": "RG",
+    "text": "CPF: 529.982.247-25\nREGISTRO GERAL\nA123456B\nNOME: PESSOA SINTETICA BETA",
+    "expected": { "cpf": "52998224725", "rg": "A123456B", "name": "PESSOA SINTETICA BETA" }
+  },
+  {
+    "id": "ID-T05",
+    "type": "RG",
+    "text": "RG:\nILEGIVEL\nSESP/PR",
+    "expected": { "issuingAuthority": "SESP/PR" }
+  },
+  {
+    "id": "ID-T06",
+    "type": "RG",
+    "text": "NOME:\nCPF: 52998224725\nRG: 1234567",
+    "expected": { "cpf": "52998224725", "rg": "1234567" }
+  },
+  {
+    "id": "ID-T07",
+    "type": "RG",
+    "text": "RG:\nNASCIMENTO\n24/05/1990",
+    "expected": { "birthDate": "1990-05-24" }
+  },
+  {
+    "id": "ID-T08",
+    "type": "RG",
+    "text": "RG: 24/05/1990\nSSP/MA",
+    "expected": { "issuingAuthority": "SSP/MA" }
+  },
+  {
+    "id": "ID-T09",
+    "type": "CNH",
+    "text": "REGISTRO CNH: 52998224725\nCATEGORIA: AB\nVALIDADE: 01/01/2030",
+    "expected": {}
+  },
+  {
+    "id": "ID-T10",
+    "type": "CPF",
+    "text": "CPF: 111.111.111-11\nNOME: PESSOA SINTETICA GAMA",
+    "expected": { "name": "PESSOA SINTETICA GAMA" }
+  },
+  { "id": "ID-T11", "type": "CPF", "text": "CPF: 529.982.247-24", "expected": {} },
+  { "id": "ID-T12", "type": "CPF", "text": "CPF: 5299822472500", "expected": {} },
+  {
+    "id": "ID-T13",
+    "type": "CIN",
+    "text": "CARTEIRA DE IDENTIDADE NACIONAL\nNOME COMPLETO: PESSOA SINTETICA DELTA\nCPF: 529.982.247-25\nNASCIMENTO: 24/05/1990",
+    "expected": {
+      "name": "PESSOA SINTETICA DELTA",
+      "cpf": "52998224725",
+      "birthDate": "1990-05-24"
+    }
+  },
+  {
+    "id": "ID-T14",
+    "type": "CNH",
+    "text": "NOME E SOBRENOME\nPESSOA SINTETICA EPSILON\nCPF: 529.982.247-25\nNASC. 24/05/1990\nREGISTRO CNH: 12345678901",
+    "expected": {
+      "name": "PESSOA SINTETICA EPSILON",
+      "cpf": "52998224725",
+      "birthDate": "1990-05-24"
+    }
+  },
+  {
+    "id": "ID-T15",
+    "type": "RG",
+    "text": "NOME: PESSOA SINTETICA ZETA CPF: 529.982.247-25\nRG: 1234567 SDS/PE",
+    "expected": {
+      "name": "PESSOA SINTETICA ZETA",
+      "cpf": "52998224725",
+      "rg": "1234567",
+      "issuingAuthority": "SDS/PE"
+    }
+  },
+  {
+    "id": "ID-T16",
+    "type": "RG",
+    "text": "NASCIMENTO:\nEMISSAO: 24/05/1990\nRG: 1234567",
+    "expected": { "rg": "1234567" }
+  },
+  {
+    "id": "ID-T17",
+    "type": "RG",
+    "text": "NASCIMENTO: 31/02/1990\nRG: 1234567 IFP/RJ",
+    "expected": { "rg": "1234567", "issuingAuthority": "IFP/RJ" }
+  },
+  {
+    "id": "ID-T18",
+    "type": "RG",
+    "text": "NOME DA MAE: PESSOA SINTETICA ASCENDENTE\nFILIACAO\nPESSOA SINTETICA ASCENDENTE\nUF: MA",
+    "expected": {}
+  },
+  {
+    "id": "ID-T19",
+    "type": "RG",
+    "text": "RG: 1234567A\nORGAO EMISSOR: IIRGD/SP",
+    "expected": { "rg": "1234567A", "issuingAuthority": "IIRGD/SP" }
+  },
+  {
+    "id": "ID-T20",
+    "type": "RG",
+    "text": "NOME:\nSSP/MA\nCPF: 529.982.247-25",
+    "expected": { "cpf": "52998224725", "issuingAuthority": "SSP/MA" }
+  },
+  {
+    "id": "ID-T21",
+    "type": "CPF",
+    "text": "NUMERO: 52998224725\nDOCUMENTO SINTETICO SEM ROTULO CPF",
+    "expected": {}
+  },
+  {
+    "id": "ID-T22",
+    "type": "RG",
+    "text": "NOME: PESSOA SINTETICA ETA\nCPF:\nRG: 12345678901",
+    "expected": { "name": "PESSOA SINTETICA ETA", "rg": "12345678901" }
+  },
+  {
+    "id": "ID-T23",
+    "type": "RG",
+    "text": "RG: 1234-X\nPC/GO\nNASCIMENTO: 29/02/2000",
+    "expected": { "rg": "1234-X", "issuingAuthority": "PC/GO", "birthDate": "2000-02-29" }
+  },
+  {
+    "id": "ID-T24",
+    "type": "UNKNOWN",
+    "text": "MATERIAL DE TESTE SEM VALIDADE\nTEXTO ILEGIVEL",
+    "expected": {}
+  }
+]

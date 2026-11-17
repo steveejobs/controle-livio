@@ -1,15 +1,31 @@
+import { roleSessionProbeSql, assertRoleSessionProof } from './restore-session-proof.mjs';
+import {
+  canonicalStructureEntry,
+  checkCatalogQuery,
+  canonicalCheckCatalog,
+} from './restore-check-constraints.mjs';
 import { execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
+import {
+  assertRecoveryArchive,
+  recoveryPrivateTableQuery,
+  recoveryFunctionQuery,
+  assertRecoveryOwners,
+  recoveryRestoreInventory,
+} from '../storage/recovery/restore-inventory.mjs';
 
 const excludedSchedulerSchemas = ['cron', 'net'];
 const excludedSchedulerExtensions = new Set(['pg_cron', 'pg_net']);
 const expectedRestoreInventory = {
-  sourceOwners: 351,
-  sourceAclRows: 232,
-  restoredAclRows: 216,
+  // DEF-008 adds exactly two public routines, each with an explicit ACL.
+  // No relation/type/index was added; owner and ACL inventories grow by two.
+  // The archive observed in Quality 43038974286 has 234 ACL rows / 218 retained.
+  sourceOwners: 351 + 2,
+  sourceAclRows: 232 + 2,
+  restoredAclRows: 216 + 2,
   restoredDefaultAclRows: 27,
   excludedSchedulerAclRows: 16,
   excludedSchedulerDefaultAclRows: 3,
@@ -127,7 +143,15 @@ const filterUnsupportedTocEntries = (entries, knownOwners = new Set()) =>
     return !referencesExcludedScheduler(entry);
   });
 
-const publicSchemaPreparationForRestore = (tocLines, knownOwners = new Set()) => {
+const publicSchemaPreparationForRestore = (
+  tocLines,
+  knownOwners = new Set(),
+  sourceOwner = 'postgres',
+) => {
+  assert(
+    ['postgres', 'supabase_admin', 'pg_database_owner'].includes(sourceOwner),
+    'Unknown source schema owner',
+  );
   const archiveContainsPublicSchema = tocLines
     .map((line) => parseTocEntry(line, knownOwners))
     .some((entry) => entry?.description === 'SCHEMA' && entry.name === 'public');
@@ -135,7 +159,7 @@ const publicSchemaPreparationForRestore = (tocLines, knownOwners = new Set()) =>
     archiveContainsPublicSchema,
     statement: archiveContainsPublicSchema
       ? 'ALTER SCHEMA public RENAME TO restore_bootstrap_empty'
-      : 'ALTER SCHEMA public OWNER TO supabase_admin',
+      : 'ALTER SCHEMA public OWNER TO ' + sourceOwner,
   };
 };
 
@@ -154,7 +178,6 @@ const restoreArguments = (target, restoreList, archive) => [
   '-d',
   target,
   '--exit-on-error',
-  '--no-owner',
   '--use-list',
   restoreList,
   archive,
@@ -225,7 +248,7 @@ assert.equal(
     tocFixture.filter((line) => !line.includes('SCHEMA - public')),
     fixtureOwners,
   ).statement,
-  'ALTER SCHEMA public OWNER TO supabase_admin',
+  'ALTER SCHEMA public OWNER TO postgres',
   'When public is absent from the archive, its template0 owner must be prepared explicitly',
 );
 assert.deepEqual(
@@ -278,7 +301,7 @@ assert(
   !restorePlanFixture.includes('--no-acl'),
   'Restore must replay source grants and default ACLs',
 );
-assert(restorePlanFixture.includes('--no-owner'), 'Restore must use the disposable runner owner');
+assert(!restorePlanFixture.includes('--no-owner'), 'Restore must preserve source ownership');
 assert(
   !restorePlanFixture.includes('--exclude-schema'),
   'The curated TOC must retain non-scheduler grants during the restore',
@@ -309,7 +332,7 @@ const run = (...args) =>
     maxBuffer: 8 * 1024 * 1024,
   }).trim();
 const sql = (database, query) =>
-  run('psql', '-U', 'supabase_admin', '-d', database, '-At', '-v', 'ON_ERROR_STOP=1', '-c', query);
+  run('psql', '-U', 'supabase_admin', '-d', database, '-qAt', '-v', 'ON_ERROR_STOP=1', '-c', query);
 const started = Date.now();
 const evidenceDirectory = join(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
 mkdirSync(evidenceDirectory, { recursive: true });
@@ -336,10 +359,37 @@ writeCheckpoint({ targetDatabase: target });
 // Scheduler extensions are tied to the source database; do not activate external jobs in a restore.
 run('pg_dump', '-U', 'supabase_admin', '-d', 'postgres', '-Fc', '-f', archive);
 restoreStage = 'archive_toc_preflight';
+writeCheckpoint();
 const sourceToc = run('pg_restore', '-l', archive).split('\n');
 const schemaFilteredToc = run(...listArguments(archive)).split('\n');
 const tocOwners = discoverTocOwners(sourceToc);
 const tocEntries = sourceToc.map((line) => ({ line, entry: parseTocEntry(line, tocOwners) }));
+// Expand counts ONLY after verifying every new ACL's exact reviewed identity.
+// All existing owner/grant/default-ACL/source-vs-target assertions remain intact.
+writeFileSync(join(evidenceDirectory, 'source-archive-toc.txt'), sourceToc.join('\n') + '\n');
+writeFileSync(
+  join(evidenceDirectory, 'schema-filtered-archive-toc.txt'),
+  schemaFilteredToc.join('\n') + '\n',
+);
+const recoveryServerRead = (database) => {
+  const result = sql(
+    database,
+    "SET ROLE postgres; SELECT json_build_object('intents',(SELECT count(*) FROM storage_upload_intents),'events',(SELECT count(*) FROM storage_recovery_events),'incidents',(SELECT count(*) FROM storage_recovery_incidents),'configuration',(SELECT count(*) FROM storage_recovery_configuration))::text; RESET ROLE",
+  );
+  return JSON.parse(result.split('\n').find((line) => line.startsWith('{')));
+};
+const sourceRecoveryServerRead = recoveryServerRead('postgres');
+const recoveryPrivateTables = JSON.parse(sql('postgres', recoveryPrivateTableQuery));
+const recoveryFunctions = JSON.parse(sql('postgres', recoveryFunctionQuery));
+writeCheckpoint({ recoveryPrivateTables, recoveryFunctions, sourceRecoveryServerRead });
+const recoveryAclCount = assertRecoveryArchive(
+  tocEntries.map((row) => row.entry),
+  recoveryPrivateTables,
+  recoveryFunctions,
+);
+expectedRestoreInventory.sourceOwners += recoveryRestoreInventory.owners.length;
+expectedRestoreInventory.sourceAclRows += recoveryAclCount;
+expectedRestoreInventory.restoredAclRows += recoveryAclCount;
 const excludedExtensionEntries = tocEntries.filter(
   ({ entry }) => entry?.description === 'EXTENSION' && excludedSchedulerExtensions.has(entry.name),
 );
@@ -430,7 +480,7 @@ assert.equal(
 assert.equal(
   filteredTocEvidence.aclRowsRestored,
   expectedRestoreInventory.restoredAclRows,
-  'Restore list does not retain all 216 expected public ACL entries',
+  'Restore list does not retain all 218 expected public ACL entries',
 );
 assert.equal(
   filteredTocEvidence.defaultAclRowsRestored,
@@ -448,7 +498,7 @@ assert.equal(
   'The number of scheduler default ACL rows excluded differs from the expected archive inventory',
 );
 const effectiveRestoreArgs = restoreArguments(target, restoreList, archive);
-for (const requiredFlag of ['--no-owner', '--use-list'])
+for (const requiredFlag of ['--use-list'])
   assert(effectiveRestoreArgs.includes(requiredFlag), `Restore plan is missing ${requiredFlag}`);
 assert(!effectiveRestoreArgs.includes('--no-acl'), 'Restore must preserve source ACL statements');
 assert(
@@ -473,15 +523,31 @@ execFileSync('docker', ['exec', '-i', container, 'tee', restoreList], {
   stdio: ['pipe', 'ignore', 'pipe'],
 });
 // createdb fails if the randomly named destination exists. Never clean or overwrite a database.
-run('createdb', '-U', 'supabase_admin', '-T', 'template0', target);
+const sourceDatabaseOwner = sql(
+  'postgres',
+  'SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname=current_database()',
+);
+assert(
+  ['postgres', 'supabase_admin'].includes(sourceDatabaseOwner),
+  'Unknown source database owner',
+);
+const sourcePublicOwner = sql(
+  'postgres',
+  "SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='public'",
+);
+run('createdb', '-U', 'supabase_admin', '-O', sourceDatabaseOwner, '-T', 'template0', target);
 // If the archive contains public, replace template0's bootstrap schema so pg_restore can
-// create it as supabase_admin. Otherwise, template0's pg_database_owner schema is not in
-// the TOC and --no-owner cannot remap it, so explicitly prepare its owner before restore.
-const publicSchemaPreparationPlan = publicSchemaPreparationForRestore(toc.split('\n'), tocOwners);
+// recreate it with its source owner. If omitted, prepare the exact source owner.
+// The executor must not replace the application role as owner.
+const publicSchemaPreparationPlan = publicSchemaPreparationForRestore(
+  toc.split('\n'),
+  tocOwners,
+  sourcePublicOwner,
+);
 sql(target, publicSchemaPreparationPlan.statement);
 const publicSchemaPreparation = publicSchemaPreparationPlan.archiveContainsPublicSchema
   ? 'Archive contains SCHEMA public; template0 schema renamed for archive recreation'
-  : 'Archive omits SCHEMA public; template0 schema owner set to supabase_admin before restore';
+  : 'Archive omits SCHEMA public; template0 schema owner set to source owner before restore';
 restoreStage = 'pg_restore';
 writeCheckpoint({
   targetDatabase: target,
@@ -497,6 +563,50 @@ writeCheckpoint({
   excludedSchedulerSchemas,
 });
 run(...effectiveRestoreArgs);
+const restoredRecoveryPrivateTables = JSON.parse(sql(target, recoveryPrivateTableQuery));
+const restoredRecoveryFunctions = JSON.parse(sql(target, recoveryFunctionQuery));
+const restoredRecoveryServerRead = recoveryServerRead(target);
+writeCheckpoint({
+  restoredRecoveryPrivateTables,
+  restoredRecoveryFunctions,
+  restoredRecoveryServerRead,
+});
+assert.deepEqual(
+  restoredRecoveryServerRead,
+  sourceRecoveryServerRead,
+  'Application postgres role must actually read the same private recovery state after restore',
+);
+assertRecoveryArchive(
+  tocEntries.map((row) => row.entry),
+  restoredRecoveryPrivateTables,
+  restoredRecoveryFunctions,
+);
+const privateTableSemantics = (rows) =>
+  rows.map((row) => ({
+    name: row.name,
+    owner: row.owner,
+    rls: row.rls,
+    forceRls: row.forceRls,
+    ownerOnlyColumnAcl: row.ownerOnlyColumnAcl,
+    serverAccess: row.serverAccess,
+    ownerOnlyAcl: row.ownerOnlyAcl,
+    noBrowserPrivileges: row.noBrowserPrivileges,
+  }));
+assert.deepEqual(
+  privateTableSemantics(restoredRecoveryPrivateTables),
+  privateTableSemantics(recoveryPrivateTables),
+);
+const functionPrivacy = (rows) =>
+  rows.map((fn) => ({
+    name: fn.name,
+    owner: fn.owner,
+    acl: fn.acl,
+    securityDefiner: fn.securityDefiner,
+    config: fn.config,
+    noBrowserExecute: fn.noBrowserExecute,
+    serverExecute: fn.serverExecute,
+  }));
+assert.deepEqual(functionPrivacy(restoredRecoveryFunctions), functionPrivacy(recoveryFunctions));
 restoreStage = 'validate_recovery';
 writeCheckpoint({
   targetDatabase: target,
@@ -659,6 +769,7 @@ const ownerSnapshot = (database) =>
   );
 const sourceGrantRecords = parsedGrantSnapshot('postgres');
 const sourceOwnerRecords = ownerSnapshot('postgres').split('\n').filter(Boolean);
+assertRecoveryOwners(sourceOwnerRecords);
 writeCheckpoint({
   targetDatabase: target,
   restoreStage,
@@ -672,18 +783,7 @@ assert.equal(
   'Synthetic source owner inventory differs from the expected 351 objects',
 );
 const normalizeRestoredGrantSemantics = (grants) =>
-  grants
-    .map((grant) => {
-      if (grant.objectType === 'DEFAULT ACL') return grant;
-      const sourceOwner = grant.owner;
-      return {
-        ...grant,
-        owner: 'supabase_admin',
-        grantor: grant.grantor === sourceOwner ? 'supabase_admin' : grant.grantor,
-        grantee: grant.grantee === sourceOwner ? 'supabase_admin' : grant.grantee,
-      };
-    })
-    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+  [...grants].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 const requiredRoles = sql(
   target,
   "SELECT count(*)::text FROM pg_roles WHERE rolname IN ('supabase_admin', 'anon', 'authenticated', 'service_role')",
@@ -691,17 +791,23 @@ const requiredRoles = sql(
 assert.equal(requiredRoles, '4', 'Required Supabase roles are missing from the restore target');
 const restoreExecutorRole = sql(target, 'SELECT current_user');
 assert.equal(restoreExecutorRole, 'supabase_admin', 'Restore must run as supabase_admin');
+const sourceSessionSearchPath = sql('postgres', 'SHOW search_path');
+assert.equal(
+  sql(target, 'SHOW search_path'),
+  sourceSessionSearchPath,
+  'Restored session search_path differs',
+);
 const roleSessionChecks = ['supabase_admin', 'anon', 'authenticated', 'service_role'].map(
   (role) => {
-    const currentRole = sql(target, `SET ROLE "${role}"; SELECT current_user; RESET ROLE`);
-    assert.deepEqual(
-      currentRole.split('\n'),
-      ['SET', role, 'RESET'],
-      `Restore target could not set and use role ${role}`,
-    );
-    return { role, canAssumeSessionRole: true, observedCurrentUser: currentRole };
+    const output = sql(target, roleSessionProbeSql(role));
+    return assertRoleSessionProof(output, {
+      role,
+      executor: 'supabase_admin',
+      searchPath: sourceSessionSearchPath,
+    });
   },
 );
+writeCheckpoint({ roleSessionChecks, sourceSessionSearchPath });
 const destinationGrantRecords = parsedGrantSnapshot(target);
 const sourceNormalizedGrantRecords = normalizeRestoredGrantSemantics(sourceGrantRecords);
 const destinationNormalizedGrantRecords = normalizeRestoredGrantSemantics(destinationGrantRecords);
@@ -721,8 +827,7 @@ const grantSemanticComparison = {
   destinationGrantCount: destinationGrantRecords.length,
   missingRestoredGrants,
   unexpectedRestoredGrants,
-  ownerMapping:
-    'Non-default ACL owner/grantor/grantee references are normalized to the supabase_admin restore owner; default ACL identities remain unchanged',
+  ownerMapping: 'Owner, grantor, grantee and default ACL identities are preserved exactly',
 };
 writeCheckpoint({
   targetDatabase: target,
@@ -809,6 +914,7 @@ assert(
   'Application schema usage grant was not restored',
 );
 const restoredOwners = ownerSnapshot(target).split('\n').filter(Boolean);
+assertRecoveryOwners(restoredOwners);
 assert(restoredOwners.length > 0, 'No public owners were found in the restore target');
 assert.equal(
   restoredOwners.length,
@@ -834,9 +940,9 @@ const ownerComparison = restoredOwners.map((entry) => {
     object,
     originalOwner,
     effectiveOwner: owner,
-    expectedOwner: 'supabase_admin',
-    rule: 'Archive object owners map to restore role; omitted public schema is prepared as supabase_admin',
-    matches: originalOwner !== null && owner === 'supabase_admin',
+    expectedOwner: originalOwner,
+    rule: 'Preserve source ownership independently of restore executor',
+    matches: originalOwner !== null && owner === originalOwner,
   };
 });
 const unexpectedOwners = ownerComparison.filter(({ matches }) => !matches);
@@ -870,8 +976,8 @@ const ownerCountsByObjectType = Object.fromEntries(
 );
 assert.equal(
   ownerComparison.find(({ object }) => object === 'SCHEMA:public')?.effectiveOwner,
-  'supabase_admin',
-  'Public schema must be owned by supabase_admin',
+  sourcePublicOwner,
+  'Public schema must preserve its source owner',
 );
 assert.equal(
   filteredTocEvidence.aclRowsRestored + excludedSchedulerAclEntries.length,
@@ -896,12 +1002,11 @@ const grantSnapshotEvidence = {
     ].sort(),
   },
   semanticComparison: grantSemanticComparison,
-  ownerMapping: `--no-owner maps archive objects to ${restoreExecutorRole}; public schema is prepared explicitly when absent from archive TOC`,
-  grantorNormalization:
-    'For non-default object ACLs, source owner/grantor/grantee references map to supabase_admin when they represent ownership; default ACL role/grantor/grantee semantics remain exact',
+  ownerMapping: 'Source owners preserved; supabase_admin is only the restore executor',
+  grantorNormalization: 'All owner, grantor, grantee and default ACL identities remain exact',
   roleSessionChecks,
   ownerComparison: {
-    expectedOwner: 'supabase_admin',
+    expectedOwner: 'SOURCE_OWNER_PER_OBJECT',
     sourceObjectCount: sourceOwnerRecords.length,
     restoredObjectCount: restoredOwners.length,
     ownerCountsByObjectType,
@@ -992,28 +1097,23 @@ const structureSnapshot = (database) =>
       WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
     ) objects`,
   );
-const reparsedCheckConstraints = new Set([
-  'CONSTRAINT:document_signing_requests:document_signing_requests_status_check',
-  'CONSTRAINT:payment_receipts:payment_receipts_status_check',
-  'CONSTRAINT:service_catalog_items:service_catalog_items_area_check',
-]);
-const normalizeStructureEntry = (entry) => {
-  const constraintName = entry.split(':', 3).join(':');
-  if (!reparsedCheckConstraints.has(constraintName)) return entry;
-  // pg_restore reparses these three varchar-array CHECKs and moves the implicit text cast
-  // from the array to each element. Preserve strict comparison for every other object.
-  return entry
-    .replaceAll('::character varying::text', '::character varying')
-    .replaceAll(']::text[]', ']');
-};
+const checkCatalog = (database) => JSON.parse(sql(database, checkCatalogQuery));
+const sourceChecks = checkCatalog('postgres'),
+  restoredChecks = checkCatalog(target);
+writeCheckpoint({ checkConstraints: { source: sourceChecks, restored: restoredChecks } });
+assert.deepEqual(
+  canonicalCheckCatalog(restoredChecks),
+  canonicalCheckCatalog(sourceChecks),
+  'Restored CHECK catalog differs',
+);
 const sourceStructure = structureSnapshot('postgres')
   .split('\n')
   .filter(Boolean)
-  .map(normalizeStructureEntry);
+  .map(canonicalStructureEntry);
 const recoveredStructure = structureSnapshot(target)
   .split('\n')
   .filter(Boolean)
-  .map(normalizeStructureEntry);
+  .map(canonicalStructureEntry);
 const sourceStructureSet = new Set(sourceStructure);
 const recoveredStructureSet = new Set(recoveredStructure);
 const structureComparison = {
@@ -1037,7 +1137,7 @@ const databaseOwner = sql(
   target,
   'SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = current_database()',
 );
-assert.equal(databaseOwner, 'supabase_admin', 'Disposable restore database owner differs');
+assert.equal(databaseOwner, sourceDatabaseOwner, 'Disposable restore database owner differs');
 const hasExcludedBackupInformation = sourceSchedulerReferences.length > 0;
 restoreStage = 'complete';
 writeFileSync(
@@ -1057,12 +1157,13 @@ writeFileSync(
       publicSchemaPreparation,
       ...tocEvidence,
       ...filteredTocEvidence,
-      publicObjectsOwnedBy: 'supabase_admin',
+      publicObjectsOwnedBy: [...new Set(ownerComparison.map((entry) => entry.effectiveOwner))],
       publicOwnerCountsByObjectType: ownerCountsByObjectType,
       allPublicOwnersVerified: unexpectedOwners.length === 0,
       grantsAndDefaultAclsCompared: true,
       grantSnapshotEvidence,
       foreignKeysComparedAndValidated: true,
+      checkConstraints: { source: sourceChecks, restored: restoredChecks },
       financialTotalsCompared: recoveredFinancials,
       effectiveRestoreArguments: effectiveRestoreArgs,
       schedulerExtensionRowsRemoved: excludedExtensionEntries.length,

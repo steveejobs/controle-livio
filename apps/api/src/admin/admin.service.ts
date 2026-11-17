@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@livio/db';
 import {
   initialRolePermissions,
@@ -7,6 +12,7 @@ import {
   type SystemRoleKey,
 } from '@livio/shared';
 import { SupabaseAdminService } from '../auth/supabase-admin.service';
+import { hasValidMembershipScope, requiresClientBinding } from '../auth/client-scope';
 import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
@@ -48,10 +54,12 @@ export class AdminService {
     });
     if (roles.length !== new Set(input.roleIds).size)
       throw new NotFoundException('Papel não encontrado');
+    if (!roles.length || (requiresClientBinding(roles.map((role) => role.key)) && !input.clientId))
+      throw new BadRequestException('O perfil Cliente exige vínculo com um cliente da organização');
     if (
       input.clientId &&
       !(await this.prisma.client.findFirst({
-        where: { id: input.clientId, organizationId: actor.organizationId },
+        where: { id: input.clientId, organizationId: actor.organizationId, deletedAt: null },
       }))
     )
       throw new NotFoundException('Cliente não encontrado');
@@ -177,6 +185,18 @@ export class AdminService {
     });
     if (!before) throw new NotFoundException('Usuário não encontrado');
     return this.prisma.$transaction(async (transaction) => {
+      if (input.status === 'ACTIVE') {
+        const membership = await transaction.organizationMember.findUnique({
+          where: { userId },
+          include: { roles: { include: { role: true } }, client: true },
+        });
+        if (
+          !membership ||
+          membership.organizationId !== actor.organizationId ||
+          !hasValidMembershipScope(membership)
+        )
+          throw new BadRequestException('Corrija o vínculo do perfil antes de ativar o usuário');
+      }
       const user = await transaction.user.update({
         where: { id: userId },
         data: {

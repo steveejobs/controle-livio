@@ -1,0 +1,408 @@
+[
+  {
+    "id": "REC-W01-F01",
+    "description": "Antes do upload, após intenção persistida",
+    "acceptance": "Intenção pertence à organização, chave/hash/finalidade definidos; nenhum objeto inesperado; retry idempotente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F02",
+    "description": "Provedor retorna erro e resultado externo é ambíguo",
+    "acceptance": "GET/hash real distingue ausência de objeto de timeout; nenhum sucesso falso",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F03",
+    "description": "Upload aceito, SQL de anexação falha",
+    "acceptance": "Intenção durável permanece; retry remove somente o objeto autorizado sem referência válida",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F04",
+    "description": "Remoção compensatória retorna erro/inacessível",
+    "acceptance": "Erro comunicado; tentativas/estado persistidos; objeto rastreável, não perdido em memória",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F05",
+    "description": "Processo morre após upload, antes do commit",
+    "acceptance": "Processo novo recupera a mesma intenção; assinatura também recupera PROCESSING por grupo/lease",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F06",
+    "description": "Objeto removido, commit/evento SQL falha",
+    "acceptance": "Novo worker verifica ausência real e conclui idempotentemente, sem evento de sucesso não confirmado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F07",
+    "description": "Upload demora e reaparece após timeout/ABSENT",
+    "acceptance": "Varredura posterior detecta objeto tardio; nenhum estado terminal oculta órfão permanente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W01-F08",
+    "description": "Referência válida concorre com cleanup",
+    "acceptance": "Locks/fences impedem deletar objeto anexado; duas conexões independentes e barreira real demonstradas",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F01",
+    "description": "Antes do upload, após intenção persistida",
+    "acceptance": "Intenção pertence à organização, chave/hash/finalidade definidos; nenhum objeto inesperado; retry idempotente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F02",
+    "description": "Provedor retorna erro e resultado externo é ambíguo",
+    "acceptance": "GET/hash real distingue ausência de objeto de timeout; nenhum sucesso falso",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F03",
+    "description": "Upload aceito, SQL de anexação falha",
+    "acceptance": "Intenção durável permanece; retry remove somente o objeto autorizado sem referência válida",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F04",
+    "description": "Remoção compensatória retorna erro/inacessível",
+    "acceptance": "Erro comunicado; tentativas/estado persistidos; objeto rastreável, não perdido em memória",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F05",
+    "description": "Processo morre após upload, antes do commit",
+    "acceptance": "Processo novo recupera a mesma intenção; assinatura também recupera PROCESSING por grupo/lease",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F06",
+    "description": "Objeto removido, commit/evento SQL falha",
+    "acceptance": "Novo worker verifica ausência real e conclui idempotentemente, sem evento de sucesso não confirmado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F07",
+    "description": "Upload demora e reaparece após timeout/ABSENT",
+    "acceptance": "Varredura posterior detecta objeto tardio; nenhum estado terminal oculta órfão permanente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W02-F08",
+    "description": "Referência válida concorre com cleanup",
+    "acceptance": "Locks/fences impedem deletar objeto anexado; duas conexões independentes e barreira real demonstradas",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F01",
+    "description": "Antes do upload, após intenção persistida",
+    "acceptance": "Intenção pertence à organização, chave/hash/finalidade definidos; nenhum objeto inesperado; retry idempotente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F02",
+    "description": "Provedor retorna erro e resultado externo é ambíguo",
+    "acceptance": "GET/hash real distingue ausência de objeto de timeout; nenhum sucesso falso",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F03",
+    "description": "Upload aceito, SQL de anexação falha",
+    "acceptance": "Intenção durável permanece; retry remove somente o objeto autorizado sem referência válida",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F04",
+    "description": "Remoção compensatória retorna erro/inacessível",
+    "acceptance": "Erro comunicado; tentativas/estado persistidos; objeto rastreável, não perdido em memória",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F05",
+    "description": "Processo morre após upload, antes do commit",
+    "acceptance": "Processo novo recupera a mesma intenção; assinatura também recupera PROCESSING por grupo/lease",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F06",
+    "description": "Objeto removido, commit/evento SQL falha",
+    "acceptance": "Novo worker verifica ausência real e conclui idempotentemente, sem evento de sucesso não confirmado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F07",
+    "description": "Upload demora e reaparece após timeout/ABSENT",
+    "acceptance": "Varredura posterior detecta objeto tardio; nenhum estado terminal oculta órfão permanente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W03-F08",
+    "description": "Referência válida concorre com cleanup",
+    "acceptance": "Locks/fences impedem deletar objeto anexado; duas conexões independentes e barreira real demonstradas",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F01",
+    "description": "Antes do upload, após intenção persistida",
+    "acceptance": "Intenção pertence à organização, chave/hash/finalidade definidos; nenhum objeto inesperado; retry idempotente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F02",
+    "description": "Provedor retorna erro e resultado externo é ambíguo",
+    "acceptance": "GET/hash real distingue ausência de objeto de timeout; nenhum sucesso falso",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F03",
+    "description": "Upload aceito, SQL de anexação falha",
+    "acceptance": "Intenção durável permanece; retry remove somente o objeto autorizado sem referência válida",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F04",
+    "description": "Remoção compensatória retorna erro/inacessível",
+    "acceptance": "Erro comunicado; tentativas/estado persistidos; objeto rastreável, não perdido em memória",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F05",
+    "description": "Processo morre após upload, antes do commit",
+    "acceptance": "Processo novo recupera a mesma intenção; assinatura também recupera PROCESSING por grupo/lease",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F06",
+    "description": "Objeto removido, commit/evento SQL falha",
+    "acceptance": "Novo worker verifica ausência real e conclui idempotentemente, sem evento de sucesso não confirmado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F07",
+    "description": "Upload demora e reaparece após timeout/ABSENT",
+    "acceptance": "Varredura posterior detecta objeto tardio; nenhum estado terminal oculta órfão permanente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W04-F08",
+    "description": "Referência válida concorre com cleanup",
+    "acceptance": "Locks/fences impedem deletar objeto anexado; duas conexões independentes e barreira real demonstradas",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F01",
+    "description": "Antes do upload, após intenção persistida",
+    "acceptance": "Intenção pertence à organização, chave/hash/finalidade definidos; nenhum objeto inesperado; retry idempotente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F02",
+    "description": "Provedor retorna erro e resultado externo é ambíguo",
+    "acceptance": "GET/hash real distingue ausência de objeto de timeout; nenhum sucesso falso",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F03",
+    "description": "Upload aceito, SQL de anexação falha",
+    "acceptance": "Intenção durável permanece; retry remove somente o objeto autorizado sem referência válida",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F04",
+    "description": "Remoção compensatória retorna erro/inacessível",
+    "acceptance": "Erro comunicado; tentativas/estado persistidos; objeto rastreável, não perdido em memória",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F05",
+    "description": "Processo morre após upload, antes do commit",
+    "acceptance": "Processo novo recupera a mesma intenção; assinatura também recupera PROCESSING por grupo/lease",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F06",
+    "description": "Objeto removido, commit/evento SQL falha",
+    "acceptance": "Novo worker verifica ausência real e conclui idempotentemente, sem evento de sucesso não confirmado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F07",
+    "description": "Upload demora e reaparece após timeout/ABSENT",
+    "acceptance": "Varredura posterior detecta objeto tardio; nenhum estado terminal oculta órfão permanente",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-W05-F08",
+    "description": "Referência válida concorre com cleanup",
+    "acceptance": "Locks/fences impedem deletar objeto anexado; duas conexões independentes e barreira real demonstradas",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X01",
+    "description": "Dois workers/processos, duas conexões, SKIP LOCKED, uma remoção efetiva",
+    "acceptance": "Dois workers/processos, duas conexões, SKIP LOCKED, uma remoção efetiva",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X02",
+    "description": "Mesmo evento/retry entregue repetidamente, inclusive após reinício",
+    "acceptance": "Mesmo evento/retry entregue repetidamente, inclusive após reinício",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X03",
+    "description": "Oito falhas, backoff limitado, escalonamento e administrador notificado",
+    "acceptance": "Oito falhas, backoff limitado, escalonamento e administrador notificado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X04",
+    "description": "Sem administrador ativo, incidente permanece detectável/acionável",
+    "acceptance": "Sem administrador ativo, incidente permanece detectável/acionável",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X05",
+    "description": "Documento ativo, versão histórica, soft delete e legal hold preservados",
+    "acceptance": "Documento ativo, versão histórica, soft delete e legal hold preservados",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X06",
+    "description": "Hash/chave divergente ou objeto de outra organização",
+    "acceptance": "Hash/chave divergente ou objeto de outra organização",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X07",
+    "description": "Varredura Storage sem referência, referência sem objeto e intenção vencida",
+    "acceptance": "Varredura Storage sem referência, referência sem objeto e intenção vencida",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X08",
+    "description": "Novo objeto/arquivo em processamento ou quarentena não classificado como órfão",
+    "acceptance": "Novo objeto/arquivo em processamento ou quarentena não classificado como órfão",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X09",
+    "description": "Operador autorizado resolve incidente com motivo e rechecagem sob lock",
+    "acceptance": "Operador autorizado resolve incidente com motivo e rechecagem sob lock",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X10",
+    "description": "Operador sem permissão, outra organização, suspenso ou sessão revogada",
+    "acceptance": "Operador sem permissão, outra organização, suspenso ou sessão revogada",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X11",
+    "description": "Resolução manual repetida/concorrente não apaga arquivo que ganhou vínculo",
+    "acceptance": "Resolução manual repetida/concorrente não apaga arquivo que ganhou vínculo",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X12",
+    "description": "Auditoria de intenção, anexação, tentativa, retenção, remoção e resolução",
+    "acceptance": "Auditoria de intenção, anexação, tentativa, retenção, remoção e resolução",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X13",
+    "description": "Dispatch HMAC rejeita replay/assinatura inválida; agendamento executa recovery",
+    "acceptance": "Dispatch HMAC rejeita replay/assinatura inválida; agendamento executa recovery",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X14",
+    "description": "Dry-run não muda objetos, referências nem estado/eventos da fila",
+    "acceptance": "Dry-run não muda objetos, referências nem estado/eventos da fila",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X15",
+    "description": "Falha de scanner/qpdf antes de upload não deixa documento aprovado",
+    "acceptance": "Falha de scanner/qpdf antes de upload não deixa documento aprovado",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X16",
+    "description": "REC-C01 preserva histórico/versões financeiras e impede cleanup indevido",
+    "acceptance": "REC-C01 preserva histórico/versões financeiras e impede cleanup indevido",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X17",
+    "description": "Restart/timeout não deixa locks ou PROCESSING indefinidos",
+    "acceptance": "Restart/timeout não deixa locks ou PROCESSING indefinidos",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  },
+  {
+    "id": "REC-X18",
+    "description": "Restore preserva intenções, incidentes, owners, grants e capacidade de retomar",
+    "acceptance": "Restore preserva intenções, incidentes, owners, grants e capacidade de retomar",
+    "expectedState": "Consistent link, retained object, verified absence, pending retry or actionable incident according to injected boundary",
+    "expectedPhysicalEffect": "No legitimate object removed; only operation-owned unreferenced matching bytes may be compensated"
+  }
+]

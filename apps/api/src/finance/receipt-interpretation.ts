@@ -6,6 +6,7 @@ export type ExtractedField = { value: string; source: FieldSource; confidence: n
 export type ReceiptFields = Partial<
   Record<
     | 'documentType'
+    | 'nonSettlementEvidence'
     | 'institution'
     | 'payer'
     | 'beneficiary'
@@ -72,6 +73,16 @@ export function interpretReceiptText(
   const put = (key: keyof ReceiptFields, value: string | undefined, score = confidence) => {
     if (value) fields[key] = { value, source, confidence: score };
   };
+  // Evidence of a non-settled operation must never be overridden by a correction reason.
+  const nonSettlement = normalized.match(
+    /\b(?:agendad[oa]|agendamento|pendente|cancelad[oa]|devolvid[oa]|devolu[cç][aã]o|estornad[oa]|n[aã]o\s+(?:pago|realizado|conclu[ií]do))\b/i,
+  )?.[0];
+  if (nonSettlement) {
+    put('nonSettlementEvidence', nonSettlement);
+    warnings.push(
+      'Operação não liquidada ou devolvida: este comprovante não pode confirmar pagamento.',
+    );
+  }
   const matchLine = (pattern: RegExp) => normalized.match(pattern)?.[1]?.trim();
   const extractMoney = (label: string) => {
     const raw = matchLine(new RegExp(String.raw`(?:^|\n)\s*(?:${label})\s*[:-]?\s*${money}`, 'im'));

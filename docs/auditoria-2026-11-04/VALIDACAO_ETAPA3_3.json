@@ -1,0 +1,265 @@
+{
+  "schema": 1,
+  "branch": "validation/audit-stage2-20261104",
+  "origin": "bc9bc30101e4c92a51eeb676375d40d927ea34f1",
+  "pr": {
+    "number": 3,
+    "state": "OPEN",
+    "draft": true,
+    "head": "bc9bc30101e4c92a51eeb676375d40d927ea34f1",
+    "readOnlyCheck": true
+  },
+  "publication": {
+    "commit": false,
+    "push": false,
+    "merge": false,
+    "deploy": false,
+    "remoteMigration": false,
+    "sharedWrite": false,
+    "prChanged": false
+  },
+  "checks": {
+    "vitest": {
+      "api": 222,
+      "web": 42,
+      "shared": 20,
+      "total": 284,
+      "status": "PASS"
+    },
+    "nodeSupport": {
+      "total": 19,
+      "status": "PASS"
+    },
+    "sqlProbe": {
+      "engine": "PGlite 0.3.14 / PostgreSQL 17.5",
+      "schema": "synthetic minimal only",
+      "cases": 4,
+      "status": "PASS",
+      "supabase": false,
+      "postgrest": false,
+      "auth": false
+    },
+    "lint": "PASS",
+    "format": "PASS",
+    "typecheck": "PASS",
+    "prismaValidate": "PASS",
+    "apiBuild": "PASS",
+    "webBuild": "PASS",
+    "diffCheck": "PASS",
+    "integrated": "NOT_EXECUTED",
+    "secretsScan": "No private key or JWT literals in whitelist; no dotenv/personal documents/credentials included"
+  },
+  "classifications": {
+    "DEF_008_SQL_READY": "PASS",
+    "DIRECT_DML_GUARDS": "PARTIAL",
+    "INDIRECT_WRITE_PATHS": "PARTIAL",
+    "API_WRITE_COMPATIBILITY": "PARTIAL",
+    "RLS_READ_COMPATIBILITY": "PARTIAL",
+    "CEN_006_READY": "PASS",
+    "DEF_006_READY": "PASS",
+    "DEF_007_READY": "PASS",
+    "CI_PREPARATION": "PASS",
+    "INTEGRATED_QA": "NOT_EXECUTED",
+    "PRODUCTION_GO_NO_GO": "FAIL"
+  },
+  "initialStage32Integrity": {
+    "files": [
+      {
+        "path": "tools/qa/financial-integrity-ci.mjs",
+        "matches": true
+      },
+      {
+        "path": "tools/qa/financial-security-inspect.sql",
+        "matches": true
+      },
+      {
+        "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+        "matches": true
+      },
+      {
+        "path": "PROJECT_CONTEXT.md",
+        "matches": true
+      },
+      {
+        "path": "docs/auditoria-2026-11-04/MATRIZ_FINANCEIRA_ETAPA3.csv",
+        "matches": true
+      },
+      {
+        "path": "docs/auditoria-2026-11-04/ETAPA_3_2_SEGURANCA_FINANCEIRA.md",
+        "matches": true
+      }
+    ],
+    "patchMatches": true
+  },
+  "preservedExcludedFiles": [
+    {
+      "path": "docs/auditoria-2026-11-04/DEFEITOS_ENCONTRADOS.md",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/etapa32-codigo.patch",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/ETAPA_3_1_FINANCEIRO_INTEGRADO.md",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/FINANCEIRO_FUNCIONAL_ETAPA3.json",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PLANO_CORRECOES.md",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PROGRESSO.md",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PROPOSTA_RLS_FINANCEIRO_ETAPA3.md",
+      "unchanged": true
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/VALIDACAO_ETAPA3_2.json",
+      "unchanged": true
+    }
+  ],
+  "files": [
+    {
+      "path": "PROJECT_CONTEXT.md",
+      "sha256": "0b6d551060781f36609d70284c4893d88e5fa5d6753fcafa448f3cbcb7e93dd6",
+      "originStatus": "MODIFIED",
+      "stage33": "MODIFIED_EXISTING_LOCAL",
+      "initialLocalSha256": "f16414dc253c0323535b5dd7e8c41db36fa08b09ad892f4d8bfaeae505afdac3"
+    },
+    {
+      "path": "apps/web/e2e/integrated/financial-integrity.integrated.e2e.ts",
+      "sha256": "ab91ef0a2845e3f48651e2812e995f59a241d1cd64ca181eff95c248b837c87f",
+      "originStatus": "MODIFIED",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "supabase/migrations/20261111120000_financial_api_write_boundary.sql",
+      "sha256": "07c55873efc42c980ef9b83e15da115cc8ee536f84aa254d146f877de8aecb3e",
+      "originStatus": "NEW",
+      "stage33": "MODIFIED_EXISTING_LOCAL",
+      "initialLocalSha256": "03de427d6860ffabcb27ab64947c591f63f01f54578780e13e6c8e3d10844514"
+    },
+    {
+      "path": "tools/qa/financial-integrity-ci.mjs",
+      "sha256": "65e2954fc68a267cf9509bce3358c0af85682e3d3df1aa8c8aa2a33060e1d36a",
+      "originStatus": "MODIFIED",
+      "stage33": "MODIFIED_EXISTING_LOCAL",
+      "initialLocalSha256": "16e3d8a2896f24f6a3470af68423338583b9051871697664b4656e4455ff3f06"
+    },
+    {
+      "path": "tools/qa/financial-security-inspect.sql",
+      "sha256": "f809699c754b9f43591b7ca065b4aa6d5291697a3ea5f6d361c31a742a5905a3",
+      "originStatus": "NEW",
+      "stage33": "MODIFIED_EXISTING_LOCAL",
+      "initialLocalSha256": "35b9c6708cd07806eb064375e5172e69531cecd4c0a17770cd94e9bfa72f60ea"
+    },
+    {
+      "path": "tools/qa/financial-write-matrix.mjs",
+      "sha256": "71eff12be25779661189453774bb387dbda4eef3330c6c94495adebefb11a42c",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "tools/qa/financial-security-ci.mjs",
+      "sha256": "23cebfebbde85b89979e73861486e82c4048fcedf690123194e747e9c61a9c58",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "tools/qa/financial-security-support.test.mjs",
+      "sha256": "56ad3b46451ab8b85fc8cf4021868de4b0db6c44dce55956cfe7adfe22df5521",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "tools/qa/financial-sql-probe.mjs",
+      "sha256": "75bf98624199ebe69882aaeaec9e893497bab4ebd9ade8ad4a016f423aee0890",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "tools/qa/verify-payment-receipts-ci.mjs",
+      "sha256": "eacf01ac0d2cc9408327ee3fca361303ae43a289c2c032eeb8af5c2f13c04e2c",
+      "originStatus": "MODIFIED",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "tools/supabase/rls.test.mjs",
+      "sha256": "ff4c133dba15445a8abe4db8b4d511528c40b1c6a57097bd42acdd843269803e",
+      "originStatus": "MODIFIED",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "tools/qa/README.md",
+      "sha256": "b5b7308ad2523e1ff22986c569c3bc04ef5e64943379581c4fee62c1f9415ca0",
+      "originStatus": "MODIFIED",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/MATRIZ_FINANCEIRA_ETAPA3.csv",
+      "sha256": "c062d04f894c7c8914e1e08ce271fbcf6543b63c0259d6286ebb7d62ecad83aa",
+      "originStatus": "MODIFIED",
+      "stage33": "PREEXISTING_UNCHANGED",
+      "initialLocalSha256": "c062d04f894c7c8914e1e08ce271fbcf6543b63c0259d6286ebb7d62ecad83aa"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/ETAPA_3_2_SEGURANCA_FINANCEIRA.md",
+      "sha256": "b266eeb05010ddb045b90aec900e4bb3f98e366ce93ec13480f0b44e9fe4dc31",
+      "originStatus": "NEW",
+      "stage33": "MODIFIED_EXISTING_LOCAL",
+      "initialLocalSha256": "673fd165cdbfc833cee6bfc8b205fb5748c7e509539d4643af0b83b42227020d"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PREFLIGHT_CI_DEF008_ETAPA3_3.md",
+      "sha256": "085e74d33b2092a38a7dcd6ee5adf94b678d71b9ae7f263172513c435259e79b",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/OBJETOS_DEF008_ETAPA3_3.json",
+      "sha256": "bea484a07000d9c9f9f7c73cdc5681fd0018114342ff5092a06878a98fa12e6a",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/SQL_PROBE_ETAPA3_3.json",
+      "sha256": "04c65fb3a8b7aa70553575fffc4c23091c75fbe35534f9e9d87e8413f0d4eb53",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/etapa33-lista-publicavel.txt",
+      "sha256": "245fb18b5c0f840149a6427c5e6369d8722a09a4a44af4076b7b31940d650be5",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/etapa33-candidata.patch",
+      "sha256": "24eb6a3842cb370d93e47a000b2f265cb759c75d0a83a32bf7a7d69cc475b871",
+      "originStatus": "NEW",
+      "stage33": "NEW",
+      "initialLocalSha256": null
+    }
+  ],
+  "selfHash": "excluded by design",
+  "patchScope": "17 payload files against origin; excludes manifest, list and patch to avoid self-reference"
+}

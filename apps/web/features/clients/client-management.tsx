@@ -152,18 +152,44 @@ export function ClientManagement({
   };
 
   const useIdentification = (identified: IdentificationData, file: File) => {
-    if (identified.name) setDisplayName(identified.name);
-    if (identified.cpf) {
+    let usedData = false;
+    const accept = (label: string, current: string, suggested?: string) =>
+      Boolean(
+        suggested &&
+        (!current.trim() ||
+          current === suggested ||
+          window.confirm(
+            `${label}: há um conflito.\nValor atual: ${current}\nValor extraído: ${suggested}\nSubstituir pelo valor extraído? Cancele para manter o atual.`,
+          )),
+      );
+    if (accept('Nome', displayName, identified.name)) {
+      setDisplayName(identified.name!);
+      usedData = true;
+    }
+    if (accept('CPF', taxId.replace(/\D/g, ''), identified.cpf)) {
       setClientType('PERSON');
       setAutoDetectedCompany(false);
-      setTaxId(formatTaxIdField(identified.cpf, 'PERSON'));
+      setTaxId(formatTaxIdField(identified.cpf!, 'PERSON'));
+      usedData = true;
     }
-    if (identified.rg) {
-      setIdentityDocument([identified.rg, identified.issuingAuthority].filter(Boolean).join(' · '));
+    const suggestedIdentity = identified.rg
+      ? [identified.rg, identified.issuingAuthority].filter(Boolean).join(' · ')
+      : undefined;
+    if (accept('RG e órgão expedidor', identityDocument, suggestedIdentity)) {
+      setIdentityDocument(suggestedIdentity!);
+      usedData = true;
     }
-    if (identified.birthDate) setBirthDate(identified.birthDate);
+    if (accept('Data de nascimento', birthDate, identified.birthDate)) {
+      setBirthDate(identified.birthDate!);
+      usedData = true;
+    }
     setPendingIdentityFile(file);
-    setScanNotice('Confira os dados preenchidos antes de concluir o cadastro.');
+    setScanNotice(
+      usedData
+        ? 'Confira os dados preenchidos antes de concluir o cadastro.'
+        : 'Os dados atuais foram preservados. A imagem continua selecionada para anexar.',
+    );
+    return usedData;
   };
 
   return (
