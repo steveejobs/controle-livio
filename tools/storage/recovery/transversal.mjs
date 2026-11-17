@@ -45,8 +45,58 @@ async function exhausted(r, input, noAdministrator = false) {
     where: { organizationId: input.actor.organizationId, kind: 'RECOVERY_RETRIES_EXHAUSTED' },
   });
 }
-async function api(input, path, options = {}) {
-  const response = await fetch(process.env.NEXT_PUBLIC_API_URL + path, {
+// ApiExceptionFilter emits the six ApiErrorBody fields. Nest's optional error
+// label is accepted only when it agrees with the HTTP status. No domain data
+// or unreviewed fields are permitted in a negative response.
+export function assertRecoveryErrorResponse(body, status, requestPath) {
+  const contracts = {
+    400: ['bad_request', 'Bad Request'],
+    401: ['unauthorized', 'Unauthorized'],
+    403: ['forbidden', 'Forbidden'],
+    404: ['not_found', 'Not Found'],
+    409: ['conflict', 'Conflict'],
+  };
+  assert.ok(contracts[status], 'Unexpected recovery error status');
+  assert.ok(body && typeof body === 'object' && !Array.isArray(body));
+  const fields = ['statusCode', 'code', 'message', 'requestId', 'timestamp', 'path'];
+  assert.ok(
+    Object.keys(body).every((key) => fields.includes(key) || key === 'error'),
+    'Recovery error response must not contain protected or unknown fields',
+  );
+  assert.ok(
+    fields.every((key) => Object.hasOwn(body, key)),
+    'Incomplete ApiErrorBody',
+  );
+  assert.equal(body.statusCode, status);
+  assert.equal(body.code, contracts[status][0]);
+  if (Object.hasOwn(body, 'error')) assert.equal(body.error, contracts[status][1]);
+  assert.ok(
+    typeof body.message === 'string' &&
+      body.message.trim().length > 0 &&
+      [...body.message].every((character) => {
+        const point = character.codePointAt(0);
+        return point >= 32 && point !== 127;
+      }) &&
+      !/eyJ[\w-]+\.[\w-]+\.[\w-]+|Bearer\s|https?:\/\/|postgres(?:ql)?:\/\//i.test(body.message),
+    'Invalid or credential-bearing error message',
+  );
+  assert.ok(
+    typeof body.requestId === 'string' && /^[A-Za-z0-9._:-]{1,256}$/.test(body.requestId),
+    'Invalid request correlation',
+  );
+  assert.ok(
+    typeof body.timestamp === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(body.timestamp) &&
+      Number.isFinite(Date.parse(body.timestamp)) &&
+      new Date(body.timestamp).toISOString() === body.timestamp,
+    'Invalid error timestamp',
+  );
+  assert.equal(body.path, requestPath, 'Error response belongs to another route');
+}
+
+export async function api(input, path, options = {}) {
+  const requestUrl = new URL(process.env.NEXT_PUBLIC_API_URL + path);
+  const response = await fetch(requestUrl, {
     ...options,
     headers: {
       Authorization: 'Bearer ' + input.authToken,
@@ -55,6 +105,8 @@ async function api(input, path, options = {}) {
     },
     signal: AbortSignal.timeout(20000),
   });
+  if (response.status >= 400)
+    assertRecoveryErrorResponse(await response.json(), response.status, requestUrl.pathname);
   return { http: response.status }; // No token, cookies, raw response or signed URL in evidence.
 }
 
@@ -339,6 +391,8 @@ export async function transversal(r, row, fixture, independentRecovery) {
       );
       const foreign = await fixture(r, 'DOCUMENT'),
         incident = await exhausted(r, foreign);
+      const foreignDecisionBefore = await snapshot(r, org);
+      const foreignOrganizationBefore = await snapshot(r, foreign.actor.organizationId);
       row.http.push(
         await api(input, `/storage-recovery/incidents/${incident.id}/decisions`, {
           method: 'POST',
@@ -349,6 +403,8 @@ export async function transversal(r, row, fixture, independentRecovery) {
         }),
       );
       assert.equal(row.http.at(-1).http, 404);
+      assert.deepEqual(await snapshot(r, org), foreignDecisionBefore);
+      assert.deepEqual(await snapshot(r, foreign.actor.organizationId), foreignOrganizationBefore);
       for (const actor of [
         { ...input.actor, permissions: [] },
         { ...input.actor, isAdministrator: false },
@@ -359,25 +415,29 @@ export async function transversal(r, row, fixture, independentRecovery) {
         where: { id: input.memberId },
         data: { status: 'SUSPENDED' },
       });
+      const suspendedBefore = await snapshot(r, input.actor.organizationId);
       row.http.push(await api(input, '/storage-recovery'));
-      assert.equal(row.http.at(-1).http, 403);
+      assert.equal(row.http.at(-1).http, 401);
       row.http.push(
         await api(input, decisionPath, {
           method: 'POST',
           body: JSON.stringify({ action: 'RETRY', reason: 'SYNTHETIC suspended decision' }),
         }),
       );
-      assert.equal(row.http.at(-1).http, 403);
+      assert.equal(row.http.at(-1).http, 401);
+      assert.deepEqual(await snapshot(r, input.actor.organizationId), suspendedBefore);
       await r.db.organizationMember.update({
         where: { id: input.memberId },
         data: { status: 'ACTIVE' },
       });
       await r.db.organizationMemberRole.deleteMany({ where: { membershipId: input.memberId } });
+      const unpermittedBefore = await snapshot(r, org);
       row.http.push(await api(input, '/storage-recovery'));
       assert.equal(row.http.at(-1).http, 403);
       await assert.rejects(
         r.admin.decide(input.actor, incident.id, 'RETAIN', 'SYNTHETIC forbidden foreign incident'),
       );
+      assert.deepEqual(await snapshot(r, org), unpermittedBefore);
       break;
     }
     case 'REC-X12': {

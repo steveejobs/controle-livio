@@ -474,7 +474,7 @@ test('RLS direct-write probe targets an existing linked object already read by t
   const script = readFileSync('tools/supabase/rls.test.mjs', 'utf8');
   const metadata = script.indexOf('await database.documentVersion.create(');
   const readable = script.indexOf('const downloaded = await fetch(ownSignedUrl.data.signedUrl)');
-  const attempt = script.indexOf('const uploadA = await lawyerA.storage');
+  const attempt = script.indexOf('const result = await client.storage');
   assert(metadata >= 0 && readable > metadata && attempt > readable);
   assert(script.slice(readable, attempt).includes('private download hash mismatch'));
   assert(script.slice(attempt).includes('SYNTHETIC FORBIDDEN CHANGE'));
@@ -634,4 +634,134 @@ test('overwrite authorization proof requires exact INSERT and UPDATE restrictive
     ),
     false,
   );
+});
+
+test('REC65 relink requires the documents table AND column boundary for the actual actor', async () => {
+  const { documentRelinkBarrier } = await import('./storage-authorization-proof.mjs');
+  const identity = { profileId: 'synthetic-profile' };
+  const proof = {
+    session: {
+      role: 'authenticated',
+      profile_id: identity.profileId,
+      rolsuper: false,
+      rolbypassrls: false,
+      owns_table: false,
+      can_assume_privileged: false,
+      relrowsecurity: true,
+      can_update: false,
+      can_update_client: false,
+    },
+    targetExists: true,
+    organizationId: 'org',
+    targetOrganizationId: 'org',
+  };
+  assert.equal(documentRelinkBarrier(proof, identity), true);
+  for (const patch of [
+    { can_update: true },
+    { can_update_client: true },
+    { rolbypassrls: true },
+    { profile_id: 'foreign' },
+    { relrowsecurity: false },
+  ])
+    assert.equal(
+      documentRelinkBarrier({ ...proof, session: { ...proof.session, ...patch } }, identity),
+      false,
+    );
+  assert.equal(documentRelinkBarrier({ ...proof, targetExists: false }, identity), false);
+  assert.equal(
+    documentRelinkBarrier({ ...proof, targetOrganizationId: 'foreign' }, identity),
+    false,
+  );
+});
+
+test('REC65 SDK original structured error is required; partial SDK messages are inconclusive', async () => {
+  const { observedStorageFetch, sdkDenialProven } = await import('./sdk-storage-proof.mjs');
+  const body = {
+    statusCode: '403',
+    code: 'AccessDenied',
+    error: 'Unauthorized',
+    message: 'Server managed object',
+  };
+  const capture = observedStorageFetch(
+    async () => new Response(JSON.stringify(body), { status: 400 }),
+  );
+  const path = '/storage/v1/object/legal-documents/synthetic';
+  const response = await capture.fetch('http://127.0.0.1:54321' + path, {
+    method: 'POST',
+    headers: { Authorization: 'SECRET_NOT_RECORDED' },
+  });
+  assert.equal(response.status, 400);
+  assert.deepEqual(await response.json(), body);
+  const proof = {
+    path,
+    jwtValidated: true,
+    exists: true,
+    unchanged: true,
+    positiveControl: true,
+    writeBarrier: true,
+  };
+  assert.equal(sdkDenialProven(capture.observations[0], proof), true);
+  assert.equal(JSON.stringify(capture.observations).includes('SECRET_NOT_RECORDED'), false);
+  for (const key of ['jwtValidated', 'exists', 'unchanged', 'positiveControl', 'writeBarrier'])
+    assert.equal(sdkDenialProven(capture.observations[0], { ...proof, [key]: false }), false);
+  assert.equal(
+    sdkDenialProven({ ...capture.observations[0], body: { message: body.message } }, proof),
+    false,
+  );
+  assert.equal(
+    sdkDenialProven({ ...capture.observations[0], body: { ...body, code: 'Other' } }, proof),
+    false,
+  );
+  assert.equal(
+    sdkDenialProven({ ...capture.observations[0], path: '/wrong-object' }, proof),
+    false,
+  );
+});
+
+test('REC65 malformed provider output remains incomplete without sensitive fallback', async () => {
+  const { observedStorageFetch, sdkDenialProven } = await import('./sdk-storage-proof.mjs');
+  const capture = observedStorageFetch(async () => new Response('not json', { status: 400 }));
+  await capture.fetch('http://127.0.0.1/storage/v1/object/test', { method: 'POST' });
+  assert.equal(capture.observations[0].body, null);
+  assert.equal(sdkDenialProven(capture.observations[0], {}), false);
+});
+
+test('REC65 installed SDK preserves its reduced error and the collector preserves original HTTP fields', async () => {
+  const { createServer } = await import('node:http');
+  const { once } = await import('node:events');
+  const { createClient } = await import('@supabase/supabase-js');
+  const { observedStorageFetch } = await import('./sdk-storage-proof.mjs');
+  const body = {
+    statusCode: '403',
+    code: 'AccessDenied',
+    error: 'Unauthorized',
+    message: 'Server managed object',
+  };
+  const server = createServer((request, response) => {
+    request.resume();
+    response.writeHead(400, { 'Content-Type': 'application/json' });
+    response.end(JSON.stringify(body));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  try {
+    const capture = observedStorageFetch();
+    const client = createClient(
+      'http://127.0.0.1:' + server.address().port,
+      'synthetic-not-a-secret',
+      { auth: { persistSession: false }, global: { fetch: capture.fetch } },
+    );
+    const result = await client.storage
+      .from('legal-documents')
+      .upload('synthetic', Buffer.from('synthetic'), { upsert: true });
+    assert.equal(result.error.name, 'StorageApiError');
+    assert.equal(String(result.error.statusCode), '403');
+    assert.equal(result.error.code, 'AccessDenied');
+    assert.equal(capture.observations[0].http, 400);
+    assert.deepEqual(capture.observations[0].body, body);
+  } finally {
+    server.close();
+    server.closeAllConnections();
+    await once(server, 'close');
+  }
 });

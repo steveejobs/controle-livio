@@ -1,7 +1,17 @@
 import { PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'node:crypto';
-import { storageDenial } from '../qa/document-storage-matrix.mjs';
+import {
+  observedStorageFetch,
+  sdkDenialProven,
+  sdkWriteBarrier,
+} from '../qa/sdk-storage-proof.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import assert from 'node:assert/strict';
+import { sanitizeProviderPayload } from '../qa/storage-authorization-proof.mjs';
+const observed = observedStorageFetch();
+const evidence = { scope: 'DISPOSABLE_REAL_SDK_STORAGE', cases: [] };
 
 if (
   process.platform !== 'linux' ||
@@ -31,7 +41,10 @@ const clientA = '11000000-0000-4000-8000-000000000001';
 const clientB = '21000000-0000-4000-8000-000000000001';
 
 async function signedIn(email) {
-  const client = createClient(url, anonKey, { auth: { persistSession: false } });
+  const client = createClient(url, anonKey, {
+    auth: { persistSession: false },
+    global: { fetch: observed.fetch },
+  });
   const { error } = await client.auth.signInWithPassword({ email, password });
   if (error) throw new Error(`Login local falhou para ${email}: ${error.message}`);
   return client;
@@ -129,18 +142,10 @@ const seeded = await fixtureStorage.storage
   .from('legal-documents')
   .upload(objectPath, fixtureBytes, { contentType: 'text/plain', upsert: false });
 expect(!seeded.error, 'trusted local Storage fixture failed');
-const uploadCross = await adminB.storage
+const fixtureUpsert = await fixtureStorage.storage
   .from('legal-documents')
-  .upload(`organizations/${orgA}/documents/rls-test/cross.txt`, new Blob(['negado']), {
-    contentType: 'text/plain',
-    upsert: false,
-  });
-expect(
-  storageDenial(Number(uploadCross.error?.statusCode ?? 200), {
-    message: uploadCross.error?.message,
-  }) === 'AUTHORIZATION_DENIED',
-  'organização B fez upload no path da organização A ou a rejeição não foi de autorização',
-);
+  .upload(objectPath, fixtureBytes, { contentType: 'text/plain', upsert: true });
+expect(!fixtureUpsert.error, 'trusted same-operation upsert control failed');
 
 if (
   process.env.SUPABASE_LOCAL !== 'true' ||
@@ -227,17 +232,94 @@ try {
   );
   // The negative update requires a linked, readable object, not just bytes with
   // missing metadata that would already be invisible under the old SELECT policy.
-  const uploadA = await lawyerA.storage
-    .from('legal-documents')
-    .upload(objectPath, new Blob(['SYNTHETIC FORBIDDEN CHANGE']), {
-      contentType: 'text/plain',
-      upsert: true,
+  // Both actors target the same existing object and persisted document/version.
+  // The trusted fixture upload above is a provider positive control, not an end-user permission.
+  async function physicalSnapshot() {
+    const physical = await fixtureStorage.storage.from('legal-documents').download(objectPath);
+    expect(!physical.error, 'fixture must physically exist');
+    return {
+      hash: createHash('sha256')
+        .update(Buffer.from(await physical.data.arrayBuffer()))
+        .digest('hex'),
+      document: await database.document.findUniqueOrThrow({ where: { id: documentId } }),
+      versions: await database.documentVersion.findMany({
+        where: { documentId },
+        orderBy: { id: 'asc' },
+      }),
+      audit: await database.auditLog.findMany({
+        where: { organizationId: orgA },
+        orderBy: { id: 'asc' },
+      }),
+      objects: await database.$queryRawUnsafe(
+        "SELECT to_jsonb(o)-'last_accessed_at' AS object FROM storage.objects o WHERE bucket_id='legal-documents' AND name=$1",
+        objectPath,
+      ),
+    };
+  }
+  const outputRoot =
+    process.env.LIVIO_QA_OUTPUT ?? resolve(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
+  const evidencePath = resolve(outputRoot, 'workflow-stages/rls-storage.json');
+  const save = () => {
+    mkdirSync(resolve(outputRoot, 'workflow-stages'), { recursive: true });
+    writeFileSync(
+      evidencePath,
+      JSON.stringify(
+        sanitizeProviderPayload(evidence),
+        (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
+        2,
+      ) + '\n',
+    );
+  };
+  for (const [name, client, organizationId] of [
+    ['cross-org', adminB, orgB],
+    ['own-linked', lawyerA, orgA],
+  ]) {
+    const row = { name, status: 'FAIL', organizationId };
+    evidence.cases.push(row);
+    const identity = await client.auth.getUser();
+    expect(!identity.error && identity.data.user?.id, 'actor JWT must be admitted by real Auth');
+    row.profileId = identity.data.user.id;
+    row.authorization = await sdkWriteBarrier(database, row.profileId, organizationId);
+    row.before = await physicalSnapshot();
+    save();
+    const offset = observed.observations.length;
+    const result = await client.storage
+      .from('legal-documents')
+      .upload(objectPath, new Blob(['SYNTHETIC FORBIDDEN CHANGE']), {
+        contentType: 'text/plain',
+        upsert: true,
+      });
+    row.response =
+      observed.observations
+        .slice(offset)
+        .find(
+          (o) =>
+            o.method === 'POST' && o.path === '/storage/v1/object/legal-documents/' + objectPath,
+        ) ?? null;
+    row.sdkError = result.error
+      ? { name: result.error.name, statusCode: result.error.statusCode, code: result.error.code }
+      : null;
+    row.after = await physicalSnapshot();
+    row.snapshotPreserved =
+      JSON.stringify(row.before, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)) ===
+      JSON.stringify(row.after, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    row.securityProven = sdkDenialProven(row.response, {
+      path: '/storage/v1/object/legal-documents/' + objectPath,
+      jwtValidated: true,
+      exists: row.before.hash === fixtureHash,
+      unchanged: row.snapshotPreserved,
+      positiveControl: !seeded.error && !fixtureUpsert.error,
+      writeBarrier: row.authorization.writeBarrier,
     });
-  expect(
-    storageDenial(Number(uploadA.error?.statusCode ?? 200), { message: uploadA.error?.message }) ===
-      'AUTHORIZATION_DENIED',
-    'user direct write must be denied explicitly',
-  );
+    save();
+    assert.deepEqual(row.after, row.before, 'SDK mutation changed protected fixture');
+    expect(
+      row.securityProven,
+      'INCONCLUSIVE: SDK denial requires original structured response and independent authorization proof',
+    );
+    row.status = 'PASS';
+    save();
+  }
   const preserved = await fixtureStorage.storage.from('legal-documents').download(objectPath);
   expect(!preserved.error, 'existing fixture disappeared');
   expect(

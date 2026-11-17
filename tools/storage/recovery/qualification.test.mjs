@@ -9,6 +9,36 @@ import { copyTree } from './volume-copy.mjs';
 import { delayedProvider } from './delayed-provider.mjs';
 import { projectName, storageVolumeIdentity, verifyStorageVolume } from './stack-identity.mjs';
 import { cleanupTarget } from './cleanup-target.mjs';
+import { api as recoveryApi, assertRecoveryErrorResponse } from './transversal.mjs';
+import { createRequire } from 'node:module';
+import { resolve } from 'node:path';
+
+// Uses the actual compiled global filter. API build is required before these
+// support tests, as it is in the disposable Recovery workflow. No server/DB is
+// constructed by invoking the filter with this synthetic HTTP context.
+function filteredRecoveryError(status, requestPath = '/v1/storage-recovery') {
+  const require = createRequire(import.meta.url);
+  const { ApiExceptionFilter } = require(resolve('apps/api/dist/common/api-exception.filter.js'));
+  const { HttpException } = require('@nestjs/common');
+  let body;
+  const response = {
+    status: (code) => {
+      assert.equal(code, status);
+      return {
+        json: (value) => {
+          body = value;
+        },
+      };
+    },
+  };
+  new ApiExceptionFilter().catch(new HttpException('Synthetic recovery negative', status), {
+    switchToHttp: () => ({
+      getRequest: () => ({ originalUrl: requestPath, headers: {}, id: 'synthetic-correlation' }),
+      getResponse: () => response,
+    }),
+  });
+  return body;
+}
 
 function volumeFixture(backendPath = '/mnt') {
   const project = 'livio-recovery-123-abcdef12';
@@ -452,5 +482,311 @@ test('an extra bind or foreign volume is rejected even with a valid backend moun
     const f = volumeFixture();
     f.container.Mounts.push(mount);
     assert.throws(() => storageVolumeIdentity(f.container, f.project));
+  }
+});
+
+test('REC65 advanced IPC preserves native snapshots and exact JSON evidence', async () => {
+  const { fork } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const { recoveryEvidence } = await import('./ipc-evidence.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'livio-rec65-ipc-'));
+  const file = join(dir, 'child.mjs');
+  const moduleUrl = new URL('./ipc-evidence.mjs', import.meta.url).href;
+  writeFileSync(
+    file,
+    'import {recoveryEvidence} from ' +
+      JSON.stringify(moduleUrl) +
+      ';process.once("message",m=>{process.send(recoveryEvidence([],m),()=>process.disconnect())});',
+  );
+  const value = {
+    small: 1n,
+    large: 900719925474099312345n,
+    nested: [
+      {
+        sizeBytes: 91n,
+        hash: 'a'.repeat(64),
+        reference: 'version',
+        state: 'COMPLETE',
+        audit: ['CREATE'],
+      },
+    ],
+    normal: [null, 'text', 4],
+    date: new Date('2026-01-01'),
+  };
+  const child = fork(pathToFileURL(file), [], {
+    serialization: 'advanced',
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  try {
+    const received = once(child, 'message');
+    child.send(value);
+    const [message] = await received;
+    assert.notEqual(message.pid, process.pid);
+    assert.deepEqual(message.snapshot, value);
+    assert.deepEqual(recoveryEvidence([], value).snapshot, value);
+    const evidence = JSON.parse(
+      JSON.stringify(message, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)),
+    );
+    assert.equal(evidence.snapshot.large, '900719925474099312345');
+    assert.equal(evidence.snapshot.small, '1');
+    assert.equal(typeof value.large, 'bigint');
+    await once(child, 'exit');
+    await assert.rejects(
+      new Promise((resolve, reject) => child.send(value, (e) => (e ? reject(e) : resolve()))),
+      /closed|channel|IPC/i,
+    );
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('REC65 child death is observable rather than a successful empty snapshot', async () => {
+  const { fork } = await import('node:child_process');
+  const dir = mkdtempSync(join(tmpdir(), 'livio-rec65-exit-')),
+    file = join(dir, 'child.cjs');
+  writeFileSync(file, 'process.once("message",()=>process.exit(7))');
+  const child = fork(file, [], {
+    serialization: 'advanced',
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  let delivered = false;
+  child.on('message', () => {
+    delivered = true;
+  });
+  const exit = once(child, 'exit');
+  child.send({ sizeBytes: 123n });
+  const [code] = await exit;
+  assert.equal(code, 7);
+  assert.equal(delivered, false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test('REC65 suspended admission remains 401 while admitted missing permission remains 403', () => {
+  const source = readFileSync(new URL('./transversal.mjs', import.meta.url), 'utf8');
+  const section = source.slice(
+    source.indexOf("case 'REC-X10':"),
+    source.indexOf("case 'REC-X12':"),
+  );
+  assert.deepEqual(
+    [...section.matchAll(/row.http.at\(-1\).http, (\d+)/g)].map((m) => Number(m[1])),
+    [400, 201, 409, 404, 401, 401, 403],
+  );
+  assert.ok(section.includes('suspendedBefore'));
+  const guard = readFileSync(
+    new URL('../../../apps/api/src/auth/authentication.guard.ts', import.meta.url),
+    'utf8',
+  );
+  assert.ok(guard.includes("'ACTIVE'"));
+  assert.ok(guard.includes('UnauthorizedException'));
+});
+
+test('REC66 actual filter six-field response and optional seventh error label are accepted', () => {
+  const body = filteredRecoveryError(401);
+  assert.deepEqual(Object.keys(body).sort(), [
+    'code',
+    'message',
+    'path',
+    'requestId',
+    'statusCode',
+    'timestamp',
+  ]);
+  assert.throws(
+    () =>
+      assert.ok(Object.keys(body).every((key) => ['statusCode', 'error', 'message'].includes(key))),
+    'Reproduce the previous candidate rejection of the actual API response',
+  );
+  assertRecoveryErrorResponse(body, 401, body.path);
+  assertRecoveryErrorResponse({ ...body, error: 'Unauthorized' }, 401, body.path);
+});
+
+for (const [status, code, label] of [
+  [400, 'bad_request', 'Bad Request'],
+  [401, 'unauthorized', 'Unauthorized'],
+  [403, 'forbidden', 'Forbidden'],
+  [404, 'not_found', 'Not Found'],
+  [409, 'conflict', 'Conflict'],
+])
+  test(`REC66 actual API status ${status} has its own code and valid label`, () => {
+    const body = filteredRecoveryError(status);
+    assert.equal(body.code, code);
+    assertRecoveryErrorResponse({ ...body, error: label }, status, body.path);
+  });
+
+for (const [name, patch] of [
+  ['wrong HTTP status', { statusCode: 403 }],
+  ['incompatible code', { code: 'forbidden' }],
+  ['incompatible error label', { error: 'Forbidden' }],
+  ['invalid error type', { error: { private: 'synthetic' } }],
+  ['invalid requestId', { requestId: 42 }],
+  ['empty requestId', { requestId: '' }],
+  ['invalid timestamp', { timestamp: 'not-a-date' }],
+  ['calendar-invalid timestamp', { timestamp: '2026-02-30T00:00:00.000Z' }],
+  ['foreign path', { path: '/v1/clients' }],
+  ['protected extra field', { documents: [{ id: 'synthetic-private' }] }],
+  ['invalid message', { message: { private: 'synthetic' } }],
+  ['empty message', { message: '' }],
+  ['credential-bearing message', { message: 'Bearer synthetic-secret' }],
+])
+  test(`REC66 rejects ${name}`, () => {
+    assert.throws(() =>
+      assertRecoveryErrorResponse(
+        { ...filteredRecoveryError(401), ...patch },
+        401,
+        '/v1/storage-recovery',
+      ),
+    );
+  });
+
+test('REC66 status alone, arrays and missing required API fields never prove a safe denial', () => {
+  for (const value of [null, [], { statusCode: 401 }])
+    assert.throws(() => assertRecoveryErrorResponse(value, 401, '/v1/storage-recovery'));
+  for (const key of ['code', 'message', 'requestId', 'timestamp', 'path']) {
+    const body = filteredRecoveryError(401);
+    delete body[key];
+    assert.throws(() => assertRecoveryErrorResponse(body, 401, '/v1/storage-recovery'));
+  }
+});
+
+test('REC66 REC-X10 reaches later decisions and rejects any snapshot mutation (local doubles)', async () => {
+  const source = readFileSync(new URL('./transversal.mjs', import.meta.url), 'utf8');
+  const start = source.indexOf("case 'REC-X10': {") + "case 'REC-X10': {".length;
+  const end = source.indexOf("case 'REC-X12':", start);
+  const block = source.slice(start, end).replace(/\s*break;\s*}\s*$/, '');
+  const run = new Function(
+    'r',
+    'row',
+    'fixture',
+    'api',
+    'exhausted',
+    'snapshot',
+    'input',
+    'org',
+    'assert',
+    'return (async()=>{' + block + '})()',
+  );
+  const own = {
+      actor: {
+        organizationId: 'synthetic-org',
+        userId: 'synthetic-user',
+        permissions: ['storage-recovery:view'],
+        isAdministrator: true,
+      },
+      memberId: 'member',
+      authToken: 'synthetic-token',
+    },
+    foreign = { actor: { organizationId: 'synthetic-foreign' } };
+  const previousUrl = process.env.NEXT_PUBLIC_API_URL;
+  const requests = [];
+  let memberStatus = 'ACTIVE',
+    permitted = true,
+    terminalDecision = false,
+    mutateOnDenial = false;
+  const persisted = { generation: 0, audit: 0 };
+  const server = createServer((req, res) => {
+    req.resume(); // Drain the synthetic request without retaining its body.
+    requests.push(req.method + ' ' + req.url);
+    const number = requests.length;
+    let status = 200;
+    if (memberStatus === 'SUSPENDED') status = 401;
+    else if (!permitted) status = 403;
+    else if (req.url.includes('foreign-incident')) status = 404;
+    else if (number === 2) status = 400;
+    else if (number === 3) {
+      status = 201;
+      persisted.generation = 1;
+      persisted.audit = 1;
+    } else if (number === 4) status = 409;
+    if (mutateOnDenial && status === 401) persisted.generation++;
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify(status >= 400 ? filteredRecoveryError(status, req.url) : { synthetic: true }),
+    );
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  process.env.NEXT_PUBLIC_API_URL = 'http://127.0.0.1:' + server.address().port + '/v1';
+  const r = {
+    db: {
+      storageUploadIntent: {
+        findUniqueOrThrow: async () => ({
+          generation: persisted.generation,
+          state: 'RECONCILE_PENDING',
+        }),
+      },
+      auditLog: { count: async () => persisted.audit },
+      organizationMember: {
+        update: async ({ data }) => {
+          memberStatus = data.status;
+        },
+      },
+      organizationMemberRole: {
+        deleteMany: async () => {
+          permitted = false;
+        },
+      },
+    },
+    admin: {
+      overview: async () => {
+        throw new Error('SYNTHETIC_AUTHORIZATION_DENIED');
+      },
+      decide: async () => {
+        terminalDecision = true;
+        throw new Error('SYNTHETIC_FOREIGN_OR_UNPERMITTED');
+      },
+    },
+  };
+  const exhaustedDouble = async (_r, input) =>
+    input === own ? { id: 'own-incident', operationId: 'operation' } : { id: 'foreign-incident' };
+  try {
+    const row = {};
+    await run(
+      r,
+      row,
+      async () => foreign,
+      recoveryApi,
+      exhaustedDouble,
+      async () => structuredClone(persisted),
+      own,
+      own.actor.organizationId,
+      assert,
+    );
+    assert.deepEqual(
+      row.http.map((result) => result.http),
+      [200, 400, 201, 409, 404, 401, 401, 403],
+    );
+    assert.equal(requests.length, 8);
+    assert.equal(terminalDecision, true);
+    assert.equal(own.authToken, 'synthetic-token');
+    assert.deepEqual(persisted, { generation: 1, audit: 1 });
+    memberStatus = 'ACTIVE';
+    permitted = true;
+    terminalDecision = false;
+    requests.length = 0;
+    persisted.generation = 0;
+    persisted.audit = 0;
+    mutateOnDenial = true;
+    await assert.rejects(
+      run(
+        r,
+        {},
+        async () => foreign,
+        recoveryApi,
+        exhaustedDouble,
+        async () => structuredClone(persisted),
+        own,
+        own.actor.organizationId,
+        assert,
+      ),
+      { code: 'ERR_ASSERTION' },
+      'A negative HTTP response must not conceal a persisted mutation',
+    );
+    assert.equal(terminalDecision, false);
+  } finally {
+    if (previousUrl === undefined) delete process.env.NEXT_PUBLIC_API_URL;
+    else process.env.NEXT_PUBLIC_API_URL = previousUrl;
+    server.close();
+    server.closeAllConnections();
+    await once(server, 'close');
   }
 });

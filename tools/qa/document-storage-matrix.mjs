@@ -8,6 +8,8 @@ import {
   diagnoseStorageAttempt,
   inspectStorageCatalog,
   inspectActorStorage,
+  inspectActorDocument,
+  documentRelinkBarrier,
   sanitizeProviderPayload,
   ordinaryStorageSession,
   restrictiveBucketBoundary,
@@ -331,7 +333,42 @@ export async function runDocumentStorageMatrix({
   const supported = new Set();
   for (const operation of storageOperations) {
     if (operation === 'relink') {
-      supported.add(operation);
+      const control = {
+        operation,
+        status: 'FAIL',
+        purpose: 'SERVER_FIXTURE_RELINK_NOT_PRODUCT_API',
+      };
+      report.controls.push(control);
+      const originalClient = targetResponse.body.clientId ?? client.id;
+      await captureStorageControl(
+        control,
+        async () => {
+          await db.$transaction(async (tx) => {
+            const linked = await tx.document.update({
+              where: { id: targetResponse.body.id },
+              data: { clientId: second.body.id },
+            });
+            assert.equal(linked.clientId, second.body.id);
+            await tx.document.update({
+              where: { id: targetResponse.body.id },
+              data: { clientId: originalClient },
+            });
+          });
+          control.databaseRole = (
+            await db.$queryRawUnsafe('SELECT current_user::text AS role')
+          )[0].role;
+          control.status = 'PASS';
+        },
+        async () => {
+          const restored = await db.document.findUniqueOrThrow({
+            where: { id: targetResponse.body.id },
+          });
+          assert.equal(restored.organizationId, owner.org);
+          assert.equal(restored.clientId, originalClient);
+        },
+      );
+      if (control.status === 'PASS') supported.add(operation);
+      save();
       continue;
     }
     const root = `organizations/${owner.org}/qa-transient/${randomUUID()}`;
@@ -562,6 +599,13 @@ export async function runDocumentStorageMatrix({
         c.fixtureValid = true;
         c.jwtValidated = true; // Auth.getUser above, or the explicitly checked anon-role key.
         c.authorization = { sqlProof, actorRead };
+        if (operation === 'relink')
+          c.authorization.documentProof = await inspectActorDocument(
+            db,
+            identity,
+            document.id,
+            owner.org,
+          );
         if (['delete', 'move', 'copy-new'].includes(operation)) {
           const absent = `organizations/${owner.org}/qa-missing/${randomUUID()}.png`;
           const absentDestination = `organizations/${owner.org}/qa-missing/${randomUUID()}.png`;
@@ -594,12 +638,10 @@ export async function runDocumentStorageMatrix({
             : sqlProof.visible.length === 0 && httpReadDenied
               ? false
               : null;
-        c.authorization.operationWriteBarrier = storageWriteBarrier(
-          operation,
-          sqlProof,
-          report.authorizationCatalog,
-          identity,
-        );
+        c.authorization.operationWriteBarrier =
+          operation === 'relink'
+            ? documentRelinkBarrier(c.authorization.documentProof, identity)
+            : storageWriteBarrier(operation, sqlProof, report.authorizationCatalog, identity);
         c.diagnosis = diagnoseMatrixAttempt({
           operation,
           response: c.attempt,

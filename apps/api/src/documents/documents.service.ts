@@ -1,3 +1,4 @@
+import { versionUploadIdentity } from './version-upload-identity';
 import { createHash, randomUUID } from 'node:crypto';
 import {
   BadRequestException,
@@ -329,7 +330,7 @@ export class DocumentsService {
       resourceType: 'document',
       resourceId: documentId,
       expectedSha256: this.digest(file.buffer),
-      idempotencyKey: 'VERSION:' + storageKey,
+      idempotencyKey: versionUploadIdentity(actor.organizationId, documentId, storageKey),
     });
     try {
       await this.recovery.store(ticket, file.buffer, file.mimetype, () =>

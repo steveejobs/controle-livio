@@ -1,3 +1,4 @@
+import { recoveryEvidence } from './ipc-evidence.mjs';
 import { runtime, snapshot } from './runtime.mjs';
 let finished = false;
 process.once('disconnect', () => {
@@ -9,15 +10,7 @@ process.once('message', async ({ organizationId }) => {
     r = await runtime();
     await r.recovery.expireSigningRequests();
     const results = await r.recovery.recoverDue();
-    process.send({
-      pid: process.pid,
-      results,
-      snapshot: JSON.parse(
-        JSON.stringify(await snapshot(r, organizationId), (_k, v) =>
-          typeof v === 'bigint' ? v.toString() : v,
-        ),
-      ),
-    });
+    process.send(recoveryEvidence(results, await snapshot(r, organizationId)));
   } catch (error) {
     process.send({ error: { name: error.name, code: error.code ?? null } });
   } finally {

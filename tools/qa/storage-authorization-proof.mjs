@@ -41,6 +41,7 @@ export function ordinaryStorageSession(session, identity) {
 }
 
 export function sanitizeProviderPayload(value) {
+  if (value instanceof Date) return value.toISOString();
   if (value instanceof Error)
     return sanitizeProviderPayload({
       name: value.name,
@@ -213,6 +214,72 @@ export async function inspectActorStorage(env, db, identity, bucket, key, catalo
             restrictiveBucketBoundary(catalog.policies, role, 'insert') &&
             predicate.allowed === false,
         },
+      };
+    },
+    { timeout: 30000 },
+  );
+}
+
+// Independent proof for PostgREST relinking: documents, never storage.objects.
+// Absence of effective table AND target-column UPDATE grants is conclusive only
+// for an ordinary, correctly bound SQL session. RLS policies are recorded too.
+export function documentRelinkBarrier(proof, identity) {
+  return (
+    ordinaryStorageSession(proof.session, identity) &&
+    proof.session.can_update === false &&
+    proof.session.can_update_client === false &&
+    proof.targetExists === true &&
+    proof.organizationId === proof.targetOrganizationId
+  );
+}
+
+export async function inspectActorDocument(db, identity, documentId, organizationId) {
+  const rows = await db.$queryRawUnsafe(
+    'SELECT id::text,organization_id::text FROM public.documents WHERE id=$1::uuid',
+    documentId,
+  );
+  const policies = await db.$queryRawUnsafe(
+    "SELECT policyname,permissive,roles::text AS roles,cmd,qual,with_check FROM pg_policies WHERE schemaname='public' AND tablename='documents' ORDER BY policyname",
+  );
+  const columns = await db.$queryRawUnsafe(
+    "SELECT attname,attacl::text AS acl FROM pg_attribute WHERE attrelid='public.documents'::regclass AND attnum>0 AND NOT attisdropped ORDER BY attnum",
+  );
+  return db.$transaction(
+    async (tx) => {
+      await tx.$executeRawUnsafe(identity ? 'SET LOCAL ROLE authenticated' : 'SET LOCAL ROLE anon');
+      await tx.$queryRawUnsafe(
+        "SELECT set_config('request.jwt.claims',$1,true)",
+        JSON.stringify({
+          role: identity ? 'authenticated' : 'anon',
+          ...(identity ? { sub: identity.profileId } : {}),
+        }),
+      );
+      const [session] = await tx.$queryRawUnsafe(
+        "SELECT current_user::text AS role,auth.uid()::text AS profile_id,r.rolsuper,r.rolbypassrls,(pg_has_role(current_user,c.relowner,'USAGE') OR pg_has_role(current_user,c.relowner,'SET')) AS owns_table,c.relrowsecurity,c.relforcerowsecurity,pg_get_userbyid(c.relowner) AS owner,c.relacl::text AS acl,has_table_privilege(current_user,c.oid,'SELECT') AS can_select,has_table_privilege(current_user,c.oid,'UPDATE') AS can_update,has_column_privilege(current_user,c.oid,'client_id','UPDATE') AS can_update_client,EXISTS (SELECT 1 FROM pg_roles privileged WHERE (privileged.rolsuper OR privileged.rolbypassrls) AND pg_has_role(current_user,privileged.oid,'SET')) AS can_assume_privileged FROM pg_roles r CROSS JOIN pg_class c WHERE r.rolname=current_user AND c.oid='public.documents'::regclass",
+      );
+      const visible = await tx.$queryRawUnsafe(
+        'SELECT id::text,organization_id::text,client_id::text FROM public.documents WHERE id=$1::uuid',
+        documentId,
+      );
+      const permissions = identity
+        ? await tx.$queryRawUnsafe(
+            "SELECT public.has_permission($1::uuid,'documents','update') AS can_update",
+            identity.org,
+          )
+        : [];
+      return {
+        session,
+        visible,
+        permissions,
+        policies,
+        columns,
+        documentId,
+        organizationId,
+        targetExists: rows.length === 1,
+        targetOrganizationId: rows[0]?.organization_id ?? null,
+        actorOrganizationId: identity?.org ?? null,
+        method:
+          'Read-only catalog, server existence and role-bound SELECT; no DML or arbitrary policy evaluation',
       };
     },
     { timeout: 30000 },

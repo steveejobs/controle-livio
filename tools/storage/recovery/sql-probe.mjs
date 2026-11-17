@@ -401,6 +401,90 @@ try {
     },
   );
   await noInventedDefaults();
+  await check('REC65 no-owner remapping loses ordinary server ownership privileges', async () => {
+    await db.exec(
+      'BEGIN; CREATE ROLE rec65_api NOSUPERUSER NOBYPASSRLS; CREATE ROLE rec65_executor NOSUPERUSER NOBYPASSRLS; ALTER TABLE storage_upload_intents OWNER TO rec65_api;',
+    );
+    try {
+      const privilege = async () =>
+        (
+          await db.query(
+            "SELECT has_table_privilege('rec65_api','storage_upload_intents','SELECT,INSERT,UPDATE') AS allowed",
+          )
+        ).rows[0].allowed;
+      assert.equal(await privilege(), true);
+      await db.exec('ALTER TABLE storage_upload_intents OWNER TO rec65_executor');
+      assert.equal(await privilege(), false);
+    } finally {
+      await db.exec('ROLLBACK');
+    }
+  });
+  await check(
+    'REC65 preserving source owner retains server privilege without browser grants',
+    async () => {
+      await db.exec(
+        'BEGIN; CREATE ROLE rec65_api NOSUPERUSER NOBYPASSRLS; ALTER TABLE storage_upload_intents OWNER TO rec65_api;',
+      );
+      try {
+        const [row] = (
+          await db.query(
+            "SELECT pg_get_userbyid(c.relowner) AS owner,c.relrowsecurity,c.relforcerowsecurity,has_table_privilege('rec65_api',c.oid,'SELECT,INSERT,UPDATE') AS server_access,has_table_privilege('anon',c.oid,'SELECT,INSERT,UPDATE,DELETE') AS anon_access,has_table_privilege('authenticated',c.oid,'SELECT,INSERT,UPDATE,DELETE') AS browser_access FROM pg_class c WHERE c.oid='storage_upload_intents'::regclass",
+          )
+        ).rows;
+        assert.equal(row.owner, 'rec65_api');
+        assert.equal(row.server_access, true);
+        assert.equal(row.anon_access, false);
+        assert.equal(row.browser_access, false);
+        assert.equal(row.relrowsecurity, true);
+        assert.equal(row.relforcerowsecurity, true);
+      } finally {
+        await db.exec('ROLLBACK');
+      }
+    },
+  );
+  await check(
+    'REC65 relink proof executes against documents catalog and role-bound SELECT',
+    async () => {
+      const { inspectActorDocument, documentRelinkBarrier } = await import(
+        new URL('../../qa/storage-authorization-proof.mjs', import.meta.url)
+      );
+      await db.exec(
+        "BEGIN; CREATE FUNCTION auth.uid() RETURNS uuid LANGUAGE sql AS $$ SELECT NULL::uuid $$; GRANT USAGE ON SCHEMA auth TO anon; CREATE TABLE public.documents(id uuid PRIMARY KEY, organization_id uuid, client_id uuid); ALTER TABLE public.documents ENABLE ROW LEVEL SECURITY; ALTER TABLE public.documents FORCE ROW LEVEL SECURITY; GRANT SELECT ON public.documents TO anon; CREATE POLICY fixture_select ON public.documents FOR SELECT TO anon USING(true); INSERT INTO public.documents VALUES ('" +
+          resource +
+          "','" +
+          org +
+          "',NULL);",
+      );
+      const tx = {
+        $queryRawUnsafe: async (query, ...values) => (await db.query(query, values)).rows,
+        $executeRawUnsafe: async (query) => db.exec(query),
+      };
+      const adapter = {
+        ...tx,
+        $transaction: async (operation) => {
+          await db.exec('SAVEPOINT rec65_role');
+          try {
+            return await operation(tx);
+          } finally {
+            await db.exec('ROLLBACK TO SAVEPOINT rec65_role');
+          }
+        },
+      };
+      try {
+        const proof = await inspectActorDocument(adapter, null, resource, org);
+        assert.equal(proof.visible.length, 1);
+        assert.equal(documentRelinkBarrier(proof, null), true);
+        assert.equal(proof.session.role, 'anon');
+        await db.exec('GRANT UPDATE(client_id) ON public.documents TO anon');
+        const changed = await inspectActorDocument(adapter, null, resource, org);
+        assert.equal(documentRelinkBarrier(changed, null), false);
+        assert.equal(changed.session.can_update_client, true);
+        assert.equal(changed.session.can_update, false);
+      } finally {
+        await db.exec('ROLLBACK');
+      }
+    },
+  );
   const ownerObjects = (
     await db.query(`SELECT 'RELATION:public.'||relname AS object FROM pg_class WHERE relnamespace='public'::regnamespace AND relname LIKE 'storage_%' AND relkind IN ('r','i')
     UNION ALL SELECT 'TYPE:public.'||typname FROM pg_type WHERE typnamespace='public'::regnamespace AND (typname LIKE 'storage_%' OR typname LIKE '_storage_%')
