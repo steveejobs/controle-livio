@@ -1,11 +1,9 @@
+import { loadPrismaDatamodel } from './prisma-model-metadata.mjs';
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { dirname, join, resolve, relative } from 'node:path';
 
-const require = createRequire(import.meta.url),
-  { Prisma } = require('@prisma/client');
 const output = process.argv[2];
 if (!output || existsSync(output))
   throw new Error('Provide a new output directory; existing reports are preserved');
@@ -330,7 +328,7 @@ writeFileSync(
   ]),
 );
 
-const models = Prisma.dmmf.datamodel.models,
+const models = loadPrismaDatamodel().models,
   quote = (s) => '"' + s.replaceAll('"', '""') + '"';
 const relations = [];
 for (const model of models)

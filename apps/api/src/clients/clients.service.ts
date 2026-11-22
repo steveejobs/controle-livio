@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import { Prisma } from '@livio/db';
+import { Prisma, matchesUniqueConstraint } from '@livio/db';
 import {
   MAX_CLIENT_PHOTO_SIZE_MB,
   calculateOutstandingByCurrency,
@@ -412,7 +412,6 @@ export class ClientsService {
       async (transaction) => {
         const clientRecord = (await transaction.client.findFirst({
           where: { id, organizationId: actor.organizationId, deletedAt: null },
-          relationLoadStrategy: 'join',
           include: clientOverviewInclude,
         })) as Prisma.ClientGetPayload<{ include: typeof clientOverviewInclude }> | null;
         if (!clientRecord) throw new NotFoundException('Cliente não encontrado');
@@ -528,10 +527,10 @@ export class ClientsService {
     } catch (error) {
       if (
         taxIdNormalized &&
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002' &&
-        Array.isArray(error.meta?.target) &&
-        error.meta.target.includes('tax_id_normalized')
+        matchesUniqueConstraint(error, {
+          fieldNames: ['tax_id_normalized', 'taxIdNormalized'],
+          indexName: 'clients_organization_id_tax_id_normalized_key',
+        })
       ) {
         throw new ConflictException('Este CPF/CNPJ já está cadastrado nesta organização.');
       }
@@ -601,12 +600,10 @@ export class ClientsService {
         );
       if (
         taxIdNormalized &&
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002' &&
-        Array.isArray(error.meta?.target) &&
-        error.meta.target.some((field) =>
-          ['tax_id_normalized', 'taxIdNormalized'].includes(String(field)),
-        )
+        matchesUniqueConstraint(error, {
+          fieldNames: ['tax_id_normalized', 'taxIdNormalized'],
+          indexName: 'clients_organization_id_tax_id_normalized_key',
+        })
       ) {
         throw new ConflictException('Este CPF/CNPJ ja esta cadastrado nesta organizacao.');
       }

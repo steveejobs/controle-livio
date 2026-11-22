@@ -37,9 +37,10 @@ export class PdfContentInspectionService {
   }
 
   async inspect(pdf: Buffer): Promise<InspectionResult> {
-    const pdfjs = requireFromHere(
+    const pdfjs = requireFromHere('pdfjs-dist/legacy/build/pdf.mjs') as typeof import(
       'pdfjs-dist/legacy/build/pdf.mjs',
-    ) as typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+      { with: { 'resolution-mode': 'import' } }
+    );
     const task = pdfjs.getDocument({
       data: new Uint8Array(pdf),
       useSystemFonts: true,

@@ -491,8 +491,8 @@ export async function coordinatedRestore(env) {
     targetEnv = targetEnvironment(env, scratch, project);
     // Verify the new cluster identity before the explicitly local reset. This
     // guard intentionally does not require the recovery migration yet.
-    const { PrismaClient } = createRequire(import.meta.url)('@prisma/client');
-    const fresh = new PrismaClient({ datasources: { db: { url: targetEnv.DATABASE_URL } } });
+    const { PrismaClient } = createRequire(import.meta.url)('@livio/db');
+    const fresh = new PrismaClient({ connectionString: targetEnv.DATABASE_URL });
     try {
       target = await assertOwnedStack(fresh, targetEnv);
       assert.notEqual(target.cluster, source.cluster);

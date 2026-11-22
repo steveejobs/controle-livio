@@ -3,7 +3,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { deflateSync } from 'node:zlib';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
 import { Document as WordDocument, Paragraph, Packer } from 'docx';
 import { PDFDocument, StandardFonts } from 'pdf-lib';

@@ -5,7 +5,7 @@
   "description": "Fundação segura e multiempresa para um CRM jurídico.",
   "packageManager": "npm@11.17.0",
   "engines": {
-    "node": "24.x",
+    "node": ">=24.15.0 <25",
     "npm": ">=10.0.0"
   },
   "workspaces": [
@@ -15,7 +15,7 @@
   "scripts": {
     "build": "npm run build:api && npm run build -w @livio/ui && npm run build -w @livio/web",
     "build:api": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/api",
-    "build:web": "npm run build -w @livio/shared && npm run build -w @livio/ui && npm run build -w @livio/web",
+    "build:web": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/ui && npm run build -w @livio/web",
     "build:packages": "npm run build -w @livio/shared && npm run build -w @livio/db && npm run build -w @livio/ui",
     "dev": "npm run build:packages && concurrently -n api,web -c blue,magenta \"npm run dev -w @livio/api\" \"npm run dev -w @livio/web\"",
     "dev:api": "npm run build:packages && npm run dev -w @livio/api",
@@ -25,7 +25,7 @@
     "lint": "eslint . --max-warnings=0",
     "test": "npm run test --workspaces --if-present",
     "typecheck": "npm run build:packages && npm run typecheck -w @livio/api && npm run typecheck -w @livio/web",
-    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma && node tools/qa/generate-prisma-metadata.mjs",
     "db:format": "prisma format --schema packages/db/prisma/schema.prisma",
     "db:validate": "prisma validate --schema packages/db/prisma/schema.prisma",
     "perf:bundle": "node tools/performance/check-bundle.mjs",
@@ -58,6 +58,9 @@
     "typescript-eslint": "^8.73.0"
   },
   "overrides": {
+    "@prisma/config": {
+      "effect": "3.22.1"
+    },
     "@nestjs/swagger": {
       "js-yaml": "5.4.1"
     },

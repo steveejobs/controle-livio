@@ -17,11 +17,11 @@ export async function runIdentityIntegrity(env = process.env) {
   const output = resolve(env.LIVIO_QA_OUTPUT, 'workflow-stages/identity-stage5.json');
   if (existsSync(output)) throw new Error('Existing identity evidence refused');
   const require = createRequire(import.meta.url);
-  const { PrismaClient } = require('@prisma/client');
+  const { PrismaClient } = require('@livio/db');
   const { createClient } = require('@supabase/supabase-js');
   const { createCanvas } = require('@napi-rs/canvas');
   const { PDFDocument } = require('pdf-lib');
-  const db = new PrismaClient({ datasources: { db: { url: env.DATABASE_URL } } });
+  const db = new PrismaClient({ connectionString: env.DATABASE_URL });
   const storage = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false },
   });

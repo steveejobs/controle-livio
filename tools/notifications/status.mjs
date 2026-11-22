@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 
 assert.ok(['development', 'test', 'staging'].includes(process.env.SUPABASE_ENVIRONMENT));
 assert.equal(process.env.SUPABASE_PROJECT_REF, process.env.CONFIRM_SUPABASE_PROJECT_REF);

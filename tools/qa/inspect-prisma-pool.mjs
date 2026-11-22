@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 
 const expectedProjectRef = 'ioebcdpyrszokdyaoaqv';
 const databaseUrl = new URL(process.env.DATABASE_URL ?? '');
@@ -18,13 +18,9 @@ try {
            current_setting('server_version') AS server_version,
            current_setting('max_connections')::int AS max_connections,
            current_setting('superuser_reserved_connections')::int AS reserved_connections`;
-  const metrics = await prisma.$metrics.json();
-  const poolGauges = metrics.gauges
-    .filter((metric) => /queries_wait|pool_connections_(open|busy|idle)/.test(metric.key))
-    .map(({ key, value }) => ({ key, value }));
-  const waitHistograms = metrics.histograms
-    .filter((metric) => /wait/.test(metric.key))
-    .map(({ key, value }) => ({ key, value }));
+  const metrics = await prisma.getPoolMetrics();
+  const poolGauges = { waiting: metrics.waiting, busy: metrics.busy, open: metrics.open };
+  const waitHistograms = [{ key: 'pg_pool_acquire_ms', value: metrics.waitHistogram }];
   console.log(
     JSON.stringify(
       {
@@ -37,6 +33,7 @@ try {
           databaseUrl.searchParams.get('pool_timeout') ?? '10 (default)',
         identity: identity[0],
         poolGauges,
+        metricsSource: metrics.source,
         waitHistograms,
         readOnly: true,
       },

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 import { createHmac } from 'node:crypto';
 
 if (process.argv.includes('--help')) {

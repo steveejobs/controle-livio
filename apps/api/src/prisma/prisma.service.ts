@@ -45,14 +45,14 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     process.stdout.write(
       `${JSON.stringify({
         event: 'prisma_pool_config',
-        connectionLimit: databaseUrl?.searchParams.get('connection_limit') ?? 'Prisma default',
-        poolTimeoutSeconds: databaseUrl?.searchParams.get('pool_timeout') ?? '10 (Prisma default)',
-        metricsPreview: true,
+        connectionLimit: databaseUrl?.searchParams.get('connection_limit') ?? '1',
+        poolTimeoutSeconds: databaseUrl?.searchParams.get('pool_timeout') ?? '10',
+        metricsSource: 'pg.pool.acquire',
       })}\n`,
     );
     const sample = async () => {
       try {
-        const metrics = await this.$metrics.json();
+        const metrics = await this.getPoolMetrics();
         const { waiting, busy, open } = summarizePoolGauges(metrics);
         this.poolMetricSamples += 1;
         this.maxWaitingQueries = Math.max(this.maxWaitingQueries, waiting);
@@ -92,7 +92,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     if (this.poolMetricsTimer) clearInterval(this.poolMetricsTimer);
     if (process.env.QA_TIMINGS === 'true') {
       try {
-        const metrics = await this.$metrics.json();
+        const metrics = await this.getPoolMetrics();
         process.stdout.write(
           `${JSON.stringify({
             event: 'prisma_pool_summary',

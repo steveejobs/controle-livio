@@ -14,6 +14,7 @@ export default tseslint.config(
       'playwright-report/**',
       'test-results/**',
       'apps/web/public/ocr/**',
+      'packages/db/src/generated/**',
     ],
   },
   eslint.configs.recommended,

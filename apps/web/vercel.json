@@ -3,6 +3,7 @@
   "framework": "nextjs",
   "git": {
     "deploymentEnabled": {
+      "fix/runtime-security-20261122": false,
       "validation/gha-ci-20261029": false,
       "validation/audit-stage2-20261104": false
     }

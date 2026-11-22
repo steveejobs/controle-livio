@@ -233,8 +233,8 @@ export async function withFinancialApi(configuration, root, action, options = {}
 
 async function inspectDisposableDatabase(env, root) {
   const require = createRequire(join(root, 'package.json'));
-  const { PrismaClient } = require('@prisma/client');
-  const database = new PrismaClient({ datasources: { db: { url: env.DATABASE_URL } } });
+  const { PrismaClient } = require('@livio/db');
+  const database = new PrismaClient({ connectionString: env.DATABASE_URL });
   try {
     const [identity] = await database.$queryRawUnsafe(`SELECT current_user::text AS role,
       session_user::text AS session_role,current_database()::text AS database,

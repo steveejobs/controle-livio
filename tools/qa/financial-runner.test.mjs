@@ -1,3 +1,4 @@
+import { loadPrismaDatamodel } from './prisma-model-metadata.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -384,7 +385,7 @@ test('financial job is independent and browser-free, with disposable setup and u
 });
 
 test('matrix fixture makers use existing required Prisma scalar fields before real SQL controls', async (context) => {
-  const { Prisma } = require('@prisma/client');
+  const { Prisma } = require('@livio/db');
   const file = 'tools/qa/financial-write-matrix.mjs';
   const ast = ts.createSourceFile(
     file,
@@ -405,7 +406,7 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
   };
   visit(ast);
   const delegates = new Map(
-    Prisma.dmmf.datamodel.models.map((model) => [
+    loadPrismaDatamodel().models.map((model) => [
       model.name[0].toLowerCase() + model.name.slice(1),
       model,
     ]),
@@ -421,7 +422,7 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
       const field = model.fields.find((candidate) => candidate.name === name);
       assert.notEqual(field.kind, 'object', 'Only scalar fixture input is expected');
       if (field.kind === 'enum') {
-        const enumeration = Prisma.dmmf.datamodel.enums.find((item) => item.name === field.type);
+        const enumeration = loadPrismaDatamodel().enums.find((item) => item.name === field.type);
         assert(
           enumeration.values.some((item) => item.name === value),
           model.name + '.' + name,
@@ -525,7 +526,7 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
   for (const [table, maker] of Object.entries(makers))
     await context.test('fixture: ' + table, async () => {
       validate(
-        Prisma.dmmf.datamodel.models.find((model) => model.dbName === table),
+        loadPrismaDatamodel().models.find((model) => model.dbName === table),
         await maker(),
       );
     });

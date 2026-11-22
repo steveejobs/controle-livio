@@ -1,3 +1,4 @@
+import { loadPrismaDatamodel } from './prisma-model-metadata.mjs';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { readFileSync } from 'node:fs';
@@ -29,8 +30,8 @@ test('zero-row success, invalid JWT, FK, malformed input and RLS are distinct fr
 
 test('raw payload retains monetary strings, dates, nulls and JSON while excluding relations', () => {
   const require = createRequire(import.meta.url);
-  const { Prisma } = require('@prisma/client');
-  const model = Prisma.dmmf.datamodel.models.find((m) => m.dbName === 'payments');
+  const { Prisma } = require('@livio/db');
+  const model = loadPrismaDatamodel().models.find((m) => m.dbName === 'payments');
   const record = rawRecord(model, {
     id: 'synthetic',
     organizationId: 'organization',
@@ -63,10 +64,8 @@ test('migration is atomic, guards only writes, and references existing versioned
   assert.doesNotMatch(sql, /\bFOR\s+(ALL|SELECT)\b|\b(?:DROP|TRUNCATE)\b/i);
   assert.match(sql, /pg_has_role\(r,oid,'SET'\)/);
   assert.match(sql, /has_any_column_privilege/);
-  const require = createRequire(import.meta.url);
-  const { Prisma } = require('@prisma/client');
   for (const table of financialTables) {
-    assert.ok(Prisma.dmmf.datamodel.models.some((m) => m.dbName === table));
+    assert.ok(loadPrismaDatamodel().models.some((m) => m.dbName === table));
     assert.ok(sql.includes("'" + table + "'"));
   }
 });

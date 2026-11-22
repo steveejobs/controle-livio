@@ -9,6 +9,15 @@ em `PROJECT_CONTEXT.md`. No Windows, a geração de páginas Next usa um worker 
 
 ## Inventário funcional sem execução
 
+Prisma 7 não expõe `Prisma.dmmf`. `npm run db:generate` também gera metadados de QA
+a partir do schema canônico, usando `@prisma/internals` fixado na versão do CLI.
+O JSON ignorado em `packages/db/prisma/generated/qa-model` não contém dados do banco.
+O loader confere o SHA-256 do schema antes de usá-lo; após editar o modelo, gere novamente.
+Os testes continuam verificando tabelas e relações reais do modelo, sem mock desses metadados.
+
+O Playwright usa `test-results/playwright` como destino padrão. Isso limita a limpeza
+automática do runner aos seus próprios arquivos e preserva relatórios de outras suítes.
+
 `inventory-functional-surface.mjs` usa o parser TypeScript local para listar controles JSX, opções, chamadas da web, rotas e declarações de autorização da API. Não lê `.env`, não conecta serviços e não executa o aplicativo. A presença de um controle ou nome de teste não comprova cobertura: os registros começam com `REQUIRES_REVIEW`. O inventário inclui declarações dinâmicas, não todas as instâncias geradas em execução.
 
 ```powershell

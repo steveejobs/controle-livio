@@ -24,6 +24,7 @@ chaves
 .vscode/
 packages/db/prisma/dev.db*
 packages/db/prisma/generated/
+packages/db/src/generated/
 supabase/.branches/
 supabase/.temp/
 

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
 
 const allowedProjectRef = 'ioebcdpyrszokdyaoaqv';

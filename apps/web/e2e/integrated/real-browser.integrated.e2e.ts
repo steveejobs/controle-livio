@@ -13,7 +13,7 @@ import {
   type Response,
 } from '@playwright/test';
 import { createClient } from '@supabase/supabase-js';
-import { Prisma, PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@livio/db';
 import { AFRelationship, PDFDocument, StandardFonts } from 'pdf-lib';
 import { addMonths, formatDate } from '../../features/shared/format';
 

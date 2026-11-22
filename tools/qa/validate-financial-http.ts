@@ -4,7 +4,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { PrismaClient, Prisma } from '@prisma/client';
+import { PrismaClient, Prisma } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
 import { chromium, type Page, type Request } from '@playwright/test';
 import { initialRolePermissions, type SystemRoleKey } from '../../packages/shared/src/permissions';

@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
-import type { PrismaClient } from '@livio/db';
-
-export type PoolMetrics = Awaited<ReturnType<PrismaClient['$metrics']['json']>>;
+import type { PoolMetrics } from '@livio/db';
+export type { PoolMetrics } from '@livio/db';
 
 export type PoolGaugeSnapshot = {
   waiting: number;
@@ -10,19 +9,15 @@ export type PoolGaugeSnapshot = {
 };
 
 export function summarizePoolGauges(metrics: PoolMetrics): PoolGaugeSnapshot {
-  const value = (key: string) => metrics.gauges.find((metric) => metric.key === key)?.value ?? 0;
   return {
-    waiting: value('prisma_client_queries_wait'),
-    busy: value('prisma_pool_connections_busy'),
-    open: value('prisma_pool_connections_open'),
+    waiting: metrics.waiting,
+    busy: metrics.busy,
+    open: metrics.open,
   };
 }
 
 export function summarizePoolWaitHistogram(metrics: PoolMetrics) {
-  return (
-    metrics.histograms.find((metric) => metric.key === 'prisma_client_queries_wait_histogram_ms')
-      ?.value ?? null
-  );
+  return metrics.waitHistogram;
 }
 
 export function summarizeQueryShape(query: string) {

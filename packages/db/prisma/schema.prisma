@@ -1,11 +1,11 @@
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["relationJoins", "metrics"]
+  provider        = "prisma-client"
+  output          = "../src/generated"
+  moduleFormat    = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
 }
 
 enum OrganizationStatus {

@@ -121,7 +121,6 @@ describe('ClientsService.overview', () => {
     expect(result.client.contacts).toEqual(result.contacts);
     expect(findFirst.mock.calls[0]![0]).toMatchObject({
       where: { id: 'client-a', organizationId: actor.organizationId, deletedAt: null },
-      relationLoadStrategy: 'join',
       include: {
         matters: { where: { organizationId: actor.organizationId, clientId: 'client-a' } },
         receivables: { where: { organizationId: actor.organizationId, clientId: 'client-a' } },
@@ -211,7 +210,7 @@ describe('ClientsService.overview', () => {
     expect(result.financial.receivables).toHaveLength(50);
     expect(result.financial.outstanding).toEqual([{ currency: 'BRL', amount: '73.7500' }]);
     expect(findFirst).toHaveBeenCalledOnce();
-    expect(findFirst.mock.calls[0]![0]).toMatchObject({ relationLoadStrategy: 'join' });
+    expect(findFirst.mock.calls[0]![0]).not.toHaveProperty('relationLoadStrategy');
   });
 
   it('não consulta o resumo quando o cliente não pertence à organização autenticada', async () => {
@@ -238,7 +237,6 @@ describe('ClientsService.overview', () => {
         deletedAt: null,
       },
       include: { contacts: true },
-      relationLoadStrategy: 'join',
     });
     expect(prisma.$transaction).toHaveBeenCalledOnce();
   });

@@ -7,7 +7,7 @@ import { validateRecoveryEnvironment } from './environment.mjs';
 export async function runtime(env = process.env) {
   validateRecoveryEnvironment(env);
   const require = createRequire(import.meta.url),
-    { PrismaClient } = require('@prisma/client');
+    { PrismaClient } = require('@livio/db');
   const load = (file) => require(resolve('apps/api/dist', file));
   const { parseApiEnvironment } = require('@livio/shared');
   const values = parseApiEnvironment(env),
@@ -15,7 +15,7 @@ export async function runtime(env = process.env) {
   const applicationName = 'recovery-' + process.pid + '-' + randomUUID();
   const databaseUrl = new URL(env.DATABASE_URL);
   databaseUrl.searchParams.set('application_name', applicationName);
-  const db = new PrismaClient({ datasources: { db: { url: databaseUrl.href } } });
+  const db = new PrismaClient({ connectionString: databaseUrl.href });
   const { StorageService } = load('documents/storage.service.js'),
     { AuditService } = load('common/audit.service.js');
   const { DocumentScannerService } = load('documents/document-scanner.service.js');

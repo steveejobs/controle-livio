@@ -118,9 +118,10 @@ export class ReceiptExtractionService {
 
   private async extractPdf(buffer: Buffer) {
     // PDF.js keeps its parser in ESM; Node's require(ESM) is supported by the required Node 22+ runtime.
-    const pdfjs = requireFromHere(
+    const pdfjs = requireFromHere('pdfjs-dist/legacy/build/pdf.mjs') as typeof import(
       'pdfjs-dist/legacy/build/pdf.mjs',
-    ) as typeof import('pdfjs-dist/legacy/build/pdf.mjs');
+      { with: { 'resolution-mode': 'import' } }
+    );
     const task = pdfjs.getDocument({
       data: new Uint8Array(buffer),
       useSystemFonts: true,

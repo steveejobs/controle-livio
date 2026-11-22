@@ -9,19 +9,13 @@ import {
 describe('Prisma pool diagnostics', () => {
   it('reports pool gauges without exposing query values', () => {
     const metrics = {
-      gauges: [
-        { key: 'prisma_client_queries_wait', value: 2 },
-        { key: 'prisma_pool_connections_busy', value: 3 },
-        { key: 'prisma_pool_connections_open', value: 3 },
-      ],
-      histograms: [
-        {
-          key: 'prisma_client_queries_wait_histogram_ms',
-          value: { buckets: [[1, 1]], count: 1, sum: 0.2 },
-        },
-      ],
-      counters: [],
-    } as unknown as PoolMetrics;
+      source: 'pg.pool.acquire',
+      waiting: 2,
+      busy: 3,
+      open: 3,
+      acquisitionErrors: 0,
+      waitHistogram: { buckets: [[1, 1]], count: 1, sum: 0.2 },
+    } satisfies PoolMetrics;
 
     expect(summarizePoolGauges(metrics)).toEqual({ waiting: 2, busy: 3, open: 3 });
     expect(summarizePoolWaitHistogram(metrics)).toEqual({

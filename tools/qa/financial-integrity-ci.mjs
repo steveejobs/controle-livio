@@ -18,7 +18,7 @@ export async function runFinancialIntegrity(env = process.env) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   validateFinancialEnvironment(env, root);
   const require = createRequire(resolve(root, 'package.json'));
-  const { PrismaClient, Prisma } = require('@prisma/client');
+  const { PrismaClient, Prisma } = require('@livio/db');
   const { createClient } = require('@supabase/supabase-js');
   const { PDFDocument } = require('pdf-lib');
   const { FinanceService } = require(resolve(root, 'apps/api/dist/finance/finance.service.js'));

@@ -1,6 +1,29 @@
 # Plano separado: migração Prisma 6 para 7
 
-**Estado em 2026-10-30: planejada, não iniciada.** Nenhuma dependência ou migration de banco foi alterada por esta etapa.
+**Estado em 2026-11-22: implementação em candidata local, homologação completa pendente.**
+
+Implementados Prisma 7.10.1 e adapter-pg, geração CJS, configuração explícita do CLI,
+pool limitado, métricas pg e migração dos consumidores para `@livio/db`.
+Node portátil 24.22.3 permite atualizar CLI Nest sem substituir o runtime global.
+Nenhuma migration foi aplicada ao Supabase compartilhado.
+
+O override major de Deepmerge foi evitado. A versão 7.10.1 ainda fixa Effect 3.20.0;
+aplicado override restrito para 3.22.1 na mesma linha 3.x, após conferir o
+[advisory e a correção upstream](https://github.com/Effect-TS/effect/security/advisories/GHSA-7589-6fvf-x4pw).
+`npm update effect` foi necessário para atualizar efetivamente o lockfile/instalação;
+`npm ls` identificou e rejeitou a árvore intermediária inválida. Audit reportou zero
+vulnerabilidades após a atualização real. Não há aceite silencioso dos alertas anteriores.
+
+`relationJoins` foi desativado: a prova nativa reproduziu perda de precisão em Decimal
+de relação com 19 dígitos. Consultas padrão separadas conservaram o valor exato. Essa
+decisão prioriza integridade financeira; exige medição de latência/pool na homologação.
+
+`tools/database/verify-prisma-adapter.mjs` cria PostgreSQL 17.12 exclusivo com dados
+sintéticos e conserva seu diretório após desligar o servidor. Testa SQL/adaptador e
+serviços, sem atribuir aprovação a Auth/RLS/Storage ou recuperação hospedada.
+As evidências e os gates finais ficam registrados em `PROJECT_CONTEXT.md`.
+
+Os itens abaixo preservam o plano e a evidência histórica de 2026-10-30.
 
 ## Evidência de dependências
 

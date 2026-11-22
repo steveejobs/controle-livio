@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 
 const projectRef = 'ioebcdpyrszokdyaoaqv';
 const databaseUrl = new URL(process.env.DATABASE_URL ?? '');
@@ -32,19 +32,18 @@ function percentile(values, p) {
 }
 
 function metric(metrics, key) {
-  return metrics.gauges.find((entry) => entry.key === key)?.value ?? 0;
+  return metrics[key];
 }
 
 function waitHistogram(metrics) {
-  return metrics.histograms.find((entry) => entry.key === 'prisma_client_queries_wait_histogram_ms')
-    ?.value;
+  return metrics.waitHistogram;
 }
 
 async function oneScenario(limit) {
   const url = new URL(databaseUrl);
   url.searchParams.set('connection_limit', String(limit));
   url.searchParams.set('pool_timeout', '10');
-  const prisma = new PrismaClient({ datasources: { db: { url: url.toString() } } });
+  const prisma = new PrismaClient({ connectionString: url.toString() });
   const samples = [];
   const errors = [];
   let maxWaiting = 0;
@@ -55,10 +54,10 @@ async function oneScenario(limit) {
     if (sampling) return;
     sampling = true;
     try {
-      const current = await prisma.$metrics.json();
-      maxWaiting = Math.max(maxWaiting, metric(current, 'prisma_client_queries_wait'));
-      maxBusy = Math.max(maxBusy, metric(current, 'prisma_pool_connections_busy'));
-      maxOpen = Math.max(maxOpen, metric(current, 'prisma_pool_connections_open'));
+      const current = await prisma.getPoolMetrics();
+      maxWaiting = Math.max(maxWaiting, metric(current, 'waiting'));
+      maxBusy = Math.max(maxBusy, metric(current, 'busy'));
+      maxOpen = Math.max(maxOpen, metric(current, 'open'));
     } finally {
       sampling = false;
     }
@@ -75,7 +74,7 @@ async function oneScenario(limit) {
       capacity.visible_connections < capacity.max_connections - capacity.reserved_connections - 10,
       `Margem de conexões menor que dez antes do cenário com pool ${limit}.`,
     );
-    const before = await prisma.$metrics.json();
+    const before = await prisma.getPoolMetrics();
     for (let batch = 0; batch < 3; batch += 1) {
       const values = await Promise.all(
         Array.from({ length: 3 }, async () => {
@@ -97,7 +96,7 @@ async function oneScenario(limit) {
       if (values.some((value) => value.status === 'FAIL')) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    const after = await prisma.$metrics.json();
+    const after = await prisma.getPoolMetrics();
     const beforeWait = waitHistogram(before);
     const afterWait = waitHistogram(after);
     return {
@@ -113,6 +112,7 @@ async function oneScenario(limit) {
       },
       errors,
       maxPoolMetrics: { waiters: maxWaiting, busyConnections: maxBusy, openConnections: maxOpen },
+      metricsSource: 'pg.pool.acquire; includes connection setup and queue wait',
       waitHistogramDelta: {
         count: Math.max(0, (afterWait?.count ?? 0) - (beforeWait?.count ?? 0)),
         sumMs: Number(Math.max(0, (afterWait?.sum ?? 0) - (beforeWait?.sum ?? 0)).toFixed(3)),

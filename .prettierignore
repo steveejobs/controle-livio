@@ -4,6 +4,7 @@ dist
 coverage
 package-lock.json
 packages/db/prisma/migrations
+packages/db/src/generated
 apps/web/next-env.d.ts
 # Machine-generated QA evidence is immutable and must not be reformatted.
 docs/auditoria-2026-10-27/evidencias-*/**/*.json

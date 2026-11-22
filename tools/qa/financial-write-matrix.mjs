@@ -1,3 +1,4 @@
+import { loadPrismaDatamodel } from './prisma-model-metadata.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
 
@@ -36,7 +37,6 @@ export function denialKind(status, body) {
 // Called only after validateFinancialEnvironment by the existing disposable runner.
 export async function runWriteMatrix({
   database,
-  Prisma,
   env,
   actor,
   fixture,
@@ -243,7 +243,7 @@ export async function runWriteMatrix({
       resourceId: randomUUID(),
     }),
   };
-  const models = new Map(Prisma.dmmf.datamodel.models.map((m) => [m.dbName, m]));
+  const models = new Map(loadPrismaDatamodel().models.map((m) => [m.dbName, m]));
   const updates = {
     contracts: { fixed_amount: '200.00' },
     receivables: { original_amount: '200.00' },
