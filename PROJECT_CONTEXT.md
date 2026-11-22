@@ -1,5 +1,11 @@
 # Contexto vivo do projeto Lívio
 
+## Homologação completa autorizada — 2026-11-22, em execução
+
+- O proprietário autorizou publicar a branch `fix/runtime-security-20261122` e executar a CI descartável, incluindo exceção a reset/DROP/TRUNCATE exclusivamente nos bancos sintéticos criados pelos runners. Essa autorização substitui a restrição para esse escopo; não autoriza escrita no Supabase compartilhado, merge ou deploy.
+- Candidata inicial `643266e`, com gates locais aprovados. PR draft permitirá os quatro jobs Quality e recovery independente. A condição de recovery inclui somente esta branch adicional; credenciais são loopback e as proteções de identidade/cluster/volume continuam obrigatórias. Upload do resumo Playwright acompanha a subpasta de resultados corrigida.
+- Pedido: testar todo o software e entregar evidências por área. Contagens de testes não equivalem a cobertura universal; registrar casos executados, falhas e lacunas reais, sem declarar produção homologada a partir de stack descartável.
+
 ## Segurança do runtime e Prisma 7 — 2026-11-22, gates locais aprovados
 
 - Continuação autorizada pelo proprietário. Branch isolada `fix/runtime-security-20261122`, base local `9a91ada`; os dois projetos Vercel bloqueiam deployment automático desta branch. Nenhum push/deploy, alteração de env ou acesso mutável ao Supabase compartilhado.

@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   recovery-contracts:
-    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'validation/audit-stage2-20261104' && github.event.pull_request.draft) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/validation/audit-stage2-20261104' && inputs.confirmation == 'disposable-new-stack') }}
+    if: ${{ (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && (github.head_ref == 'validation/audit-stage2-20261104' || github.head_ref == 'fix/runtime-security-20261122') && github.event.pull_request.draft) || (github.event_name == 'workflow_dispatch' && (github.ref == 'refs/heads/validation/audit-stage2-20261104' || github.ref == 'refs/heads/fix/runtime-security-20261122') && inputs.confirmation == 'disposable-new-stack') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     env:
