@@ -9,6 +9,14 @@ em `PROJECT_CONTEXT.md`. No Windows, a geração de páginas Next usa um worker 
 
 ## Inventário funcional sem execução
 
+`operational-integrity-matrix.mjs` é chamado pelo runner de identidade somente depois
+dos guards de CI Linux/loopback. Cria organizações sintéticas novas e verifica por HTTP
+e SQL tarefas/histórico/comentários, notas privadas, mensagens do portal, agenda com
+reagendamento/cancelamento de lembretes, roles/configurações/status de usuários,
+notificações, 14 relatórios e CSVs, auditoria e negações entre organizações/perfis.
+Os casos `OPS-*` ficam no mesmo JSON de evidência de identidade. Não envia email/push
+externo e não declara cobertura de todos os campos ou de provedores hospedados.
+
 Prisma 7 não expõe `Prisma.dmmf`. `npm run db:generate` também gera metadados de QA
 a partir do schema canônico, usando `@prisma/internals` fixado na versão do CLI.
 O JSON ignorado em `packages/db/prisma/generated/qa-model` não contém dados do banco.

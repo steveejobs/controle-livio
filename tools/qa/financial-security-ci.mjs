@@ -67,7 +67,7 @@ export async function inspectFinancialSecurity(database, record = () => {}) {
       );
     assert.ok(!policies.some((p) => p.cmd === 'ALL' && p.policyname.startsWith('financial_api_')));
     const triggers = await database.$queryRawUnsafe(
-      `SELECT tgname,tgenabled,pg_get_triggerdef(oid) AS definition FROM pg_trigger WHERE tgrelid=to_regclass($1) AND NOT tgisinternal`,
+      `SELECT tgname,tgenabled::text AS tgenabled,pg_get_triggerdef(oid) AS definition FROM pg_trigger WHERE tgrelid=to_regclass($1) AND NOT tgisinternal`,
       `public.${table}`,
     );
     assert.ok(
@@ -86,7 +86,7 @@ export async function inspectFinancialSecurity(database, record = () => {}) {
   );
   assert.equal(result.escalation.length, 0, 'Client can SET ROLE to a privileged identity');
   result.parentGuards = await database.$queryRawUnsafe(
-    `SELECT tgrelid::regclass::text AS relation,tgname,tgenabled,pg_get_triggerdef(oid) AS definition FROM pg_trigger WHERE tgname IN ('protect_financial_client_identity','protect_financial_matter_identity')`,
+    `SELECT tgrelid::regclass::text AS relation,tgname,tgenabled::text AS tgenabled,pg_get_triggerdef(oid) AS definition FROM pg_trigger WHERE tgname IN ('protect_financial_client_identity','protect_financial_matter_identity')`,
   );
   assert.equal(result.parentGuards.length, 2);
   assert.ok(result.parentGuards.every((t) => t.tgenabled !== 'D'));
@@ -111,10 +111,10 @@ export async function inspectFinancialSecurity(database, record = () => {}) {
     `SELECT roleid::regrole::text AS parent,member::regrole::text AS member,inherit_option,set_option FROM pg_auth_members`,
   );
   result.defaults = await database.$queryRawUnsafe(
-    `SELECT defaclrole::regrole::text AS owner,defaclnamespace::regnamespace::text AS schema,defaclobjtype,defaclacl::text FROM pg_default_acl`,
+    `SELECT defaclrole::regrole::text AS owner,defaclnamespace::regnamespace::text AS schema,defaclobjtype::text AS defaclobjtype,defaclacl::text FROM pg_default_acl`,
   );
   result.views = await database.$queryRawUnsafe(
-    `SELECT c.relname,c.relkind,CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid,true) ELSE NULL END AS definition FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('v','m','f')`,
+    `SELECT c.relname,c.relkind::text AS relkind,CASE WHEN c.relkind IN ('v','m') THEN pg_get_viewdef(c.oid,true) ELSE NULL END AS definition FROM pg_class c WHERE c.relnamespace='public'::regnamespace AND c.relkind IN ('v','m','f')`,
   );
   result.functions = await database.$queryRawUnsafe(
     `SELECT p.proname,pg_get_functiondef(p.oid) AS definition,p.proconfig::text,p.proowner::regrole::text AS owner,p.prosecdef,p.prorettype::regtype::text AS returns,p.proacl::text,has_function_privilege('authenticated',p.oid,'EXECUTE') AS authenticated_execute FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname='public' AND p.prokind='f' ORDER BY p.proname`,

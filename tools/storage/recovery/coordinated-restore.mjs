@@ -43,7 +43,9 @@ function docker(args, options = {}) {
     }),
   );
 }
-function sql(project, query) {
+function sql(project, query, role = 'postgres') {
+  assert.ok(['postgres', 'supabase_admin'].includes(role));
+  if (role === 'supabase_admin') assert.match(project, /^livio-recovery-\d+-[a-f0-9]{8}$/);
   return docker(
     [
       'exec',
@@ -54,8 +56,10 @@ function sql(project, query) {
       '-qAt',
       '-v',
       'ON_ERROR_STOP=1',
+      '-v',
+      'VERBOSITY=verbose',
       '-U',
-      'postgres',
+      role,
       '-d',
       'postgres',
     ],
@@ -564,9 +568,20 @@ export async function coordinatedRestore(env) {
       targetRows.map((t) => [t.schema, t.name]),
       sourceRows.map((t) => [t.schema, t.name]),
     );
+    evidence.restoreIdentity = JSON.parse(
+      sql(
+        project,
+        `SELECT json_build_object('role',current_user,'superuser',rolsuper) FROM pg_roles WHERE rolname=current_user;`,
+        'supabase_admin',
+      ).toString(),
+    );
+    assert.equal(evidence.restoreIdentity.role, 'supabase_admin');
+    assert.equal(evidence.restoreIdentity.superuser, true);
+    save();
     sql(
       project,
       `BEGIN; SET LOCAL session_replication_role=replica; TRUNCATE TABLE ${targetRows.map((t) => 'ONLY ' + quote(t.schema) + '.' + quote(t.name)).join(',')} RESTART IDENTITY; COMMIT;`,
+      'supabase_admin',
     );
     docker([
       'cp',
@@ -582,7 +597,7 @@ export async function coordinatedRestore(env) {
       '--exit-on-error',
       '--data-only',
       '-U',
-      'postgres',
+      'supabase_admin',
       '-d',
       'postgres',
       '/tmp/restore.dump',

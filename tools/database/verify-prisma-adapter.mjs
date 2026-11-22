@@ -70,7 +70,7 @@ const command = (file, args, name) => {
   }
 };
 const require = createRequire(import.meta.url);
-const { PrismaClient, Prisma } = require('@livio/db');
+const { PrismaClient, Prisma, postgresErrorCode } = require('@livio/db');
 const { Client: PgClient } = require('pg');
 const prismaCli = require.resolve('prisma/build/index.js');
 const rows = [];
@@ -381,6 +381,19 @@ try {
     (error) => error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002',
   );
   rows.push({ case: 'unique-constraint-error-identity', result: 'PASS' });
+  for (const code of ['40001', '40P01', '42501', '23514']) {
+    await assert.rejects(
+      db.$executeRawUnsafe(
+        `DO $$ BEGIN RAISE EXCEPTION 'Synthetic SQLSTATE probe' USING ERRCODE = '${code}'; END $$`,
+      ),
+      (error) => {
+        report.rawSqlStates ??= [];
+        report.rawSqlStates.push({ requested: code, prisma: error.code, meta: error.meta });
+        return postgresErrorCode(error) === code;
+      },
+    );
+  }
+  rows.push({ case: 'raw-sql-driver-sqlstate-preserved', result: 'PASS' });
   const rolledBack = randomUUID();
   await assert.rejects(
     db.$transaction(async (tx) => {

@@ -1,5 +1,5 @@
 import { coordinatedRestore } from './coordinated-restore.mjs';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -20,7 +20,11 @@ async function main() {
   let primary;
   try {
     await withFinancialApi({ api: env, output }, process.cwd(), async () => {
-      await runFinancialIntegrity({ ...env, LIVIO_FINANCIAL_INTEGRATION: 'disposable' });
+      try {
+        await runFinancialIntegrity({ ...env, LIVIO_FINANCIAL_INTEGRATION: 'disposable' });
+      } catch (error) {
+        primary ??= error;
+      }
       await new Promise((done, reject) => {
         const child = spawn(process.execPath, [resolve('tools/storage/recovery/integrated.mjs')], {
           env,
@@ -34,7 +38,7 @@ async function main() {
       });
     });
   } catch (error) {
-    primary = error;
+    primary ??= error;
   }
   let restore;
   try {
@@ -44,7 +48,9 @@ async function main() {
   }
 
   const matrixPath = resolve(output, 'storage-recovery-stage61.json'),
-    report = JSON.parse(readFileSync(matrixPath, 'utf8'));
+    report = existsSync(matrixPath)
+      ? JSON.parse(readFileSync(matrixPath, 'utf8'))
+      : { initialization: 'BLOCKED', cases: [{ id: 'REC-X18', result: 'FAIL' }] };
   const row = report.cases.find((c) => c.id === 'REC-X18');
   row.result = restore?.result ?? 'FAIL';
   row.evidence = 'coordinated-restore.json';

@@ -6,7 +6,7 @@ import {
   HttpStatus,
   type ExceptionFilter,
 } from '@nestjs/common';
-import { Prisma } from '@livio/db';
+import { Prisma, postgresErrorCode } from '@livio/db';
 import type { ApiErrorBody } from '@livio/shared';
 
 export function sanitizeRequestPath(path: string): string {
@@ -44,14 +44,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
       // Keep correlation and classification without serializing untrusted error data.
       const databaseCode =
         exception instanceof Prisma.PrismaClientKnownRequestError ? exception.code : undefined;
-      const rawDatabaseState =
-        exception instanceof Prisma.PrismaClientKnownRequestError
-          ? exception.meta?.code
-          : undefined;
-      const databaseState =
-        typeof rawDatabaseState === 'string' && /^[A-Z0-9]{5}$/.test(rawDatabaseState)
-          ? rawDatabaseState
-          : undefined;
+      const databaseState = postgresErrorCode(exception);
       request.log?.error(
         {
           requestId,
@@ -82,6 +75,15 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
   private databaseError(exception: unknown): { status: number; message: string } | undefined {
     if (!(exception instanceof Prisma.PrismaClientKnownRequestError)) return undefined;
+
+    if (
+      exception.code === 'P2010' &&
+      ['40001', '40P01'].includes(postgresErrorCode(exception) ?? '')
+    )
+      return {
+        status: HttpStatus.CONFLICT,
+        message: 'Os dados mudaram durante a operação. Atualize a tela e tente novamente.',
+      };
 
     switch (exception.code) {
       case 'P2002':

@@ -6,6 +6,16 @@ function record(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export function postgresErrorCode(error: unknown): string | undefined {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError)) return undefined;
+  const adapter = record(error.meta?.driverAdapterError);
+  const cause = record(adapter?.cause);
+  for (const value of [error.meta?.code, cause?.originalCode]) {
+    if (typeof value === 'string' && /^[0-9A-Z]{5}$/.test(value)) return value;
+  }
+  return undefined;
+}
+
 export function matchesUniqueConstraint(
   error: unknown,
   expected: { fieldNames: readonly string[]; indexName: string },

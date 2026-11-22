@@ -585,9 +585,11 @@ describe('FinanceService transacional', () => {
     ['P2034', undefined],
     ['P2010', '40001'],
     ['P2010', '40P01'],
+    ['P2010', '40001', true],
+    ['P2010', '40P01', true],
   ])(
     'repete conflito serializável %s/%s e evita duplicação concorrente',
-    async (code, sqlState) => {
+    async (code, sqlState, adapter) => {
       const input = {
         clientId: 'client-a',
         reference: 'PIX-2',
@@ -606,7 +608,13 @@ describe('FinanceService transacional', () => {
       const conflict = new Prisma.PrismaClientKnownRequestError('serialization conflict', {
         code,
         clientVersion: '6.19.3',
-        ...(sqlState ? { meta: { code: sqlState } } : {}),
+        ...(sqlState
+          ? {
+              meta: adapter
+                ? { code: 'N/A', driverAdapterError: { cause: { originalCode: sqlState } } }
+                : { code: sqlState },
+            }
+          : {}),
       });
       const transaction = { payment: { findUnique: vi.fn().mockResolvedValue(existing) } };
       const prisma = {

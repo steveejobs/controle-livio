@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { postgresErrorCode } from '@livio/db';
 import { createHash, randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -319,8 +320,8 @@ export async function runClientScopeIntegrity({
       );
       legacyBindingCreated = true;
     } catch (error) {
-      c.constraint = { code: error.code, sqlState: error.meta?.code };
-      assert.equal(error.meta?.code, '23514');
+      c.constraint = { code: error.code, sqlState: postgresErrorCode(error) };
+      assert.equal(postgresErrorCode(error), '23514');
     }
     c.legacyBindingCreated = legacyBindingCreated;
     if (legacyBindingCreated) {
@@ -440,8 +441,8 @@ export async function runClientScopeIntegrity({
       );
       foreignRoleFixtureCreated = true;
     } catch (error) {
-      c.foreignRoleConstraint = { code: error.code, sqlState: error.meta?.code };
-      assert.equal(error.meta?.code, '23514');
+      c.foreignRoleConstraint = { code: error.code, sqlState: postgresErrorCode(error) };
+      assert.equal(postgresErrorCode(error), '23514');
     }
     c.foreignRoleFixtureCreated = foreignRoleFixtureCreated;
     if (foreignRoleFixtureCreated) {

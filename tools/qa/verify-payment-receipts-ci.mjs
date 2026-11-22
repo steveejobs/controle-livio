@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { PrismaClient } from '@livio/db';
+import { PrismaClient, postgresErrorCode } from '@livio/db';
 
 const databaseUrl = process.env.DATABASE_URL;
 if (!databaseUrl) throw new Error('DATABASE_URL ausente.');
@@ -83,7 +83,7 @@ try {
     assert(columnNames.has(column), `Coluna esperada ausente: ${column}.`);
 
   const constraints = await prisma.$queryRaw`
-    SELECT conname, contype FROM pg_constraint
+    SELECT conname, contype::text AS contype FROM pg_constraint
     WHERE conrelid = 'public.payment_receipts'::regclass
   `;
   const constraintNames = new Set(constraints.map(({ conname }) => conname));
@@ -206,7 +206,7 @@ try {
           await tx.$executeRawUnsafe('RESET ROLE');
           if (
             error?.code !== '42501' &&
-            error?.meta?.code !== '42501' &&
+            postgresErrorCode(error) !== '42501' &&
             !String(error?.message).includes('permission denied')
           )
             throw error;

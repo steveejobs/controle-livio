@@ -1,8 +1,29 @@
 import { PayloadTooLargeException, type ArgumentsHost } from '@nestjs/common';
 import { describe, expect, it, vi } from 'vitest';
+import { Prisma } from '@livio/db';
 import { ApiExceptionFilter, sanitizeRequestPath } from './api-exception.filter';
 
 describe('API error path sanitization', () => {
+  it.each(['40001', '40P01'])('maps raw adapter SQLSTATE %s to a safe conflict', (code) => {
+    const json = vi.fn();
+    const response = { status: vi.fn().mockReturnValue({ json }) };
+    const host = {
+      switchToHttp: () => ({
+        getRequest: () => ({ originalUrl: '/v1/finance/payments', headers: {}, id: 'conflict' }),
+        getResponse: () => response,
+      }),
+    } as unknown as ArgumentsHost;
+    const error = new Prisma.PrismaClientKnownRequestError('Synthetic raw conflict', {
+      code: 'P2010',
+      clientVersion: '7.10.1',
+      meta: {
+        driverAdapterError: { cause: { originalCode: code, originalMessage: 'secret-bank-data' } },
+      },
+    });
+    new ApiExceptionFilter().catch(error, host);
+    expect(response.status).toHaveBeenCalledWith(409);
+    expect(JSON.stringify(json.mock.calls)).not.toContain('secret-bank-data');
+  });
   it('normalizes the Multer upload limit response', () => {
     const json = vi.fn();
     const response = { status: vi.fn().mockReturnValue({ json }) };

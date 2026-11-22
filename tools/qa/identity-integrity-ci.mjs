@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { validateIdentityEnvironment } from './identity-environment.mjs';
 import { runDocumentStorageMatrix } from './document-storage-matrix.mjs';
 import { runClientScopeIntegrity } from './client-scope-integrity.mjs';
+import { runOperationalMatrix } from './operational-integrity-matrix.mjs';
 
 // Direct Node integration: API/SQL/Auth/Storage/scanner, never mocked persistence.
 // No dotenv, no workflow changes, no financial test invocation.
@@ -817,6 +818,7 @@ export async function runIdentityIntegrity(env = process.env) {
         signatureSha256: row.signatureSha256,
       };
     });
+    await runOperationalMatrix({ db, check, request, expectStatus, organization, actor });
     evidence.setup = 'PASS';
   } catch (error) {
     evidence.setup = { status: 'FAIL', name: error.name, code: error.code ?? null };

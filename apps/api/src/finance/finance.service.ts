@@ -7,7 +7,7 @@ import {
   NotFoundException,
   Optional,
 } from '@nestjs/common';
-import { Prisma } from '@livio/db';
+import { Prisma, postgresErrorCode } from '@livio/db';
 import type { AuthenticatedActor } from '@livio/shared';
 import { AuditService } from '../common/audit.service';
 import { sha256 } from '../common/security';
@@ -2158,7 +2158,7 @@ export class FinanceService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         (error.code === 'P2034' ||
           (error.code === 'P2010' &&
-            (error.meta?.code === '40001' || error.meta?.code === '40P01'))) &&
+            ['40001', '40P01'].includes(postgresErrorCode(error) ?? ''))) &&
         attempt < 4
       )
         return this.withSerializableRetry(operation, attempt + 1);

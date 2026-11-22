@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Prisma } from './generated/client';
-import { matchesUniqueConstraint } from './errors';
+import { matchesUniqueConstraint, postgresErrorCode } from './errors';
 
 const expected = {
   fieldNames: ['tax_id_normalized', 'taxIdNormalized'],
@@ -12,6 +12,26 @@ const conflict = (meta: Record<string, unknown>, code = 'P2002') =>
     clientVersion: '7.10.1',
     meta,
   });
+
+describe('PostgreSQL SQLSTATE across Prisma drivers', () => {
+  it.each(['40001', '40P01', '42501', '23514'])('preserves SQLSTATE %s', (code) => {
+    expect(postgresErrorCode(conflict({ code }, 'P2010'))).toBe(code);
+    expect(
+      postgresErrorCode(
+        conflict({ code: 'N/A', driverAdapterError: { cause: { originalCode: code } } }, 'P2010'),
+      ),
+    ).toBe(code);
+  });
+  it.each([
+    undefined,
+    null,
+    {},
+    { code: 'P2010' },
+    conflict({ code: 'secret-data', driverAdapterError: { cause: null } }),
+  ])('does not expose unrelated error data: %j', (error) => {
+    expect(postgresErrorCode(error)).toBeUndefined();
+  });
+});
 
 describe('unique constraint compatibility across Prisma drivers', () => {
   it.each([
