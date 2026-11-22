@@ -2,6 +2,12 @@
 
 ## Resultados locais fora do código
 
+O ensaio coordenado de restore aguarda Auth **e** Storage no destino verificado.
+`provider-readiness.mjs` faz somente GET local de health e buckets e registra apenas
+status HTTP/tempo/tentativas. Se o Storage não responder em até 60 s, o ensaio falha;
+nenhuma observação UNKNOWN é convertida em arquivo presente/ausente. Testes de HTTP
+real da prontidão e da cópia sem sobrescrita executam na qualificação do recovery.
+
 Preservar testes e documentação. Novos logs, capturas, traces e relatórios de execução ficam em
 `test-results/` ou `%TEMP%`, sem dados reais nem segredos. Evidências históricas são imutáveis;
 não reformatar `.last-run.json`. A consolidação de 2026-11-22 mantém o backup privado indicado

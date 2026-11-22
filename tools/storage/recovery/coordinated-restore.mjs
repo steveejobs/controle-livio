@@ -21,6 +21,7 @@ import { assertOwnedStack, ownContainer, storageVolumeIdentity } from './stack-i
 import { validateRecoveryEnvironment } from './environment.mjs';
 import { withFinancialApi } from '../../qa/run-financial-integrity-ci.mjs';
 import { recoveryTargetConfig, recoverySeedSql } from './target-bootstrap.mjs';
+import { waitRestoredProviders } from './provider-readiness.mjs';
 
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex');
 const quote = (name) => '"' + name.replaceAll('"', '""') + '"';
@@ -660,25 +661,13 @@ export async function coordinatedRestore(env) {
       'RECOVERY_RESUMED',
     );
     docker(['start', ...targetServices]);
-    const deadline = Date.now() + 60000;
-    let ready = false;
-    while (Date.now() < deadline) {
-      try {
-        const response = await fetch(targetEnv.SUPABASE_URL + '/auth/v1/health', {
-          headers: { apikey: targetEnv.SUPABASE_ANON_KEY },
-          signal: AbortSignal.timeout(2000),
-        });
-        await response.body?.cancel();
-        if (response.status === 200) {
-          ready = true;
-          break;
-        }
-      } catch {
-        /* bounded restored-provider readiness; original restore still fails on deadline */
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      evidence.providerReadiness = await waitRestoredProviders(targetEnv);
+    } catch (error) {
+      evidence.providerReadiness = error.readiness;
+      save();
+      throw error;
     }
-    assert.ok(ready, 'Restored Auth readiness deadline');
     r = await runtime(targetEnv);
     const restored = [];
     for (const org of fixtureData.organizations) restored.push(await snapshot(r, org));

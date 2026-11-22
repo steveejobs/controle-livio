@@ -42,7 +42,7 @@ jobs:
       - run: npm ci
       - run: npm run build:api
       - name: Qualify recovery guards and real local HTTP transport
-        run: node --test tools/storage/recovery/support.test.mjs tools/storage/recovery/qualification.test.mjs tools/storage/recovery/target-bootstrap.test.mjs
+        run: node --test tools/storage/recovery/support.test.mjs tools/storage/recovery/qualification.test.mjs tools/storage/recovery/target-bootstrap.test.mjs tools/storage/recovery/volume-copy.test.mjs tools/storage/recovery/provider-readiness.test.mjs
       - name: Install hash-pinned qpdf
         run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
       - name: Prepare own disposable PostgreSQL Auth and Storage with versioned migrations
