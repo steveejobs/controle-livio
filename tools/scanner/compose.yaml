@@ -2,6 +2,13 @@ services:
   antivirus:
     image: clamav/clamav:1.5.4-debian13-slim@sha256:6982509b9e1415bf23cb49d0c55872fdd57fd2b92be33fa26d487da42d322076
     restart: unless-stopped
+    environment:
+      TMPDIR: /tmp
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=256m,mode=1777
+      - /var/tmp:rw,nosuid,nodev,size=64m,mode=1777
+    ulimits:
+      core: 0
     volumes:
       - signatures:/var/lib/clamav
     ports:
@@ -23,6 +30,8 @@ services:
     environment:
       SCANNER_TOKEN: ${SCANNER_TOKEN:?Configure a private scanner token of at least 32 characters}
     read_only: true
+    ulimits:
+      core: 0
     cap_drop:
       - ALL
     security_opt:
@@ -47,6 +56,8 @@ services:
       - certificates:/data
       - proxy-config:/config
     read_only: true
+    ulimits:
+      core: 0
     cap_drop:
       - ALL
     cap_add:

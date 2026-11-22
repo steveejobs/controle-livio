@@ -6,7 +6,7 @@ O código final inclui ClamAV 1.5.4, gateway Node 24 e proxy HTTPS Caddy em `com
 
 Use Linux com Docker Compose 2.24+, preferencialmente 4 GiB de RAM disponíveis, DNS do scanner apontando para esse host e porta 443 livre. Não substitua nem pare um proxy existente para liberar a porta. O pacote é um serviço dedicado; um host com proxy existente exige integração própria.
 
-ClamAV/FreshClam compartilham rede privada com gateway/proxy. O gateway continua escutando somente em loopback; não há publicação das portas 3310/8080. Só HTTPS é publicado, inicialmente em 127.0.0.1. Assinaturas e certificados ficam em volumes persistentes; documentos são tratados em memória e não são gravados em disco.
+ClamAV/FreshClam compartilham rede privada com gateway/proxy. O gateway continua escutando somente em loopback; não há publicação das portas 3310/8080. Só HTTPS é publicado, inicialmente em 127.0.0.1. Assinaturas e certificados ficam em volumes persistentes. O gateway mantém o corpo em memória; `/tmp` e `/var/tmp` do ClamAV usam tmpfs. Core dumps estão desativados; desative swap no host para evitar paginação dos buffers.
 
 ## Preparar
 

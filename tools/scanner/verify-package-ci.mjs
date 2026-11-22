@@ -161,6 +161,8 @@ const config = JSON.parse(docker([...args, 'config', '--format', 'json'], true))
 assert.equal(config.services.antivirus.ports.length, 1);
 assert.equal(config.services.antivirus.ports[0].host_ip, '127.0.0.1');
 assert.equal(Number(config.services.antivirus.ports[0].target), 443);
+assert(config.services.antivirus.tmpfs.some((mount) => mount.startsWith('/tmp:')));
+assert(config.services.antivirus.tmpfs.some((mount) => mount.startsWith('/var/tmp:')));
 assert(!config.services.gateway.ports && !config.services.proxy.ports);
 assert.equal(config.services.gateway.network_mode, 'service:antivirus');
 check('resolved compose publishes only loopback HTTPS; no clamd or gateway port');
