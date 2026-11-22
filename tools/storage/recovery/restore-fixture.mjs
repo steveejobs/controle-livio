@@ -135,6 +135,7 @@ export async function restoreFixture(r) {
   }
   // REC-C01 remains the real preserved financial harness fixture, not a fake receipt.
   const receipt = await r.db.paymentReceipt.findFirst({
+    where: { document: { category: 'PAYMENT_RECEIPT' } },
     select: { id: true, organizationId: true, documentId: true },
   });
   assert.ok(receipt, 'Financial rehearsal must have persisted a legitimate receipt');
@@ -155,6 +156,16 @@ export async function restoreFixture(r) {
   ];
   const before = [];
   for (const organization of new Set(organizations)) before.push(await snapshot(r, organization));
+  for (const state of before)
+    for (const version of state.versions) {
+      const object = state.objects.find((item) => item.key === version.storageKey);
+      assert.equal(
+        object?.observation.status,
+        'PRESENT',
+        'Source versions must have real durable evidence before starting the backup',
+      );
+      assert.equal(object.observation.sha256, version.sha256);
+    }
   assert.ok(before[0].versions.length >= 3);
   assert.ok(before[0].signatures.some((s) => s.status === 'SIGNED'));
   assert.ok(before[1].signatures.some((s) => s.status === 'PROCESSING'));

@@ -479,10 +479,25 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
     );
   };
   // Structural regression only. The unchanged harness still validates real Prisma, FK and SQL inserts.
+  const uploadedVersions = new Map();
+  const uploadIntents = new Map();
   const database = new Proxy(
     {},
     {
       get: (_target, key) => ({
+        findFirstOrThrow: async ({ where }) => {
+          assert.equal(key, 'documentVersion');
+          const row = uploadedVersions.get(where.documentId);
+          assert.equal(row.organizationId, where.organizationId);
+          return row;
+        },
+        findUniqueOrThrow: async ({ where }) => {
+          assert.equal(key, 'storageUploadIntent');
+          assert.equal(where.bucket_objectKey.bucket, 'legal-documents');
+          const row = uploadIntents.get(where.bucket_objectKey.objectKey);
+          assert(row);
+          return row;
+        },
         create: async ({ data }) => {
           validate(delegates.get(key), data);
           const row = { id: randomUUID(), ...data };
@@ -508,6 +523,43 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
     ['Receivable', new Set([fixture.receivableId])],
     ['ReceivableInstallment', new Set([fixture.installmentId])],
   ]);
+  // This test validates payload structure only. Integration must separately
+  // prove actual HTTP, scanner, Storage bytes and durable intents.
+  const api = async (actor, path, { method, body }) => {
+    assert.equal(actor, owner);
+    assert.equal(path, '/documents');
+    assert.equal(method, 'POST');
+    const bytes = Buffer.from(await body.get('file').arrayBuffer());
+    assert(bytes.subarray(0, 5).equals(Buffer.from('%PDF-')));
+    const document = await database.document.create({
+      data: {
+        ...org,
+        title: body.get('title'),
+        category: body.get('category'),
+        visibility: body.get('visibility'),
+        clientId: body.get('clientId'),
+        installmentId: body.get('installmentId'),
+        createdById: owner.userId,
+      },
+    });
+    const version = await database.documentVersion.create({
+      data: {
+        ...org,
+        documentId: document.id,
+        version: 1,
+        fileName: 'synthetic-control.pdf',
+        storageKey:
+          'organizations/' + org.organizationId + '/documents/' + document.id + '/control.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: BigInt(bytes.length),
+        sha256: createHash('sha256').update(bytes).digest('hex'),
+        uploadedById: owner.userId,
+      },
+    });
+    uploadedVersions.set(document.id, version);
+    uploadIntents.set(version.storageKey, { state: 'COMPLETE' });
+    return { status: 201, body: document };
+  };
   const makers = new Function(
     'database',
     'org',
@@ -516,12 +568,15 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
     'now',
     'randomUUID',
     'createHash',
+    'require',
+    'api',
+    'assert',
     'const paymentData=' +
       initializers.get('paymentData') +
       '; const makers=' +
       initializers.get('makers') +
       '; return makers;',
-  )(database, org, fixture, owner, () => new Date(), randomUUID, createHash);
+  )(database, org, fixture, owner, () => new Date(), randomUUID, createHash, require, api, assert);
   assert.equal(Object.keys(makers).length, 12);
   for (const [table, maker] of Object.entries(makers))
     await context.test('fixture: ' + table, async () => {

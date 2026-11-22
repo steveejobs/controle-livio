@@ -1,6 +1,9 @@
 import { loadPrismaDatamodel } from './prisma-model-metadata.mjs';
 import assert from 'node:assert/strict';
 import { randomUUID, createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 export const financialTables = [
   'contracts',
@@ -204,34 +207,38 @@ export async function runWriteMatrix({
       incurredAt: now(),
     }),
     payment_receipts: async () => {
-      const doc = await database.document.create({
-        data: {
-          ...org,
-          clientId: f.clientId,
-          installmentId: f.installmentId,
-          title: 'Synthetic evidence',
-          createdById: owner.userId,
-        },
+      // The SQL authority matrix still uses independent valid INSERT controls.
+      // Its parent evidence must also survive a real SQL/Storage restore.
+      const { PDFDocument } = require('pdf-lib');
+      const pdf = await PDFDocument.create();
+      pdf.addPage().drawText('SYNTHETIC SQL CONTROL - NO LEGAL VALUE ' + randomUUID());
+      const bytes = Buffer.from(await pdf.save());
+      const form = new FormData();
+      form.set('title', 'Synthetic SQL integrity evidence');
+      form.set('category', 'SQL_INTEGRITY_CONTROL');
+      form.set('clientId', f.clientId);
+      form.set('installmentId', f.installmentId);
+      form.set('visibility', 'INTERNAL');
+      form.set('file', new Blob([bytes], { type: 'application/pdf' }), 'synthetic-control.pdf');
+      const uploaded = await api(owner, '/documents', { method: 'POST', body: form });
+      assert.equal(uploaded.status, 201, 'Matrix evidence must use real API/scanner/Storage');
+      const doc = uploaded.body;
+      const version = await database.documentVersion.findFirstOrThrow({
+        where: { documentId: doc.id, organizationId: owner.organizationId },
+        orderBy: { version: 'desc' },
       });
-      await database.documentVersion.create({
-        data: {
-          ...org,
-          documentId: doc.id,
-          version: 1,
-          storageKey: `organizations/${owner.organizationId}/documents/${doc.id}/synthetic.pdf`,
-          fileName: 'synthetic.pdf',
-          mimeType: 'application/pdf',
-          sizeBytes: 1n,
-          sha256: 'a'.repeat(64),
-          uploadedById: owner.userId,
-        },
+      assert.equal(version.sha256, createHash('sha256').update(bytes).digest('hex'));
+      assert.equal(version.sizeBytes, BigInt(bytes.length));
+      const intent = await database.storageUploadIntent.findUniqueOrThrow({
+        where: { bucket_objectKey: { bucket: 'legal-documents', objectKey: version.storageKey } },
       });
+      assert.equal(intent.state, 'COMPLETE');
       return {
         ...org,
         clientId: f.clientId,
         documentId: doc.id,
         installmentId: f.installmentId,
-        sha256: createHash('sha256').update(randomUUID()).digest('hex'),
+        sha256: version.sha256,
         submittedById: owner.userId,
       };
     },

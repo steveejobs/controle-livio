@@ -8,6 +8,11 @@ status HTTP/tempo/tentativas. Se o Storage não responder em até 60 s, o ensaio
 nenhuma observação UNKNOWN é convertida em arquivo presente/ausente. Testes de HTTP
 real da prontidão e da cópia sem sobrescrita executam na qualificação do recovery.
 
+Os documentos pais dos controles SQL de comprovantes são preparados por upload real
+da API, com PDF, scanner, hash e intenção durável verificados. O payload SQL continua
+sendo exercitado em transações/roles reais. Não criar versões fictícias sem bytes nessa
+origem: a mesma organização participa do ensaio coordenado de restauração.
+
 Preservar testes e documentação. Novos logs, capturas, traces e relatórios de execução ficam em
 `test-results/` ou `%TEMP%`, sem dados reais nem segredos. Evidências históricas são imutáveis;
 não reformatar `.last-run.json`. A consolidação de 2026-11-22 mantém o backup privado indicado
