@@ -1,4 +1,6 @@
 import type { PoolConfig } from 'pg';
+import { getCACertificates } from 'node:tls';
+import { supabaseRootCertificates } from './supabase-ca';
 
 function integer(value: string | null, fallback: number, maximum: number): number {
   if (value === null) return fallback;
@@ -27,6 +29,9 @@ export function databaseConnection(value: string | undefined): {
     throw new Error('DATABASE_URL deve identificar usuário e banco PostgreSQL.');
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
   const local = ['localhost', '127.0.0.1', '::1'].includes(host);
+  const supabase =
+    /^[a-z0-9-]+\.pooler\.supabase\.com$/.test(host) ||
+    /^db\.[a-z0-9]{20}\.supabase\.co$/.test(host);
   const sslMode = url.searchParams.get('sslmode');
   if ((!local && sslMode === 'disable') || sslMode === 'no-verify')
     throw new Error('O banco remoto exige TLS com certificado validado.');
@@ -52,7 +57,15 @@ export function databaseConnection(value: string | undefined): {
         idleTimeoutMillis: 30_000,
         application_name: url.searchParams.get('application_name') ?? 'livio',
         options: url.searchParams.get('options') ?? undefined,
-        ssl: local && (!sslMode || sslMode === 'disable') ? false : { rejectUnauthorized: true },
+        ssl:
+          local && (!sslMode || sslMode === 'disable')
+            ? false
+            : {
+                rejectUnauthorized: true,
+                ...(supabase
+                  ? { ca: [...getCACertificates('default'), ...supabaseRootCertificates] }
+                  : {}),
+              },
       },
     };
   } catch {

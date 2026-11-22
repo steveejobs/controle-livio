@@ -102,14 +102,17 @@ export async function snapshot(r, organizationId) {
     objects,
     versions: await r.db.documentVersion.findMany({
       where: { organizationId },
+      orderBy: { id: 'asc' },
       select: { id: true, documentId: true, storageKey: true, sha256: true, sizeBytes: true },
     }),
     photos: await r.db.client.findMany({
       where: { organizationId },
+      orderBy: { id: 'asc' },
       select: { id: true, photoStorageKey: true, deletedAt: true },
     }),
     signatures: await r.db.documentSigningRequest.findMany({
       where: { organizationId },
+      orderBy: { id: 'asc' },
       select: {
         id: true,
         status: true,
@@ -122,6 +125,7 @@ export async function snapshot(r, organizationId) {
     }),
     incidents: await r.db.storageRecoveryIncident.findMany({
       where: { organizationId },
+      orderBy: { id: 'asc' },
       select: {
         id: true,
         operationId: true,
@@ -132,13 +136,14 @@ export async function snapshot(r, organizationId) {
     }),
     events: await r.db.storageRecoveryEvent.findMany({
       where: { organizationId },
-      orderBy: { createdAt: 'asc' },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     }),
     audit: await r.db.auditLog.findMany({
       where: {
         organizationId,
         resource: { in: ['storage_recovery', 'storage_recovery_incident'] },
       },
+      orderBy: { id: 'asc' },
       select: {
         id: true,
         resource: true,

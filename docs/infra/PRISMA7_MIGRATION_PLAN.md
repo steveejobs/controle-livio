@@ -23,6 +23,15 @@ sintéticos e conserva seu diretório após desligar o servidor. Testa SQL/adapt
 serviços, sem atribuir aprovação a Auth/RLS/Storage ou recuperação hospedada.
 As evidências e os gates finais ficam registrados em `PROJECT_CONTEXT.md`.
 
+Uma consulta somente leitura ao Supavisor configurado confirmou a necessidade de CA
+explícita no driver Node. O pacote inclui os certificados públicos de produção 2021/2025
+da [fonte oficial Supabase CLI, revisão fixa](https://github.com/supabase/cli/tree/3adfdd50577b6508f54688104601e5da8215a6c3/apps/cli/src/command-internal/supabase-ca-templates).
+Eles ampliam as raízes padrão somente para hosts oficiais DB/pooler. Certificado e
+hostname continuam validados; sem `rejectUnauthorized=false`, leitura de chave privada
+ou mudança no TLS do projeto. A [documentação oficial de SSL](https://supabase.com/docs/guides/platform/ssl-enforcement)
+orienta fornecer a CA ao cliente. A prova de conexão com Prisma 7 passou sem escrita
+ou consulta a dados de negócio; não equivale a homologação autenticada completa hospedada.
+
 Os itens abaixo preservam o plano e a evidência histórica de 2026-10-30.
 
 ## Evidência de dependências

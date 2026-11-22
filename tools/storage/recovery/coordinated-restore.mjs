@@ -682,6 +682,8 @@ export async function coordinatedRestore(env) {
     r = await runtime(targetEnv);
     const restored = [];
     for (const org of fixtureData.organizations) restored.push(await snapshot(r, org));
+    evidence.restoredSnapshots = restored;
+    save();
     assert.deepEqual(
       restored,
       fixtureData.before,

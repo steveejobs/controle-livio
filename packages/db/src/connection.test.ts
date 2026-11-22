@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
 import { databaseConnection } from './connection';
+import { supabaseRootCertificates } from './supabase-ca';
 
 describe('PostgreSQL adapter configuration', () => {
+  it.each(['aws-1-sa-east-1.pooler.supabase.com', 'db.abcdefghijklmnopqrst.supabase.co'])(
+    'trusts official Supabase CAs only for its database host: %s',
+    (host) => {
+      const { ssl } = databaseConnection(`postgresql://test:synthetic@${host}/postgres`).pool;
+      expect(ssl).toMatchObject({
+        rejectUnauthorized: true,
+        ca: expect.arrayContaining(supabaseRootCertificates),
+      });
+      expect(ssl).not.toHaveProperty('checkServerIdentity');
+    },
+  );
+  it.each(['supabase.com.evil.test', 'aws-1.pooler.supabase.com.evil.test', 'example.test'])(
+    'keeps normal CA trust for unrelated hosts: %s',
+    (host) => {
+      expect(databaseConnection(`postgresql://test:synthetic@${host}/postgres`).pool.ssl).toEqual({
+        rejectUnauthorized: true,
+      });
+    },
+  );
   it('preserves pool, schema, identity and application settings from a Supavisor URL', () => {
     const connection = databaseConnection(
       'postgresql://postgres.example:p%40ss@aws-0.pooler.supabase.com:6543/postgres?schema=public&pgbouncer=true&connection_limit=4&pool_timeout=12&application_name=isolated-proof',
