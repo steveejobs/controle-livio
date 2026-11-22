@@ -34,6 +34,7 @@ Segredos protegidos não são necessariamente exportáveis pelo CLI. Uma linha v
 npm ci
 npm run format:check
 npm run lint
+npm run release:check
 npm run typecheck
 npm test
 npm run db:validate

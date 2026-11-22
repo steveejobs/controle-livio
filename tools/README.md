@@ -18,7 +18,12 @@ Resultados, capturas, traces e relatórios brutos ficam fora do código: `test-r
 `RUNNER_TEMP` ou pasta privada explicitamente escolhida. Os históricos antigos foram
 arquivados fora do repositório. Consulte [QA](qa/README.md) e a [documentação](../docs/README.md).
 
-## Imagens
+## Publicação
+
+O domínio [release](release/README.md) contém a verificação do upload Vercel.
+Execute `npm run release:check` antes de publicar; a CI também confere esse contrato.
+
+## Otimização de imagens
 
 `tools/images/optimize.py` reduz JPEG, PNG e WebP com Pillow. Ele grava em outra pasta, preserva a árvore relativa, corrige orientação EXIF, remove metadados por padrão e nunca sobrescreve o arquivo original.
 

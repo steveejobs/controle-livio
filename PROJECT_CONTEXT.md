@@ -43,6 +43,10 @@ Após a organização, passaram novamente formato, lint, TypeScript, 491 Vitest,
 
 ## Publicação em andamento
 
+A primeira preparação Vercel do commit de limpeza 6bea0db revelou uma exclusão indevida: `reports/` sem âncora retirava também os módulos API/web de relatórios. Nenhum alias público foi promovido. Regras corrigidas para `/reports/` e demais pastas de artefatos na raiz; `release:check` verifica as fontes versionadas contra `.vercelignore` isoladamente, com três regressões Git reais e execução na CI. O código dos módulos permaneceu intacto.
+
+Busca de infraestrutura existente: Vercel sem variáveis scanner, ambiente local sem scanner, Cloudflare sem zonas e sem Worker relacionado, servidor Dokploy sem resposta nas portas de administração/HTTPS verificadas. Nenhum serviço ClamAV existente foi identificado nas conexões disponíveis; nenhum recurso pago novo foi criado.
+
 Vercel acessível, autenticada, com dois projetos existentes em Node 24:
 
 - API: `controle-livio`, raiz `apps/api`.

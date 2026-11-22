@@ -40,6 +40,8 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run lint
+      - name: Verify deployment includes every versioned runtime source
+        run: npm run release:check && node --test tools/release/verify-upload.test.mjs
       - run: npm run typecheck
       - run: npm test
       - run: npm run db:validate

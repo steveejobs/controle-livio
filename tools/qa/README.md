@@ -18,7 +18,7 @@ Após instalar dependências e compilar os pré-requisitos:
 Para os testes Node sem banco compartilhado:
 
 ```powershell
-$files = @(Get-ChildItem tools/qa,tools/storage/recovery,tools/scanner -File -Filter '*.test.mjs' | ForEach-Object { $_.FullName })
+$files = @(Get-ChildItem tools/qa,tools/storage/recovery,tools/scanner,tools/release -File -Filter '*.test.mjs' | ForEach-Object { $_.FullName })
 & tools/runtime/node24.ps1 -Node -Arguments (@('--test') + $files)
 ```
 

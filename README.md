@@ -48,6 +48,7 @@ Não reutilize credenciais locais em produção. Reset e seed não fazem parte d
 ```powershell
 npm run format:check
 npm run lint
+npm run release:check
 npm run typecheck
 npm test
 npm run db:validate

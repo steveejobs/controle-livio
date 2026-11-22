@@ -8,9 +8,9 @@ test-results/
 .tmp/
 integrated-test-results/
 integrated-playwright-report*.json
-screenshots/
-traces/
-reports/
+/screenshots/
+/traces/
+/reports/
 docs/auditoria-*/evidencias-*/
 __pycache__/
 *.py[cod]
