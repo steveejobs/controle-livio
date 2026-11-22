@@ -1,5 +1,14 @@
 # Defeitos e riscos encontrados
 
+## Atualização etapa 2.5 — DEF-005
+
+O callback antigo `callback(new Error(...), false)` foi reproduzido em HTTP local com dois cenários vermelhos por 500; a candidata `f07071a` já contém `callback(null, false)`. Configuração extraída para teste de pipeline Nest no worktree destacado; sete cenários HTTP passaram, inclusive Origin permitido/negado, preflight, métodos, cabeçalhos, cookie sintético, GET normal e guard sintético. A correção continua **não homologada hospedada** e o teste novo **não publicado**. A PR #3 ainda reconhece SHA anterior; ver `ETAPA_2_5.md`.
+
+## Validação pós-deploy — 2026-11-04
+
+- **DEF-005 / P2, novo no hospedado, aberto para homologação:** preflight `OPTIONS /v1/clients` na API Production `dpl_6yjRxg682u9ZbL5MWZcgMQZUZivq` com `Origin: https://not-livio.invalid` e `Access-Control-Request-Method: GET` retornou HTTP 500 sem `Access-Control-Allow-Origin`. O mesmo preflight com a origem da web pública retornou 204 e o cabeçalho correto. O código base do deployment chama `callback(new Error(...), false)` no CORS; causa provável, com limite de `gitDirty=1`. A candidata `f07071a` já contém `callback(null, false)` desde `962ca09`; faltam teste HTTP de regressão e homologação hospedada. Evidência em `VALIDACAO_POS_DEPLOY_2026-11-04.md`.
+- **Risco P1 de versão:** aliases Production continuam em API `919a5ac` sujo e web `ba1a9b8`, sem a correção `f07071a`; rota `/v1/finance/receipts` retorna 404. Não classificar DEF-003/004 como validados hospedados. Sem alias, deploy ou configuração alterados nesta checagem.
+
 Atualização etapa 2: DEF-003 reproduzido em cinco testes de domínio e corrigido localmente; efeito no banco ainda BLOCKED. DEF-002 ganhou confirmação por campo divergente e passou no navegador com API simulada. DEF-001 ganhou cinco regressões de formatos adicionais. Ver `ETAPA_2.md` para snapshot, limites e patch; a tabela abaixo preserva o histórico inicial.
 
 | ID / severidade | Estado                                | Reprodução e evidência                                                                                                                                                                                                  | Esperado / observado                                                       | Causa / ação                                                                                                                      |
