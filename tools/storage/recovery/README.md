@@ -1,6 +1,6 @@
-# Recuperação persistente — candidata local Etapa 6.1
+# Recuperação persistente
 
-Implementação ativa **na candidata local**, não publicada nem implantada. Não importa a proposta inativa `../def007-proposal`. Production NO-GO. Nenhuma instrução deste diretório autoriza execução hospedada, varredura destrutiva ou ativação de scheduler.
+Implementação ativa na candidata homologada. Os 58 contratos passaram na CI descartável em 22/11/2026; ver [homologação](../../../docs/HOMOLOGACAO_2026_11_22.md). Isso não autoriza execução hospedada, varredura destrutiva ou ativação de scheduler. A operação hospedada depende da configuração e validação do destino final.
 
 ## Contrato implementado
 
@@ -63,8 +63,8 @@ Backup compreende dados public/auth/storage/supabase_migrations e cópia física
 
 O destino reaplica migrations versionadas e compara owners/grants/RLS/policies/funções/triggers/papéis antes e depois do restore. A restauração de dados usa sessão isolada com replication_role=replica para replay do histórico imutável, seguida de varredura real de todas as FKs; convalidated não substitui essa conferência. Verifica linhas, sequências, bytes, hashes, Auth e API. Um novo processo retoma pendências e assinatura PROCESSING, preservando vínculos, versões, hold e comprovante. A limpeza final utiliza somente o project_id registrado desse job.
 
-**Nenhum dos 58 contratos reais executou nesta máquina Windows.** As seis receitas faltantes agora possuem implementação, mas os cinco F07 e REC-X18 conservam NOT_EXECUTED até execução Linux. Não existe PASS integrado por teste unitário, cópia local de bytes ou parser SQL. O runner completo exige 58 PASS e mantém falhas explícitas. O restore operacional geral continua INCOMPLETE: cron/net, configuração hospedada, SMTP externo, RPO/RTO e operação comercial não são certificados pelo REC-X18.
+**Os 58 contratos reais foram executados e aprovados na CI Linux descartável.** Testes unitários Windows não substituem essa prova. O runner completo exige 58 PASS e mantém falhas explícitas. O restore operacional geral continua com exclusões: cron/net, configuração hospedada, SMTP externo, RPO/RTO e operação comercial não são certificados pelo REC-X18.
 
-O restore existente foi ampliado com inventário nominal de 31 owners e dez ACLs novos; rejeita substituições mesmo com contagem idêntica e mantém as comparações integrais de dados/grants/owners. Isso prepara compatibilidade de esquema, sem comprovar restore operacional. Não liberar publicação/ativação como se a matriz de 58 estivesse completa.
+O restore mantém inventário nominal de owners/ACLs, rejeita substituições mesmo com contagem idêntica e compara dados/grants/owners. A aprovação da matriz descartável não substitui o ensaio operacional da hospedagem.
 
-O relatório e a matriz individual da Etapa 6.0 ficam em `docs/auditoria-2026-11-04/`. Não declarar DEF-007 operacionalmente resolvido, zero arquivos órfãos ou produto pronto para operação comercial.
+Relatórios antigos foram arquivados fora do repositório. Não declarar inventário universal sem órfãos ou prontidão comercial a partir de dados sintéticos.

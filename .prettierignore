@@ -7,7 +7,8 @@ packages/db/prisma/migrations
 packages/db/src/generated
 apps/web/next-env.d.ts
 # Machine-generated QA evidence is immutable and must not be reformatted.
-docs/auditoria-2026-10-27/evidencias-*/**/*.json
+test-results/
+playwright-report/
 integrated-playwright-report.json
 integrated-test-results/
 # Historical Playwright state is generated evidence, not source code.

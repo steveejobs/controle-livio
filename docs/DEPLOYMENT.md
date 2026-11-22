@@ -1,124 +1,37 @@
 # Publicação
 
-Web, API e Supabase são publicados como três limites distintos. O repositório não pressupõe um
-provedor específico; qualquer plataforma escolhida precisa oferecer Node.js 22+, HTTPS, variáveis
-secretas, health check e logs persistentes.
+A web e a API são dois projetos Vercel do mesmo monorepo. Supabase é o destino persistente e não é recriado durante o deploy.
 
-## Ordem de publicação
+## Projetos
 
-1. Reserve o domínio HTTPS da API, por exemplo `https://api.seudominio.com`, e publique a API.
-2. Configure o build da web com `NEXT_PUBLIC_API_URL=https://api.seudominio.com/v1` e publique a web.
-3. No Supabase Auth, configure a Site URL da web e permita somente redirects necessários, incluindo
-   `https://app.seudominio.com/auth/confirm`.
-4. Configure custom SMTP, SPF/DKIM/DMARC, desabilite signup público quando o acesso for por convite e
-   confira a política de senha do Auth. O projeto atual usa mínimo de 6 caracteres por decisão de
-   produto; antes de abrir acesso público, reavalie esse limite.
-5. Aponte DNS, valide certificados e só então execute os smoke tests finais.
+| Serviço     | Projeto            | Root Directory | Runtime   |
+| ----------- | ------------------ | -------------- | --------- |
+| API NestJS  | controle-livio     | apps/api       | Node 24.x |
+| Web Next.js | controle-livio-web | apps/web       | Node 24.x |
 
-Não reutilize `.env` local no provedor. Cada valor deve ser cadastrado no secret manager do ambiente.
+Requisitos do código: Node >=24.15 <25; homologação em 24.22.3. Habilite fontes externas à Root Directory. Build/install vêm dos respectivos `vercel.json`. A API usa preset NestJS, Fluid compute e região `cle1`; a web usa o adaptador Next.js nativo.
 
-## Serviço API
+## Configuração
 
-Comandos:
+Cadastre valores no secret manager da Vercel. Não copie o `.env` local para o upload.
 
-```text
-npm ci
-npm run build:packages
-npm run build -w @livio/api
-npm run start -w @livio/api
-```
+A API exige configuração coerente de Database/Supabase, ref e confirmação, ambiente staging/production, origens HTTPS, redirect Auth, bucket e scanner. A lista completa e os limites estão em `packages/shared/src/environment.ts`; `.env.example` documenta os nomes.
 
-Variáveis obrigatórias:
+Para scanner, configure um dos transportes:
 
-- `NODE_ENV=production`;
-- `API_PORT` ou `PORT`, conforme a porta fornecida pela plataforma;
-- `DATABASE_URL` com SSL; em Vercel/serverless, use o Transaction pooler do Supabase (Supavisor,
-  porta `6543`) com `pgbouncer=true&connection_limit=1`, nunca o endpoint direto IPv6;
-- `SUPABASE_ENVIRONMENT=staging` ou `production`;
-- `SUPABASE_PROJECT_REF` e `CONFIRM_SUPABASE_PROJECT_REF` iguais;
-- `SUPABASE_LOCAL=false`;
-- `SUPABASE_URL`, `SUPABASE_ANON_KEY` e `SUPABASE_SERVICE_ROLE_KEY`;
-- `SUPABASE_AUTH_REDIRECT_URL` HTTPS;
-- `CORS_ORIGINS` com a origem HTTPS exata da web, sem wildcard;
-- `STORAGE_BUCKET=legal-documents`, `MAX_DOCUMENT_SIZE_MB` e `LOG_LEVEL`;
-- `CRON_SECRET` aleatório com pelo menos 32 caracteres para proteger a reconciliação diária de
-  parcelas vencidas e próximas do vencimento;
-- `TRUST_PROXY=true` somente quando a topologia do provedor possui um proxy confiável compatível.
+- `CLAMAV_HOST` em uma rede realmente privada e acessível à API.
+- `CLAMAV_GATEWAY_URL` HTTPS e `CLAMAV_GATEWAY_TOKEN`, com certificado válido e autenticação.
 
-O health check deve usar `/v1/health/ready`; `/v1/health/live` prova somente o processo.
+Não exponha o TCP clamd publicamente. Veja [o gateway](../tools/scanner/README.md). Timeout, indisponibilidade ou veredito inválido devem bloquear o arquivo.
 
-## Serviço web
+A web recebe somente `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Use a URL pública estável da API com `/v1`.
 
-Comandos:
+Segredos protegidos não são necessariamente exportáveis pelo CLI. Uma linha vazia no arquivo de `vercel env pull` não comprova segredo ausente no runtime; confira os metadados e valide o deployment.
+
+## Gate local
 
 ```text
 npm ci
-npm run build:packages
-npm run build -w @livio/web
-npm run start -w @livio/web
-```
-
-Variáveis de build obrigatórias:
-
-- `NEXT_PUBLIC_API_URL`, incluindo `/v1`;
-- `NEXT_PUBLIC_SUPABASE_URL`;
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
-
-Esses três valores são públicos por definição e ficam no bundle. Service role, conexão PostgreSQL e
-tokens de infraestrutura nunca pertencem ao serviço web.
-
-### Vercel
-
-Crie dois projetos Vercel ligados ao mesmo repositório. Para a web:
-
-- Framework Preset: `Next.js`;
-- Root Directory: `apps/web`;
-- Include source files outside of the Root Directory: habilitado;
-- Build e Install Command: mantenha os valores detectados de `apps/web/vercel.json`;
-- Output Directory: padrão do Next.js (`.next`).
-
-A web usa o adaptador nativo Next.js da Vercel e declara a raiz do monorepo para output tracing; não
-force `output: standalone`, que é destinado ao empacotamento de self-host/Docker.
-
-Para a API:
-
-- Framework Preset: `NestJS`;
-- Root Directory: `apps/api`;
-- Include source files outside of the Root Directory: habilitado;
-- Build e Install Command: mantenha os valores de `apps/api/vercel.json`;
-- Output Directory: vazio, para o preset NestJS produzir uma única Vercel Function;
-- Fluid compute: habilitado.
-- Região da Function: `cle1`, versionada em `apps/api/vercel.json` para manter a API na mesma região
-  `us-east-2` do projeto Supabase atual.
-- Cron diário: `GET /v1/notifications/cron` às 11:00 UTC (08:00 em Brasília), autenticado
-  automaticamente por `Authorization: Bearer $CRON_SECRET`. Sem o segredo, a rota falha fechada.
-- Alertas de audiência, acesso e tarefa: `pg_cron` no projeto Supabase chama
-  `GET /v1/notifications/dispatch/cron` a cada minuto. A chamada inclui apenas timestamp e HMAC de
-  curta duração; `CRON_SECRET` fica no Vault e na API. A fila do `pg_net` não recebe o segredo.
-  A ativação é feita após o deploy com `tools/notifications/configure-scheduler.mjs --activate`.
-  Push depende de VAPID, permissão e inscrição ativa em cada navegador.
-
-Enquanto os aliases `vercel.app` forem usados, `controle-livio.vercel.app` identifica o projeto da
-API e `controle-livio-web.vercel.app` identifica a web. A raiz `/` da API possui redirecionamento
-permanente versionado para a web; rotas `/v1/*` continuam atendidas diretamente pela API. O 308 da
-raiz usa `Vercel-CDN-Cache-Control` por um dia para evitar acionar a Function no salto. Domínios
-próprios futuros devem manter os limites `api.*` e `app.*` e substituir esse redirecionamento.
-
-Os comandos de instalação versionados usam `npm ci --include=dev`: `NODE_ENV=production` não pode
-remover `typescript`/CLI de build antes da compilação. Arquivos `.env*`, `chaves` e metadados locais
-da Vercel são excluídos do upload por `.vercelignore`; configure os valores somente no projeto Vercel.
-
-O projeto da API precisa receber todas as variáveis server-side listadas acima. Nele,
-`CORS_ORIGINS` recebe a URL HTTPS da web e `SUPABASE_AUTH_REDIRECT_URL` recebe essa URL seguida de
-`/auth/confirm`. Depois do primeiro deploy da API, use a URL HTTPS dela na variável
-`NEXT_PUBLIC_API_URL` do projeto web, acrescentando `/v1`. Não selecione `apps/api` no projeto web nem
-`apps/web` no projeto API.
-
-## Gate de promoção
-
-Antes de promover staging para produção:
-
-```text
 npm run format:check
 npm run lint
 npm run typecheck
@@ -127,32 +40,40 @@ npm run db:validate
 npm run build
 ```
 
-O workflow `Quality` também sobe Supabase descartável e executa `test:supabase`. Em staging, valide
-login, refresh, recuperação de senha, troca de organização, CRUD essencial, exportação CSV, upload e
-download de documentos, isolamento entre organizações e layout a 360 px.
+A CI deve validar também Auth/RLS/Storage, financeiro concorrente, navegador integrado, scanner, email de captura e recuperação descartável. Consulte [a homologação](HOMOLOGACAO_2026_11_22.md). Não executar testes de escrita com credenciais do banco compartilhado.
 
-O ambiente Supabase `ioebcdpyrszokdyaoaqv` foi confirmado como desenvolvimento/homologação. Publicar
-uma versão de homologação não é aprovação para uso com dados reais. A promoção para uso real ainda exige
-scanner antimalware, SMTP/domínio para entrega de e-mail, observabilidade e ensaio de restauração.
+## Preparação e promoção
 
-## Pendências operacionais verificadas em 2026-10-20
+1. Registre a versão Git e os deployments atuais para rollback.
+2. Selecione explicitamente o projeto API ou web ao trabalhar na raiz do monorepo; confira o project ID e a Root Directory.
+3. Crie um deployment com ambiente Production sem trocar os domínios:
 
-- **E-mail:** o escritório ainda não tem domínio nem provedor SMTP. Convites e recuperação por links
-  gerados pelo Administrador, aceitação e definição de senha foram comprovados no Supabase Auth real;
-  envio automático por e-mail depende do provedor. Configurar domínio/remetente e testar entrega com
-  uma conta de homologação antes de abrir acesso.
-- **Métricas:** a web inclui o cliente Vercel Speed Insights. Ativar o recurso no projeto web após revisar
-  o plano e os custos, publicar a versão testada e acompanhar Web Vitals e erros por rota. Sem essa
-  ativação e tráfego real não há p95 de usuários.
-- **Proteção de arquivos e API:** o rate limit da API usa contador compartilhado no Postgres. O scanner
-  de malware ainda não foi provisionado; definir provedor, falhar fechado para arquivo não verificado e
-  testar upload seguro antes de uso real.
-- **Recuperação:** não há Docker, `pg_dump` ou scanner local nesta estação; nenhum ensaio de restauração
-  foi executado. Criar projeto de restauração isolado, obter backup verificável do Database e cópia
-  separada dos objetos Storage, restaurar ambos nesse destino e conferir Auth, memberships, 39 tabelas,
-  RLS, políticas, integridade e acesso a documentos. Registrar duração e perda máxima observadas. Nunca
-  fazer o ensaio sobre o projeto ativo.
+```text
+vercel deploy --prod --skip-domain --yes
+```
 
-## Browser push setup
+4. Aguarde build e verifique inicialização, `/v1/health/live`, `/v1/health/ready`, acesso sem login negado, web e compatibilidade de origens.
+5. Valide upload limpo/infectado/indisponibilidade em uma organização de homologação autorizada, além de login, recuperação, navegação e isolamento.
+6. Promova somente o deployment aprovado:
 
-Generate a VAPID pair with `npx web-push generate-vapid-keys` and set `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, and `VAPID_SUBJECT` in the API project. The public key is used by browser subscription; the private key stays in the API. Apply the subscription migration before enabling the feature. Each phone or computer opts in under Notifications → This device. On iPhone/iPad, first add the site to the Home Screen and open the installed app. HTTPS and browser/OS permission are required. Real delivery is confirmed only after setting the keys and testing on a push-capable device/browser.
+```text
+vercel promote <deployment-url> --yes
+```
+
+O uso de `--skip-domain` e promoção posterior segue [a documentação Vercel](https://vercel.com/docs/cli/deploy). READY de build não comprova que a API iniciou nem que o scanner está acessível.
+
+## Banco, email e agendamentos
+
+Não aplicar migrations, reset ou seed como efeito do deploy. Mudanças de banco exigem procedimento próprio e confirmação de destino DEV; nunca restaurar sobre o projeto persistente.
+
+Convite e recuperação dependem do SMTP/Supabase Auth e de redirects corretos. Entrega externa precisa de prova específica. Cron diário usa Bearer CRON_SECRET; dispatch de lembretes usa autenticação HMAC. Ativar scheduler ou limpeza Storage exige configuração e autorização próprias. Push depende de VAPID e dispositivo inscrito.
+
+## Artefatos e rollback
+
+`.vercelignore` exclui segredos locais, relatórios, documentação, caches e builds locais. Instalação limpa gera Prisma/metadados e os builds na Vercel. Preserve os assets documentais e OCR necessários.
+
+Em falha de inicialização ou de fluxos críticos, mantenha o alias anterior. Se a promoção já ocorreu, reverta ao deployment anterior compatível; mudanças de banco não são revertidas automaticamente com o código.
+
+## Estado atual
+
+Publicação autorizada em 22/11/2026. A API Production não lista configuração ClamAV; a candidata não deve ser promovida sem resolver e testar essa dependência. Não desativar o scanner para contornar o gate.

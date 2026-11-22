@@ -37,7 +37,7 @@ Documentos ficam em bucket Supabase privado. O banco guarda somente metadados, c
 
 O ambiente é validado por Zod no boot. A API expõe liveness e readiness; readiness executa apenas `SELECT 1`. OpenAPI é gerado em `/v1/docs` e `/v1/docs/openapi.json`.
 
-API e web não mantêm sessão em memória e podem escalar horizontalmente. Jobs futuros devem usar outbox transacional. Rate limit distribuído, antivírus assíncrono e telemetria continuam planejados. RLS e policies Supabase são versionados em `supabase/migrations`; veja `SUPABASE_ARCHITECTURE.md`.
+API e web não mantêm sessão em memória. Rate limit usa PostgreSQL; uploads passam por scanner com bloqueio em falhas e intenção durável. A recuperação usa leases e estados persistentes. A capacidade de escalar depende da configuração do pooler, scanner e filas. RLS e policies Supabase são versionados em `supabase/migrations`; veja `SUPABASE_ARCHITECTURE.md`.
 
 Na web, tema e motion permanecem centralizados em `apps/web/theme`; esta etapa não acopla domínio do backend ao frontend.
 

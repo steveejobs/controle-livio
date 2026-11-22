@@ -1,6 +1,6 @@
 # Plano separado: migração Prisma 6 para 7
 
-**Estado em 2026-11-22: implementação em candidata local, homologação completa pendente.**
+**Estado em 2026-11-22: candidata aprovada na CI descartável; publicação hospedada pendente de configuração do scanner.**
 
 Implementados Prisma 7.10.1 e adapter-pg, geração CJS, configuração explícita do CLI,
 pool limitado, métricas pg e migração dos consumidores para `@livio/db`.
