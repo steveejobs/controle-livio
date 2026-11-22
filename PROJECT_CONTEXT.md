@@ -41,7 +41,13 @@ Candidata funcional `2f29ae9c18895edd7dce08b54036dbc807cb7d40`, merge sintético
 
 Após a organização, passaram novamente formato, lint, TypeScript, 491 Vitest, Prisma Validate, builds API/web e 208 testes Node das ferramentas. Os links Markdown locais também foram conferidos sem destino quebrado. A árvore versionada passou de 602 para 514 arquivos e de 8.434.596 para aproximadamente 4.025.427 bytes. Contagens se sobrepõem e não representam cobertura universal.
 
-## Publicação em andamento
+## Publicação preparada — bloqueio de infraestrutura
+
+Candidata executável final `b2a8b88a820aeedc0d895c1dc3a45ec06c86ba1a`. Quality [45073129619](https://github.com/steveejobs/controle-livio/actions/runs/45073129619) 4/4 PASS e recovery [45073129613](https://github.com/steveejobs/controle-livio/actions/runs/45073129613) 1/1 PASS. Merge CI `31acc7959c62825a399bcbb180e9952190baf094` e candidata têm a mesma árvore Git `8b9bbcdc508c6c9de98c912956e5c8f97840b5bd`. A nova guarda de upload acrescenta três testes aos 208 existentes e preserva 474 fontes versionadas. A árvore final tem 517 arquivos; 514 era o estado após a limpeza inicial, antes da guarda.
+
+Os dois deployments Production foram preparados com `--skip-domain`: API `dpl_6yzAidzz8i7Vd1ny2kyxbEcy8fiq` e web `dpl_HEFVgHkPY6NHh5sskU2sL7K5ZrE8`, ambos READY de build. A web preparada respondeu 200 em `/`, `/reset-password` e `/sw.js`. A API preparada retornou 500 em live/ready; o log confirmou ZodError por ClamAV ausente, sem erro de módulo. Não houve promoção aos aliases públicos nem merge em main. Web pública e API ready anteriores seguem 200; clients sem login retorna 401.
+
+A publicação final depende de uma hospedagem acessível para o scanner ou da recuperação do servidor Dokploy cadastrado, atualmente sem resposta. O proprietário pediu busca nas conexões disponíveis; Vercel, ambiente local, Cloudflare e infraestrutura existente foram verificados sem encontrar serviço utilizável. Informação sobre o provedor/painel do servidor foi solicitada. Nenhum serviço novo pago foi contratado. Não contornar a validação nem apontar o scanner para endereço fictício.
 
 A primeira preparação Vercel do commit de limpeza 6bea0db revelou uma exclusão indevida: `reports/` sem âncora retirava também os módulos API/web de relatórios. Nenhum alias público foi promovido. Regras corrigidas para `/reports/` e demais pastas de artefatos na raiz; `release:check` verifica as fontes versionadas contra `.vercelignore` isoladamente, com três regressões Git reais e execução na CI. O código dos módulos permaneceu intacto.
 
