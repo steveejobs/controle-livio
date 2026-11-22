@@ -2,13 +2,17 @@
 
 Atualizado em 22/11/2026. Este arquivo registra o estado atual. Históricos extensos e resultados de execução ficam fora do código.
 
-## ClamAV incluído no pacote final — em validação
+## ClamAV incluído no pacote final — validado
 
 O proprietário pediu incluir o antivírus na versão que será atualizada pelo Git. Incluídos Compose com ClamAV 1.5.4/FreshClam, gateway Node 24 e HTTPS Caddy; imagens oficiais fixadas por digest, default de publicação em loopback e nenhuma porta pública clamd/8080. O pacote precisa de host Docker e DNS próprios; não é executado automaticamente pela Vercel.
 
 A API Vercel passa a executar `release:environment` após compilar: configuração incompleta impede um build READY e preserva o alias anterior. A validação exige runtime Production, destino staging/production remoto e scanner; erros são sanitizados para não expor credenciais. Quatro regressões locais passaram, incluindo ausência de scanner, bypass local rejeitado e erro com URL secreta.
 
-A workflow dedicada Scanner deployment package testa a composição em Linux descartável com TLS real de CA privada de teste, ClamAV/EICAR reais, limites, autenticação, cliente compilado da API e pausa/retomada do daemon. Não toca banco, infraestrutura persistente ou destinatários externos. Gates locais completos PASS: formato, lint, release check, TypeScript, 491 Vitest, Prisma, builds e 215 testes Node. A composição Docker ainda depende da execução Linux; Docker não está disponível nesta estação. O servidor persistente anterior segue inacessível; nenhuma nova hospedagem paga foi contratada nem proteção desativada.
+A workflow dedicada Scanner deployment package testa a composição em Linux descartável com TLS real de CA privada de teste, ClamAV/EICAR reais, limites, autenticação, cliente compilado da API e pausa/retomada do daemon. Não toca banco, infraestrutura persistente ou destinatários externos. Gates locais completos PASS: formato, lint, release check, TypeScript, 491 Vitest, Prisma, builds e 215 testes Node.
+
+Candidata final do código: `482650af4bffcdecb43b6e222df94b35eb8dbb5f`. Quality [45078508272](https://github.com/steveejobs/controle-livio/actions/runs/45078508272) 4/4 PASS, recovery [45078508226](https://github.com/steveejobs/controle-livio/actions/runs/45078508226) PASS e pacote scanner [45078508364](https://github.com/steveejobs/controle-livio/actions/runs/45078508364) PASS: oito grupos de checks reais, ClamAV 1.5.4, TLS, EICAR, cliente da API, falha fechada e retomada. `/tmp` e `/var/tmp` do scanner usam tmpfs; core dumps desativados. Recursos próprios CI parados ao concluir. A primeira candidata 038159a também aprovou o pacote; seus runs Quality/recovery foram cancelados em favor da versão final.
+
+O novo gate foi confirmado na própria Vercel: deployment `dpl_J3nsi54tvjgDwPz2qrdbQDAXhNgQ` rejeitou o build em `release:environment`, exclusivamente por configuração ClamAV ausente, em vez de chegar a READY com startup quebrado. Esse gate e a configuração API não mudaram entre 038159a e 482650a. Nenhum alias público foi promovido; web e API ready anteriores continuam 200. O servidor persistente repetiu timeout; o serviço Docker precisa ser executado num host acessível e URL/token configurados na Vercel antes da ativação pública. Atualizar o Git sozinho não cria esse host. Nenhuma hospedagem paga foi contratada, migration aplicada ou proteção desativada.
 
 ## Produto e arquitetura
 
