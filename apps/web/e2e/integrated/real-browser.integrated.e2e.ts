@@ -4070,7 +4070,9 @@ test('comprovante: leitura, pagamento parcial, portal e quitação conferida', a
       expect(persisted?.status).toBe('PAID');
       expect(persisted?.installments[0]?.status).toBe('PAID');
       expect(
-        persisted?.installments[0]?.allocations.map(({ amount }) => amountUnits(amount)),
+        persisted?.installments[0]?.allocations
+          .map(({ amount }) => amountUnits(amount))
+          .sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
       ).toEqual([amountUnits('33.34'), amountUnits('66.66')]);
       const finalDatabase = new PrismaClient();
       try {

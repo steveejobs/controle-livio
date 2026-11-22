@@ -262,7 +262,7 @@ function foreignKeys(project) {
   }
   return checks.length;
 }
-function copyVolume(image, source, destination, privateRoot) {
+function copyVolume(image, source, destination, privateRoot, allowEmptyDirectorySkeleton = false) {
   const script = resolve('tools/storage/recovery/volume-copy.mjs');
   return JSON.parse(
     docker(
@@ -287,6 +287,7 @@ function copyVolume(image, source, destination, privateRoot) {
         '/copy.mjs',
         '/source',
         '/destination',
+        ...(allowEmptyDirectorySkeleton ? ['--allow-empty-directory-skeleton'] : []),
       ],
       { cwd: privateRoot },
     ).toString(),
@@ -647,6 +648,7 @@ export async function coordinatedRestore(env) {
       `type=bind,src=${volumeBackup},dst=/source,readonly`,
       `type=volume,src=${target.volume},dst=/destination`,
       privateRoot,
+      true,
     );
     assert.deepEqual(restoredObjects, objects, 'Physical Storage files and hashes differ');
     diagnostics.pass();

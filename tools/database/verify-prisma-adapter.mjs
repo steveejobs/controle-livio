@@ -435,6 +435,28 @@ try {
   const rejected = concurrent.find((item) => item.status === 'rejected');
   assert.equal(rejected.reason.code, 'P2034');
   rows.push({ case: 'serializable-concurrency-retry-signal', result: 'PASS' });
+  const interruptedId = randomUUID();
+  let connectionInterrupted = false;
+  await assert.rejects(
+    db.$transaction(async (tx) => {
+      await tx.organization.create({
+        data: {
+          id: interruptedId,
+          slug: 'interrupted-' + interruptedId,
+          legalName: 'Synthetic rollback on disconnect',
+        },
+      });
+      const [{ pid }] = await tx.$queryRaw`SELECT pg_backend_pid()::int AS pid`;
+      const [{ terminated }] =
+        await db.$queryRaw`SELECT pg_terminate_backend(${pid}) AS terminated`;
+      assert.equal(terminated, true);
+      connectionInterrupted = true;
+      throw new Error('SYNTHETIC_CONNECTION_TERMINATION');
+    }),
+  );
+  assert.equal(connectionInterrupted, true);
+  assert.equal(await db.organization.findUnique({ where: { id: interruptedId } }), null);
+  rows.push({ case: 'connection-loss-rolls-back-and-pool-recovers', result: 'PASS' });
   const singleUrl = new URL(url);
   singleUrl.searchParams.set('connection_limit', '1');
   queued = new PrismaClient({ connectionString: singleUrl.href });

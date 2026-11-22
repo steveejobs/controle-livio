@@ -1,4 +1,4 @@
-import { PrismaPg } from '@prisma/adapter-pg';
+import { databaseAdapter } from './adapter';
 import { PrismaClient as GeneratedPrismaClient, type Prisma } from './generated/client';
 import { databaseConnection } from './connection';
 import { DatabasePool, type PoolMetrics } from './pool';
@@ -21,7 +21,7 @@ export class PrismaClient extends GeneratedPrismaClient<
       log: (options.log ?? []).map((entry) =>
         typeof entry === 'string' ? { emit: 'stdout', level: entry } : entry,
       ),
-      adapter: new PrismaPg(pool, { schema: connection.schema, disposeExternalPool: true }),
+      adapter: databaseAdapter(pool, connection.schema),
     });
     this.databasePool = pool;
   }

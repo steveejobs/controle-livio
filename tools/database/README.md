@@ -26,3 +26,9 @@ A prova monetária inclui um valor de 19 dígitos: `900719925474099.1234`. O pre
 as leituras padrão por consultas separadas devem conservar os quatro decimais. Os serviços
 financeiro e de ficha de cliente são chamados contra PostgreSQL real para testar pagamento
 parcial, repetição, quitação, estorno, auditoria e saldo. Isso não representa teste HTTP/Auth/RLS.
+
+A prova de desconexão encerra somente o backend da transação sintética no cluster próprio,
+confere rollback e exige leitura imediata saudável. O adaptador descarta a conexão no rollback
+por lease associado ao pool; transações confirmadas continuam reutilizando conexões. Nenhuma
+escrita ambígua é repetida automaticamente. Falhas de serialização conhecidas mantêm o retry
+limitado existente, usando SQLSTATE real do adaptador.

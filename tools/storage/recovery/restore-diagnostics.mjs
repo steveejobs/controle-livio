@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { storageCopyFailureCodes } from './volume-copy.mjs';
 
 export function redactRestoreText(value) {
   return String(value)
@@ -21,6 +22,15 @@ export function restoreErrorDetails(error, seen = new Set()) {
   // execFile's raw message/stdout/stderr can contain provider credentials. Never
   // export them; a logical command, exit/signal and cause metadata suffice.
   const external = Object.hasOwn(error, 'stdout') || Object.hasOwn(error, 'stderr');
+  let volumeCopyFailure;
+  if (external) {
+    try {
+      const value = JSON.parse(String(error.stdout ?? '')).failure;
+      if (storageCopyFailureCodes.has(value)) volumeCopyFailure = value;
+    } catch {
+      /* Raw output remains withheld. */
+    }
+  }
   return {
     name: redactRestoreText(error.name ?? 'Error'),
     frames: [
@@ -54,6 +64,7 @@ export function restoreErrorDetails(error, seen = new Set()) {
       external && error.stderr
         ? createHash('sha256').update(String(error.stderr)).digest('hex')
         : null,
+    ...(volumeCopyFailure ? { volumeCopyFailure } : {}),
     logicalCommand: error.logicalCommand ? redactRestoreText(error.logicalCommand) : null,
     cause: error.cause ? restoreErrorDetails(error.cause, seen) : null,
   };

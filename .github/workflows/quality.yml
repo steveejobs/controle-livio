@@ -255,6 +255,7 @@ jobs:
         with:
           name: synthetic-restore-evidence
           path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-supabase-*.json
             ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
             ${{ runner.temp }}/livio-integrated-artifacts/source-archive-toc.txt
             ${{ runner.temp }}/livio-integrated-artifacts/schema-filtered-archive-toc.txt
