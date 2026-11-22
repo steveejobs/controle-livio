@@ -9,7 +9,7 @@
     }
   },
   "installCommand": "cd ../.. && npm ci --include=dev",
-  "buildCommand": "cd ../.. && npm run build:api",
+  "buildCommand": "cd ../.. && npm run build:api && npm run release:environment",
   "regions": ["cle1"],
   "headers": [
     {

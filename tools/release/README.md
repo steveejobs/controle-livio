@@ -16,3 +16,8 @@ node --test tools/release/verify-upload.test.mjs
 
 Antes do deploy, confira também [o roteiro](../../docs/DEPLOYMENT.md). Essa verificação
 não valida credenciais, runtime remoto, scanner ou permissões do banco.
+
+`npm run release:environment`, após compilar `@livio/shared`, valida a configuração
+Production da API sem abrir conexões. O build da API Vercel executa esse gate para
+impedir publicação com scanner ausente. A saída contém somente caminhos/códigos de
+validação, nunca os valores. Isso não testa a disponibilidade do scanner hospedado.

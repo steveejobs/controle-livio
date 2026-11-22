@@ -24,6 +24,12 @@ Para scanner, configure um dos transportes:
 
 Não exponha o TCP clamd publicamente. Veja [o gateway](../tools/scanner/README.md). Timeout, indisponibilidade ou veredito inválido devem bloquear o arquivo.
 
+O pacote `tools/scanner/compose.yaml` inclui ClamAV/FreshClam, gateway e proxy HTTPS.
+Ele precisa ser executado num host Docker com DNS; não é iniciado por um push do Git
+na Vercel. Após subir o serviço, configure URL/token no projeto API. O build Vercel
+executa `release:environment` e falha se faltar configuração obrigatória, antes de
+substituir a versão pública. Valores das credenciais não são impressos.
+
 A web recebe somente `NEXT_PUBLIC_API_URL`, `NEXT_PUBLIC_SUPABASE_URL` e `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Use a URL pública estável da API com `/v1`.
 
 Segredos protegidos não são necessariamente exportáveis pelo CLI. Uma linha vazia no arquivo de `vercel env pull` não comprova segredo ausente no runtime; confira os metadados e valide o deployment.

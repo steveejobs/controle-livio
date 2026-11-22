@@ -30,6 +30,7 @@
     "db:validate": "prisma validate --schema packages/db/prisma/schema.prisma",
     "perf:bundle": "node tools/performance/check-bundle.mjs",
     "release:check": "node tools/release/verify-upload.mjs",
+    "release:environment": "node tools/release/verify-environment.mjs",
     "test:e2e": "playwright test",
     "supabase:start": "supabase start",
     "supabase:stop": "supabase stop",

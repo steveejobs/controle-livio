@@ -1,0 +1,23 @@
+{
+	auto_https disable_redirects
+}
+
+{$SCANNER_DOMAIN} {
+	@scan {
+		method POST
+		path /scan
+	}
+	handle @scan {
+		request_body {
+			max_size 4194304
+		}
+		reverse_proxy 127.0.0.1:8080 {
+			transport http {
+				response_header_timeout 12s
+			}
+		}
+	}
+	handle {
+		respond 404
+	}
+}

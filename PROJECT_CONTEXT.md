@@ -2,6 +2,14 @@
 
 Atualizado em 22/11/2026. Este arquivo registra o estado atual. Históricos extensos e resultados de execução ficam fora do código.
 
+## ClamAV incluído no pacote final — em validação
+
+O proprietário pediu incluir o antivírus na versão que será atualizada pelo Git. Incluídos Compose com ClamAV 1.5.4/FreshClam, gateway Node 24 e HTTPS Caddy; imagens oficiais fixadas por digest, default de publicação em loopback e nenhuma porta pública clamd/8080. O pacote precisa de host Docker e DNS próprios; não é executado automaticamente pela Vercel.
+
+A API Vercel passa a executar `release:environment` após compilar: configuração incompleta impede um build READY e preserva o alias anterior. A validação exige runtime Production, destino staging/production remoto e scanner; erros são sanitizados para não expor credenciais. Quatro regressões locais passaram, incluindo ausência de scanner, bypass local rejeitado e erro com URL secreta.
+
+A workflow dedicada Scanner deployment package testa a composição em Linux descartável com TLS real de CA privada de teste, ClamAV/EICAR reais, limites, autenticação, cliente compilado da API e pausa/retomada do daemon. Não toca banco, infraestrutura persistente ou destinatários externos. Gates locais completos PASS: formato, lint, release check, TypeScript, 491 Vitest, Prisma, builds e 215 testes Node. A composição Docker ainda depende da execução Linux; Docker não está disponível nesta estação. O servidor persistente anterior segue inacessível; nenhuma nova hospedagem paga foi contratada nem proteção desativada.
+
 ## Produto e arquitetura
 
 CRM jurídico e controle financeiro multiempresa em monorepo TypeScript estrito:

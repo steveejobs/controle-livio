@@ -43,6 +43,8 @@ jobs:
       - name: Verify deployment includes every versioned runtime source
         run: npm run release:check && node --test tools/release/verify-upload.test.mjs
       - run: npm run typecheck
+      - name: Verify production deployment rejects missing scanner configuration
+        run: node --test tools/release/verify-environment.test.mjs
       - run: npm test
       - run: npm run db:validate
       - run: npm run build
