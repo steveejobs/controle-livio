@@ -218,7 +218,6 @@ export async function runWriteMatrix({
       form.set('category', 'SQL_INTEGRITY_CONTROL');
       form.set('clientId', f.clientId);
       form.set('installmentId', f.installmentId);
-      form.set('visibility', 'INTERNAL');
       form.set('file', new Blob([bytes], { type: 'application/pdf' }), 'synthetic-control.pdf');
       const uploaded = await api(owner, '/documents', { method: 'POST', body: form });
       assert.equal(uploaded.status, 201, 'Matrix evidence must use real API/scanner/Storage');

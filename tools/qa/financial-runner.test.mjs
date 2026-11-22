@@ -529,6 +529,14 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
     assert.equal(actor, owner);
     assert.equal(path, '/documents');
     assert.equal(method, 'POST');
+    const { DOCUMENT_UPLOAD_BUFFER_LIMITS } = require(
+      resolve('apps/api/dist/documents/document-upload-limits.js'),
+    );
+    assert(
+      [...body.keys()].filter((name) => name !== 'file').length <=
+        DOCUMENT_UPLOAD_BUFFER_LIMITS.fields,
+      'Fixture multipart fields must fit the actual API admission policy',
+    );
     const bytes = Buffer.from(await body.get('file').arrayBuffer());
     assert(bytes.subarray(0, 5).equals(Buffer.from('%PDF-')));
     const document = await database.document.create({
@@ -536,7 +544,7 @@ test('matrix fixture makers use existing required Prisma scalar fields before re
         ...org,
         title: body.get('title'),
         category: body.get('category'),
-        visibility: body.get('visibility'),
+        visibility: body.get('visibility') ?? 'INTERNAL',
         clientId: body.get('clientId'),
         installmentId: body.get('installmentId'),
         createdById: owner.userId,
