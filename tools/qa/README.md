@@ -2,14 +2,17 @@
 
 ## Resultados locais fora do código
 
-Testes automatizados e ferramentas de QA são mantidos. Resultados, traces, screenshots e logs são temporários: usar `test-results/` (ignorado pelo Git e pelo upload Vercel) ou `%TEMP%`, nunca novas pastas de evidências em `docs`. Em 2026-11-01, resíduos antigos e cópias auxiliares de worktrees foram preservados em backup local privado antes da limpeza. A documentação histórica continua no projeto; seus caminhos antigos de artifacts são referências à execução original, não arquivos necessários ao runtime. Consulte `PROJECT_CONTEXT.md` para a localização do backup e a recuperação das candidatas sem commit.
+Preservar testes e documentação. Novos logs, capturas, traces e relatórios de execução ficam em
+`test-results/` ou `%TEMP%`, sem dados reais nem segredos. Evidências históricas são imutáveis;
+não reformatar `.last-run.json`. A consolidação de 2026-11-22 mantém o backup privado indicado
+em `PROJECT_CONTEXT.md`. No Windows, a geração de páginas Next usa um worker para limitar memória.
 
 ## Inventário funcional sem execução
 
 `inventory-functional-surface.mjs` usa o parser TypeScript local para listar controles JSX, opções, chamadas da web, rotas e declarações de autorização da API. Não lê `.env`, não conecta serviços e não executa o aplicativo. A presença de um controle ou nome de teste não comprova cobertura: os registros começam com `REQUIRES_REVIEW`. O inventário inclui declarações dinâmicas, não todas as instâncias geradas em execução.
 
 ```powershell
-node tools/qa/inventory-functional-surface.mjs --output=docs/ativacao-2026-11-01/INVENTARIO_FUNCIONAL.json
+node tools/qa/inventory-functional-surface.mjs --output=test-results/INVENTARIO_FUNCIONAL.json
 ```
 
 O destino é opcional; sem ele, só imprime contagens. Não sobrescreve arquivo existente sem `--overwrite`. O JSON não deve receber dados de usuários, valores de campos ou segredos. Relacione a execução e suas limitações na matriz de cobertura antes de classificar qualquer função como aprovada.
@@ -121,7 +124,7 @@ O harness não valida JWT, RLS nem o guard Nest; usa um ator sintético com perm
 $env:QA_ALLOW_SHARED_DATABASE_READ_BENCHMARK = 'true'
 $env:QA_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:CONFIRM_SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
-$env:QA_ARTIFACT_DIR = 'test-results/qa/capacidade-concorrencia'
+$env:QA_ARTIFACT_DIR = 'docs/auditoria-2026-10-27/evidencias-capacidade-concorrencia'
 node --env-file=.env tools/qa/inspect-prisma-pool.mjs
 node --env-file=.env tools/qa/benchmark-prisma-pool.mjs
 ```
@@ -149,11 +152,21 @@ $env:CONFIRM_SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:PRODUCTION_SUPABASE_PROJECT_REF = 'ioebcdpyrszokdyaoaqv'
 $env:QA_API_CONNECTION_LIMIT = '2'
-$env:QA_ARTIFACT_DIR = 'test-results/qa/navegacao-pool2'
+$env:QA_ARTIFACT_DIR = 'docs/auditoria-2026-10-27/evidencias-navegacao-pool2'
 node --env-file=.env --import tsx tools/qa/validate-pool2-navigation.ts
 ```
 
 O pool 2 fica candidato exclusivamente para uma instância local. Não configure Vercel até verificar o host e limite efetivos do `DATABASE_URL` publicado, o máximo de instâncias/concurrency da Function, limites de clientes/servidores do Supavisor e conexões utilizadas por outros serviços. `pg_stat_activity` conta conexões do PostgreSQL e não substitui os limites de clientes do pooler.
+
+### Auditoria financeira da etapa 3
+
+`financial-integrity-ci.mjs` é acionado pelo novo teste integrado `financial-integrity.integrated.e2e.ts`, somente na rodada completa do Quality existente. Não é um comando de Production. Exige consentimento explícito de execução descartável, ambiente de teste, Auth/API/PostgreSQL loopback, ClamAV local do runner, credenciais exclusivas locais e ausência de arquivos dotenv; recusa sobrescrever evidência anterior. Não muda workflows, grants, migrations ou rate limits.
+
+Os 30 casos financeiros geram `workflow-stages/financial-stage3.json`, já incluído no upload sanitizado existente. A barreira SQL exige observar as requisições bloqueadas no PostgreSQL antes de liberá-las. Injeções de falha são wrappers locais dos serviços compilados sobre transações e Storage reais; somente a conexão PostgreSQL aberta pelo próprio teste pode ser encerrada. Nenhum audit log é apagado.
+
+Validação local do harness sem banco: `node --test tools/qa/financial-integrity-support.test.mjs` após build da API. Testa o preflight e os payloads contra schemas reais; não comprova persistência. A execução integrada requer autorização de commit/push e runner descartável. Ver `docs/auditoria-2026-11-04/ETAPA_3_FINANCEIRO.md` para riscos, escopos e resultados.
+
+`catalog-financial-audit.mjs` relaciona os candidatos existentes a funções financeiras. Recusa substituir os catálogos gerados sem `--overwrite` explícito e nunca altera o inventário original. A contagem de funções não é contagem de testes nem total global do produto.
 
 ### Captura SMTP descartável na CI
 
@@ -162,3 +175,11 @@ O job integrado usa `prepare-local-supabase-ci.mjs --smtp-capture`. Esta opção
 `verify-smtp-capture-ci.mjs` exige esse ambiente e destinos HTTP loopback nas portas 54321/54324/3010. Usa apenas conta aleatória `@example.test`, captura convite/recuperação via API Mailpit, verifica senha anterior/nova, uso único, destino permitido e expiração após 65 segundos reais. Não encaminha mensagens nem registra corpos, endereços, links ou tokens. O único artefato contém status e booleanos sanitizados.
 
 Escopo: transporte Auth → caixa local e consumo dos links pelo Auth. Não valida o provedor hospedado, a entrega externa, o template comercial nem a página SSR final (`frontendLandingVerified=false`). O callback web exige `code` ou `token_hash` + `type`; homologar templates compatíveis com ele antes da liberação, pois o fluxo padrão com tokens no fragmento da URL não pode ser lido pelo callback de servidor. Não alterar templates cloud nesta etapa.
+
+## DEF-008 preflight (Etapa 3.3)
+
+The existing disposable financial runner imports financial-security-ci.mjs and financial-write-matrix.mjs. They never load dotenv; the entry point validates loopback URLs, test flags and absence of external credentials before connecting. Financial and indirect write attempts use valid synthetic rows and real local Auth JWTs; HTTP/RLS/ACL/domain failures are recorded separately. See docs/auditoria-2026-11-04/PREFLIGHT_CI_DEF008_ETAPA3_3.md for the reviewable scope and release limitations.
+
+Local support checks: node --test tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs.
+
+Optional SQL grammar/ACL rehearsal: node tools/qa/financial-sql-probe.mjs <absolute-local-PGlite-module-path>. PGlite is not a repository dependency and is never installed automatically by the script. The probe creates only in-memory synthetic databases, closes them at completion and has no database URL or remote connection. Validated locally with @electric-sql/pglite 0.3.14 / PostgreSQL 17.5; this does not validate the full application schema, Supabase or integrated concurrency.

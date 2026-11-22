@@ -3,10 +3,16 @@ import { initialRolePermissions, permissionActions, permissionResources } from '
 import { pipelineTemplates } from './pipelines';
 
 describe('authorization defaults', () => {
-  it('grants administrators every resource and action', () => {
+  it('grants all existing actions and only explicit recovery view/manage', () => {
     expect(initialRolePermissions.administrator).toHaveLength(
-      permissionActions.length * permissionResources.length,
+      permissionActions.length * (permissionResources.length - 1) + 2,
     );
+    expect(initialRolePermissions.administrator).toContain('storage_recovery:view');
+    expect(initialRolePermissions.administrator).toContain('storage_recovery:manage');
+    for (const role of ['lawyer', 'secretary', 'finance', 'client'] as const)
+      expect(
+        initialRolePermissions[role].some((code) => code.startsWith('storage_recovery:')),
+      ).toBe(false);
   });
 
   it('reserva a exportação de relatórios ao perfil Administrador', () => {

@@ -77,6 +77,35 @@ describe('Supabase environment boundary', () => {
     expect(parsed.SMTP_SECURE).toBe(false);
   });
 
+  it('accepts an authenticated HTTPS scanner gateway in staging without a TCP host', () => {
+    const parsed = parseApiEnvironment({
+      ...base,
+      SUPABASE_ENVIRONMENT: 'staging',
+      CLAMAV_GATEWAY_URL: 'https://scanner.example.com/scan',
+      CLAMAV_GATEWAY_TOKEN: 'synthetic-scanner-token-with-at-least-32-characters',
+    });
+    expect(parsed.CLAMAV_HOST).toBeUndefined();
+    expect(parsed.CLAMAV_GATEWAY_URL).toBe('https://scanner.example.com/scan');
+  });
+
+  it('rejects incomplete and unsafe scanner gateway configuration', () => {
+    const token = 'synthetic-scanner-token-with-at-least-32-characters';
+    expect(() =>
+      parseApiEnvironment({ ...base, CLAMAV_GATEWAY_URL: 'https://scanner.example.com/scan' }),
+    ).toThrow();
+    expect(() => parseApiEnvironment({ ...base, CLAMAV_GATEWAY_TOKEN: token })).toThrow();
+    for (const url of [
+      'http://scanner.example.com/scan',
+      'https://user:password@scanner.example.com/scan',
+      'https://scanner.example.com/scan?token=secret',
+      'https://scanner.example.com/scan#secret',
+    ]) {
+      expect(() =>
+        parseApiEnvironment({ ...base, CLAMAV_GATEWAY_URL: url, CLAMAV_GATEWAY_TOKEN: token }),
+      ).toThrow();
+    }
+  });
+
   it('accepts a complete VAPID push configuration', () => {
     const parsed = parseApiEnvironment({
       ...base,

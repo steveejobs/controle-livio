@@ -3,7 +3,8 @@
   "framework": "nestjs",
   "git": {
     "deploymentEnabled": {
-      "validation/gha-ci-20261029": false
+      "validation/gha-ci-20261029": false,
+      "validation/audit-stage2-20261104": false
     }
   },
   "installCommand": "cd ../.. && npm ci --include=dev",

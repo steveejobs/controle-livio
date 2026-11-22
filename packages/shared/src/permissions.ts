@@ -9,6 +9,7 @@ export const permissionActions = [
 ] as const;
 
 export const permissionResources = [
+  'storage_recovery',
   'organization',
   'users',
   'roles',
@@ -52,7 +53,12 @@ const workActions = ['view', 'create', 'update', 'export'] as const;
 const viewOnly = ['view'] as const;
 
 export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly PermissionCode[]>> = {
-  administrator: permissionResources.flatMap((resource) => codes(resource, allActions)),
+  administrator: [
+    ...permissionResources
+      .filter((resource) => resource !== 'storage_recovery')
+      .flatMap((resource) => codes(resource, allActions)),
+    ...codes('storage_recovery', ['view', 'manage']),
+  ],
   lawyer: [
     ...codes('clients', workActions),
     ...codes('matters', workActions),

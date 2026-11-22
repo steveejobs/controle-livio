@@ -50,13 +50,14 @@ try {
     'Role de usuário final não pode ter superuser nem BYPASSRLS.',
   );
   const [policySummary] = await prisma.$queryRaw`
-    SELECT count(*)::int AS policy_count
+    SELECT count(*)::int AS policy_count,
+           count(*) FILTER (WHERE permissive='PERMISSIVE' OR cmd IN ('ALL','SELECT'))::int AS unsafe_count
     FROM pg_policies
     WHERE schemaname = 'public' AND tablename = 'payment_receipts'
   `;
   assert(
-    policySummary.policy_count === 0,
-    'A tabela deve permanecer API-only sem policies diretas.',
+    policySummary.policy_count === 3 && policySummary.unsafe_count === 0,
+    'A tabela deve permanecer API-only com tres policies restritivas apenas de escrita.',
   );
 
   const columns = await prisma.$queryRaw`
@@ -292,7 +293,7 @@ try {
   const report = {
     result: 'PASS',
     migration: '20261031120000_payment_receipts.sql',
-    rls: 'FORCE_RLS; authenticated/anon denied; no direct policies',
+    rls: 'FORCE_RLS; authenticated/anon denied; three restrictive write-only policies',
     apiRole: relation.api_role,
     tableOwner: relation.table_owner,
     apiRoleIsTableOwner: relation.api_role === relation.table_owner,

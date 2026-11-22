@@ -185,10 +185,11 @@ export function ClientDetail({
           method: 'PATCH',
           body: JSON.stringify({
             displayName: String(form.get('displayName')),
+            expectedUpdatedAt: data.client.updatedAt,
             legalName: String(form.get('legalName') || '') || undefined,
-            email: String(form.get('email') || '') || undefined,
-            phone: String(form.get('phone') || '') || undefined,
-            source: String(form.get('source') || '') || undefined,
+            email: String(form.get('email') || ''),
+            phone: String(form.get('phone') || ''),
+            source: String(form.get('source') || ''),
             address: {
               ...data.client.address,
               street: String(form.get('address.street') || '').trim() || undefined,
@@ -204,6 +205,7 @@ export function ClientDetail({
               ...(data.client.type === 'PERSON'
                 ? {
                     legalIdentity: {
+                      ...legalIdentity,
                       nationality: String(form.get('legalIdentity.nationality') || '').trim(),
                       civilStatus: String(form.get('legalIdentity.civilStatus') || '').trim(),
                       occupation: String(form.get('legalIdentity.occupation') || '').trim(),
@@ -215,6 +217,7 @@ export function ClientDetail({
                   }
                 : {
                     legalRepresentative: {
+                      ...legalRepresentative,
                       name: String(form.get('legalRepresentative.name') || '').trim(),
                       taxId: String(form.get('legalRepresentative.taxId') || '').replace(/\D/g, ''),
                     },

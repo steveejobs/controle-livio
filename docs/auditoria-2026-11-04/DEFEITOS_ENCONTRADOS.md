@@ -1,5 +1,52 @@
 # Defeitos e riscos encontrados
 
+## Estado consolidado — 2026-11-22
+
+As seções seguintes preservam reproduções históricas. A branch cumulativa até `33e760c`
+foi incorporada localmente ao checkout principal. O Quality `44161016548` aprovou os quatro
+jobs em 17/11, incluindo regressões financeiras, Storage e OCR; isso não comprova produção.
+DEF-007 teve 57/58 contratos reais, com REC-X18 bloqueado pelo catálogo de metadados seed
+ausente no destino. O ajuste de bootstrap foi implementado localmente, com três testes de
+configuração; a nova execução real permanece pendente.
+
+Também corrigidos nesta consolidação: configuração incompleta do gateway HTTPS do scanner,
+ausência de teste HTTP do CORS na pasta principal e Next.js 16.4.2 com advisories conhecidos
+(atualizado para 16.4.6). A auditoria global após o patch ainda registra quatro alertas altos
+na cadeia Prisma e três moderados em ferramentas Nest, após corrigir seis alertas no analisador
+TypeScript. Nenhum desses resultados autoriza produção.
+
+Detalhes atuais em `PROJECT_CONTEXT.md`; preservar abaixo os estados e limites de cada execução.
+
+## DEF-008 — P0: alteração econômica direta contorna domínio da API
+
+- **Ambiente/snapshot:** PostgreSQL/Auth/PostgREST descartáveis do Quality 41887379143; HEAD bc9bc30101e4c92a51eeb676375d40d927ea34f1, merge 455c3076792a7c9caae86e803d2e5b21377e5ae5. Risco anterior RISK-FIN-RLS-001 confirmado; não é afirmação de exploração em Production.
+- **Pré-condição:** membro financeiro autenticado da própria organização, com payments:update e expenses:update, sem papel administrador. JWT limitado e anon key usados no SDK; Prisma administrativo apenas consulta o antes/depois.
+- **Reprodução:** criar pagamento confirmado de 25 alocado contra cobrança 100 e despesa DRAFT de 25; chamar UPDATE via PostgREST de payments.status para REVERSED e de expenses.status para PAID, preenchendo paid_at. RLS-WRITE preservado e vermelho.
+- **Esperado:** nenhum estado econômico alterado sem o fluxo autorizado de estorno/aprovação/pagamento e sua auditoria.
+- **Observado:** ambas as respostas SDK sem erro e com linha alterada. PostgreSQL: pagamento REVERSED, zero reversals, saldo derivado 75→100; recebível/parcela ainda PARTIALLY_PAID; mesma auditoria CREATE, nenhum REVERSE. Despesa PAID, approvedById/approvedAt/submittedAt ainda null. HTTP bruto do PostgREST não gravado; não inventar código.
+- **Causa confirmada:** policy tenant_update usa permissão genérica update; trigger de pagamento não protege status; estados/autorizações de despesa do serviço não são impostos nesse caminho direto.
+- **Evidência:** evidencias-etapa31/financial-stage3.json, caso RLS-WRITE, com IDs e snapshots; relatório ETAPA_3_1_FINANCEIRO_INTEGRADO.md. Após a mudança, allocations no helper representa zero alocações elegíveis, sem comprovar exclusão física da linha. Auditoria específica da despesa não foi consultada.
+- **Impacto:** bypass de autorização administrativa, aprovação e integridade financeira dentro da organização. Isolamento entre organizações passou em outros casos, mas não resolve este defeito.
+- **Correção proposta:** restringir DML financeiro direto autenticado e preservar leitura RLS; revisar grants herdados, políticas e papel do Prisma antes de migration. Avaliar tabelas filhas/entradas equivalentes. Ver PROPOSTA_RLS_FINANCEIRO_ETAPA3.md.
+- **Estado:** aberto, sem correção de produto/policy/migration aplicada; exige autorização específica. Regressão existente RLS-WRITE deve permanecer FAIL até correção real comprovada.
+
+## HARNESS-CEN-006 — falha de pré-condição, sem defeito financeiro comprovado
+
+No mesmo Quality, dois uploads 201 foram seguidos de duas confirmações 400 por falta de motivo da correção; nenhuma transação aguardou na barreira. Input 70 contra 100 requer revisão e usa data futura de 2035. Extração local do PDF original não identificou valor/data; desenho proposto posiciona texto dentro da página. Reprodução com serviço compilado confirmou correção obrigatória e proibição de data futura. Proposta temporária não aplicada usa PDF legível, data passada e motivo explícito, mantendo todos os asserts. Concorrência deste caso continua pendente; não afrouxar barreira ou aumentar timeout. Não houve segundo push.
+
+## Atualização integrada DEF-006/007 — alcance limitado
+
+REN-001 PASS no PostgreSQL para concorrência/repetição sobre origem que se torna CANCELLED, sem duplicação; WRITTEN_OFF/PARTIALLY_PAID/OVERDUE não receberam a mesma jornada real. Duas compensações de upload PASS com scanner/Storage reais e remoção bem-sucedida após falha SQL; erro/indisponibilidade do provedor de remoção permanecem sem injeção real. DEF-006_INTEGRATED e DEF-007_INTEGRATED classificados PARTIAL, preservando os PASS delimitados.
+
+## Atualização etapa 3 — execução local sobre 20646dc + diff
+
+- **DEF-006 / P1:** renegociar CANCELLED/WRITTEN_OFF criava nova cobrança no serviço. Dois testes falharam antes; guarda de estado local adicionada, cinco regressões PASS. Criação duplicada em PostgreSQL ainda não reproduzida; REN-001 preparado.
+- **DEF-007 / P1:** StorageService.remove descartava o erro retornado pelo SDK; promessa resolvia como sucesso. Um teste falhou antes; verificação de erro e 503 adicionados, duas regressões PASS. Remoção real/retentativa de órfãos não comprovadas; compensação real preparada.
+- **RISK-FIN-RLS-001 / potencial P0, hipótese:** UPDATE direto por financeiro pode contornar administrador/estados de despesa, pois RLS usa permissão granular e triggers não implementam toda a máquina de estados. RLS-WRITE preparado, não executado. Não alterar migrations sem reprodução/revisão.
+- **DEF-003/004:** a etapa 2.9 comprovou o fluxo em 360/1440 no Quality 41850303146 sobre 20646dc; não atribuir essa aprovação às mudanças locais da etapa 3.
+
+Detalhes, reprodução, causas, testes e limites em ETAPA_3_FINANCEIRO.md. Zero P0 reproduzido em PostgreSQL nesta etapa. As seções abaixo preservam o histórico e seus escopos originais.
+
 ## Atualização etapa 2.5 — DEF-005
 
 O callback antigo `callback(new Error(...), false)` foi reproduzido em HTTP local com dois cenários vermelhos por 500; a candidata `f07071a` já contém `callback(null, false)`. Configuração extraída para teste de pipeline Nest no worktree destacado; sete cenários HTTP passaram, inclusive Origin permitido/negado, preflight, métodos, cabeçalhos, cookie sintético, GET normal e guard sintético. A correção continua **não homologada hospedada** e o teste novo **não publicado**. A PR #3 ainda reconhece SHA anterior; ver `ETAPA_2_5.md`.

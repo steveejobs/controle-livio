@@ -1,0 +1,238 @@
+{
+  "schema": 1,
+  "date": "2026-11-04",
+  "branch": "validation/audit-stage2-20261104",
+  "snapshot": {
+    "head": "20646dc2de791df88933996531852133cc462027",
+    "state": "uncommitted stage3 local changes; no new CI run",
+    "base": "5521a3f1cebe38e8d89b0ceef38db808c5154fc9",
+    "worktree": "C:/Users/jarde/Documents/GitHub/controle-livio-audit-stage2-validation-20261104"
+  },
+  "historicalCI": {
+    "run": 41850303146,
+    "scope": "20646dc receipt validation only, not stage3 changes",
+    "syntheticMerge": "91eff17d5c3c348208479c93a23c5e55beca14f4",
+    "unitTests": 277,
+    "mockedBrowser": 35,
+    "focusedIntegrated": 6,
+    "fullIntegrated": 14
+  },
+  "localResults": {
+    "vitest": {
+      "status": "PASS",
+      "passed": 284,
+      "api": 222,
+      "web": 42,
+      "shared": 20
+    },
+    "harnessNode": {
+      "status": "PASS",
+      "passed": 16,
+      "network": false
+    },
+    "regressions": {
+      "DEF_006": {
+        "before": {
+          "failed": 2,
+          "reason": "Cancelled/written-off receivable was accepted for a new debt"
+        },
+        "after": {
+          "passed": 5
+        },
+        "environment": "domain service with instrumented Prisma adapter"
+      },
+      "DEF_007": {
+        "before": {
+          "failed": 1,
+          "passed": 1,
+          "reason": "Storage SDK error was silently resolved"
+        },
+        "after": {
+          "passed": 2
+        },
+        "environment": "Storage adapter with simulated provider response"
+      }
+    },
+    "gates": {
+      "formatCheck": "PASS",
+      "explicitPrettierNewFilesAndContext": "PASS",
+      "lint": "PASS",
+      "typeScript": "PASS",
+      "prismaValidate": "PASS",
+      "apiBuild": "PASS",
+      "webBuild": "PASS",
+      "gitDiffCheck": "PASS"
+    },
+    "playwright": {
+      "operation": "--list only",
+      "discovered": 15,
+      "executedNew": 0,
+      "evidence": "evidencias-etapa3/playwright-list-only.json"
+    },
+    "unsafeInvocation": {
+      "status": "PASS",
+      "exitCode": 1,
+      "meaning": "Refused missing disposable environment before connection"
+    }
+  },
+  "integratedResults": {
+    "status": "BLOCKED",
+    "newScenariosPrepared": 30,
+    "newScenariosExecuted": 0,
+    "postgresQueriesExecutedStage3": 0,
+    "reason": "No disposable local PostgreSQL/Docker; commit/push/CI require additional authorization",
+    "target": "Existing Quality PR event; ephemeral PostgreSQL, Auth, Storage and ClamAV only",
+    "workflowChanges": false,
+    "productionCredentialsUsed": false,
+    "financialValuesPersisted": null
+  },
+  "coverage": {
+    "sourceCandidates": 213,
+    "preservedOriginalInventory": true,
+    "financialCandidatesMapped": 71,
+    "financialUniqueFeatures": 28,
+    "remainingCandidatesNotDeduplicated": 142,
+    "globalUniqueFeatures": null,
+    "wholeFeatureResults": {
+      "PASS": 0,
+      "FAIL": 0,
+      "PARTIAL": 16,
+      "BLOCKED": 0,
+      "NOT_EXECUTED": 12
+    },
+    "note": "Whole-feature statuses differ from 30 pending integrated scenarios. No functional coverage percentage inferred from test counts."
+  },
+  "defects": {
+    "locallyReproducedAndCorrected": ["DEF-006", "DEF-007"],
+    "potentialUnconfirmed": ["RISK-FIN-RLS-001"],
+    "postgresP0Reproduced": 0
+  },
+  "classifications": {
+    "FINANCIAL_CONCURRENCY": "BLOCKED",
+    "PAYMENT_IDEMPOTENCY": "PARTIAL",
+    "PAYMENT_REVERSALS": "PARTIAL",
+    "EXPENSE_CONCURRENCY": "BLOCKED",
+    "FINANCIAL_ROLLBACK": "PARTIAL",
+    "FINANCIAL_RLS": "PARTIAL",
+    "FINANCIAL_REPORTS": "PARTIAL",
+    "FINANCIAL_DATA_INTEGRITY": "PARTIAL",
+    "FUNCTIONAL_COVERAGE": "PARTIAL",
+    "INTEGRATED_QA": "BLOCKED",
+    "PRODUCTION_GO_NO_GO": "FAIL"
+  },
+  "safety": {
+    "commit": false,
+    "push": false,
+    "manualWorkflow": false,
+    "merge": false,
+    "deploy": false,
+    "cloudChanges": false,
+    "remoteMigrations": false,
+    "sharedDatabaseWrites": false,
+    "realPersonalDocuments": false,
+    "otherWorktreesModified": false,
+    "vercelBranchBlocksPreserved": ["apps/api/vercel.json", "apps/web/vercel.json"],
+    "pr": {
+      "number": 3,
+      "state": "OPEN",
+      "draft": true,
+      "head": "20646dc2de791df88933996531852133cc462027",
+      "base": "validation/gha-ci-20261029"
+    }
+  },
+  "artifactPolicy": "Only synthetic IDs/data are generated. No secrets or complete dotenv files read. File hashes exclude this manifest itself. Execution summaries are transcribed from tool outputs; no new PostgreSQL execution is implied.",
+  "files": [
+    {
+      "path": "PROJECT_CONTEXT.md",
+      "sha256": "0a9a14be21d4608fbb09bcc3a562455a5c98899cccaa760f4647cc25fa2cb355"
+    },
+    {
+      "path": "apps/api/src/documents/storage.service.test.ts",
+      "sha256": "7585041de1ac30e2c8bd1b62aaa6b3cb07b1a75e7ef4056f13899e2cf1cdad8e"
+    },
+    {
+      "path": "apps/api/src/documents/storage.service.ts",
+      "sha256": "729ffae6bae84fbb2a69afed43c13110759d8e97e0d0295cd3dcf9407bb6369c"
+    },
+    {
+      "path": "apps/api/src/finance/finance.service.ts",
+      "sha256": "e819508876bb66751d55cdbf9fc0554ee5ae2deaa3b271a7af8b526d1adbe13c"
+    },
+    {
+      "path": "apps/api/src/finance/renegotiation-integrity.test.ts",
+      "sha256": "047a64c49961c89c88c88c33c0b4c0a6ff22a0ae34d1129bb9840e49d58de849"
+    },
+    {
+      "path": "apps/web/e2e/integrated/financial-integrity.integrated.e2e.ts",
+      "sha256": "3da63c1dec1d289dcca8f3ab87fdcab3707d5ddcfbd5bb1d57bde9b7a190efec"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/DEFEITOS_ENCONTRADOS.md",
+      "sha256": "8e14da5659f71081fa301069c60b5ea49ee3eb9403a852feb6751aab99c7c637"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/ETAPA_2_9.md",
+      "sha256": "d79e8ec99a7cbac1956b4a00adc13894db8743bcfdf67fe7214a54505a39031a"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/ETAPA_3_FINANCEIRO.md",
+      "sha256": "e971fb9126dd45f9bbe765f1a784fc300ec2701fdd74d76ba4bb7b08f33fc5ab"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/FINANCEIRO_FUNCIONAL_ETAPA3.json",
+      "sha256": "a61da9db35fa16d50a6324f2a07ce549ab8b9f517ac0a48bc2be8642494a9312"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/INVENTARIO_FUNCIONAL_COMPLETO.json",
+      "sha256": "68f392facf9e750f18c9ff807b9282ca57cf5343023bc026101911e81dc4848a"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/MATRIZ_AUDITORIA_FUNCIONAL.csv",
+      "sha256": "84c2467cab6d16b6bf2875b3aa4ce4673851d287403fbc648de93f1a0ea8e49f"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/MATRIZ_AUDITORIA_FUNCIONAL.md",
+      "sha256": "6b4ae3e5b25badf828e9ef0c48aa9ded876ca18dcd2e7b70607b256b8bdd0d21"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/MATRIZ_FINANCEIRA_ETAPA3.csv",
+      "sha256": "4977bc44ec9cadf746b829f6d845b1362609b2c0760c0091077747414a40789c"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PLANO_CORRECOES.md",
+      "sha256": "2f246d7685279d6dc2976efeb08061d6d4642536da8a4a0db000c2a91d6fef47"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PROGRESSO.md",
+      "sha256": "b17429cec1b7d938836e046e55e2bd82da3c4c6c5ff65b0b121066cf17640df1"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/PROPOSTA_RLS_FINANCEIRO_ETAPA3.md",
+      "sha256": "3a4e63474e9e37820c321a1a54c046a36b0369fdaf33ee757ba7c145e285536e"
+    },
+    {
+      "path": "docs/auditoria-2026-11-04/evidencias-etapa3/playwright-list-only.json",
+      "sha256": "63f8a014e173f92d1ec1e9b7dd8ca375106cfa1626bf8a32bcce84d3829057d5"
+    },
+    {
+      "path": "tools/qa/README.md",
+      "sha256": "a90e53adeae099ad0b4a313d5ce7801d0389688bdc6b6cece61000d60b5e75c1"
+    },
+    {
+      "path": "tools/qa/catalog-financial-audit.mjs",
+      "sha256": "ad30c21c6d9e07359bb7c5ac66bc31a1c2017d3a782f1b6f320942357055465d"
+    },
+    {
+      "path": "tools/qa/financial-integrity-ci.mjs",
+      "sha256": "e07864e79d53a4d4b91f8ac204365b88d48140015030ccabdabbec92999ac20f"
+    },
+    {
+      "path": "tools/qa/financial-integrity-support.mjs",
+      "sha256": "aca10e3c224b84b80e1896088f11a5d22b975a8593396e883c667723125d5fe7"
+    },
+    {
+      "path": "tools/qa/financial-integrity-support.test.mjs",
+      "sha256": "0a1b521bcdfeed6303d79c9bcd01b8d830b8d95b22750ed4d329f89bc02e6be4"
+    }
+  ]
+}

@@ -152,6 +152,7 @@ export function ClientManagement({
   };
 
   const useIdentification = (identified: IdentificationData, file: File) => {
+    let usedData = false;
     const accept = (label: string, current: string, suggested?: string) =>
       Boolean(
         suggested &&
@@ -161,21 +162,34 @@ export function ClientManagement({
             `${label}: há um conflito.\nValor atual: ${current}\nValor extraído: ${suggested}\nSubstituir pelo valor extraído? Cancele para manter o atual.`,
           )),
       );
-    if (accept('Nome', displayName, identified.name)) setDisplayName(identified.name!);
+    if (accept('Nome', displayName, identified.name)) {
+      setDisplayName(identified.name!);
+      usedData = true;
+    }
     if (accept('CPF', taxId.replace(/\D/g, ''), identified.cpf)) {
       setClientType('PERSON');
       setAutoDetectedCompany(false);
       setTaxId(formatTaxIdField(identified.cpf!, 'PERSON'));
+      usedData = true;
     }
     const suggestedIdentity = identified.rg
       ? [identified.rg, identified.issuingAuthority].filter(Boolean).join(' · ')
       : undefined;
-    if (accept('RG e órgão expedidor', identityDocument, suggestedIdentity))
+    if (accept('RG e órgão expedidor', identityDocument, suggestedIdentity)) {
       setIdentityDocument(suggestedIdentity!);
-    if (accept('Data de nascimento', birthDate, identified.birthDate))
+      usedData = true;
+    }
+    if (accept('Data de nascimento', birthDate, identified.birthDate)) {
       setBirthDate(identified.birthDate!);
+      usedData = true;
+    }
     setPendingIdentityFile(file);
-    setScanNotice('Confira os dados preenchidos antes de concluir o cadastro.');
+    setScanNotice(
+      usedData
+        ? 'Confira os dados preenchidos antes de concluir o cadastro.'
+        : 'Os dados atuais foram preservados. A imagem continua selecionada para anexar.',
+    );
+    return usedData;
   };
 
   return (

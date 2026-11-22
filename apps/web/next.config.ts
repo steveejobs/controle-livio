@@ -103,7 +103,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   transpilePackages: ['@livio/ui', '@livio/shared'],
-  experimental: { optimizePackageImports: ['@livio/ui'] },
+  experimental: {
+    optimizePackageImports: ['@livio/ui'],
+    // Native page workers exhaust memory on the local Windows machine.
+    ...(process.platform === 'win32' ? { cpus: 1 } : {}),
+  },
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },

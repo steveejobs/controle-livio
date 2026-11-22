@@ -1,5 +1,28 @@
 # Continuidade da auditoria
 
+## 2026-11-22 — consolidação local
+
+Merge interrompido resolvido com backup verificado; candidata cumulativa até `33e760c`
+incorporada ao checkout principal. Preservados os demais worktrees. Corrigidos gateway HTTPS,
+teste HTTP CORS, Next 16.4.6 e bootstrap de metadados REC-X18. Builds API/web aprovados;
+451 testes unitários e 202 testes Node aprovados. Playwright com API simulada 42/42 PASS;
+TypeScript/lint/formato/Prisma e OCR compilado PASS. Recuperação real e ambiente TEST dependem de confirmação.
+Sem push, deploy ou aplicação de migrations. Estado e limites em `PROJECT_CONTEXT.md`.
+
+## Etapa 3.1 — Quality executado, P0 de escrita financeira confirmado
+
+Um commit/push autorizado publicou `bc9bc30101e4c92a51eeb676375d40d927ea34f1`, mesmos 24 arquivos do pacote corrigido, sobre `20646dc`. PR #3 aberta/draft. Quality PR `41887379143`, merge `455c3076792a7c9caae86e803d2e5b21377e5ae5` com base `5521a3f`: application PASS, synthetic-restore PASS, supabase-isolation FAIL. Vitest 284, Playwright simulado 35, focados 6/6 e completos 14 PASS + 1 orquestrador FAIL. Os 30 casos internos foram registrados: 28 PASS e duas falhas distintas.
+
+**DEF-008/P0**: RLS-WRITE confirmou UPDATE econômico direto de financeiro em payments/expenses por PostgREST. Pagamento CONFIRMED→REVERSED sem estorno e sem audit REVERSE; saldo derivado 75→100, estados PARTIALLY_PAID inconsistentes. Despesa DRAFT→PAID com approvedBy/At nulos. Prova somente descartável; nenhuma policy/migration alterada. **CEN-006/harness**: falta de justificativa e data futura impediram a entrada na transação; não homologar concorrência desse caso. Proposta de ajuste não aplicada está no diretório temporário do Quality.
+
+Concorrências de pagamentos (exceto CEN-006), estorno/correção, despesas, dez falhas/rollbacks e caixa/CSV passaram no escopo das evidências. DEF-006/007 PARTIAL para o conjunto completo de exigências: demais estados PostgreSQL e indisponibilidade real de remoção Storage ainda faltam. Catálogo atualizado: 28 funções, 3 FAIL/13 PARTIAL/12 NOT_EXECUTED; 213 candidatos intactos, sem percentual funcional fictício. Relatório: ETAPA_3_1_FINANCEIRO_INTEGRADO.md; provas: evidencias-etapa31/financial-stage3.json e QUALITY_41887379143.json.
+
+Publicação encerrada. Não fazer segundo commit/push ou workflow manual. Próxima ação concreta: revisar/autorização da correção da fronteira de escrita financeira, sem enfraquecer RLS-WRITE; incorporar correção de CEN-006 na futura rodada consolidada. Depois retomar RG/CIN/CNH/OCR/persistência. Nenhum deploy, merge ou mudança cloud; outros worktrees/conflitos preservados. Production NO-GO.
+
+## Etapa 3 — mudanças locais sobre 20646dc, ainda sem CI
+
+O Quality 41850303146 encerrou a etapa 2.9 com três jobs PASS, 6/6 focados e 14/14 completos em 360/1440; relatório preservado em ETAPA_2_9.md. Etapa 3 usa o mesmo HEAD versionado com mudanças locais não publicadas. Dois defeitos reproduzidos e corrigidos em domínio/adaptador: DEF-006 renegociação de cancelado/baixado; DEF-007 remoção Storage que ignorava erro do SDK. Vitest 284/284 e 16 testes de segurança/contrato do harness passaram. Os 30 cenários PostgreSQL novos estão preparados e BLOCKED por ausência de Docker/servidor local e autorização para publicação. Há risco potencial P0 de escrita financeira direta via RLS, ainda não reproduzido, com teste negativo preparado; não prometer CI verde nem afrouxá-lo. Catálogo financeiro: 71 candidatos vinculados a 28 funções; 16 PARTIAL e 12 NOT_EXECUTED; total global continua indeterminado. Ver ETAPA_3_FINANCEIRO.md, MATRIZ_FINANCEIRA_ETAPA3.csv e VALIDACAO_ETAPA3.json. Próximo passo: revisão do diff consolidado e autorização específica de commit/push apenas para runner descartável. Não aplicar migrations ou usar Supabase compartilhado. Checkout principal e conflitos preservados.
+
 ## Etapa 2.5 — CI divergente, DEF-005 HTTP comprovado localmente
 
 Branch remota `f07071a`, PR #3 e `refs/pull/3/head` ainda `422bac5`, merge sintético antigo; zero check suite/run do SHA novo. PR draft sem conflito de merge. Incidente GitHub foi resolvido às 11:50 UTC, mas a PR seguia antiga às 12:15; causa individual ainda hipótese. Workflow Quality da branch tem `workflow_dispatch`, mas o default `main` não, e os jobs integrados seriam pulados num dispatch da branch. Nenhum disparo executado. Vercel API/web públicos continuam em versões antigas, sem deployment de `f07071a`; 404 de GET recibos é ausência da rota na API antiga, enquanto o controller GET está registrado na candidata. Worktree destacado `controle-livio-audit-stage25-local` recebeu extração pequena da configuração CORS e sete regressões HTTP: callback antigo produziu 2 falhas por 500 em 6 cenários; corrigido 7/7 PASS após acrescentar guard sintético. Suíte completa de 282 Vitest, format, TypeScript, Prisma e builds passou antes do sétimo cenário; lint e TypeScript API repetidos depois PASS. Nenhum commit/push/deploy. TEST isolado e ClamAV hospedado continuam sem prova. Ver `ETAPA_2_5.md`; próximo passo é obter autorização específica para sincronizar a mesma PR, se persistir a divergência. Production NO-GO.

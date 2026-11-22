@@ -1,5 +1,6 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { saveDiagnostics } from './supabase-start-diagnostics.mjs';
 
 const loopbackHosts = new Set(['127.0.0.1', 'localhost', '::1']);
 const smtpCapture = process.argv.includes('--smtp-capture');
@@ -48,10 +49,23 @@ function runSupabase(args, capture = false) {
   const result = spawnSync('npx', ['supabase', ...args], {
     encoding: 'utf8',
     windowsHide: true,
-    stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'ignore',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    maxBuffer: 16 * 1024 * 1024,
     env: process.env,
   });
   if (result.error || result.status !== 0) {
+    try {
+      saveDiagnostics(
+        args[0] === 'start'
+          ? 'start-failure'
+          : args.includes('reset')
+            ? 'migration-seed-failure'
+            : 'status-failure',
+        result,
+      );
+    } catch {
+      console.error('Diagnóstico sanitizado indisponível; saída bruta permanece omitida.');
+    }
     // CLI output is deliberately withheld because `start` can print generated local keys.
     fail(`npx supabase ${args[0]} terminou com código ${result.status ?? 'desconhecido'}.`);
   }
@@ -59,6 +73,7 @@ function runSupabase(args, capture = false) {
 }
 
 runSupabase(['start', '--exclude', serviceExcludes]);
+saveDiagnostics('started', { status: 0 });
 const status = runSupabase(['status', '--output', 'env'], true);
 const values = new Map();
 for (const line of status.split(/\r?\n/)) {
@@ -142,6 +157,7 @@ for (const [key, value] of Object.entries(environment)) {
 // Explicit --local avoids the linked/remote database target. This recreates only the runner's
 // disposable Postgres and applies every versioned migration plus the synthetic seed.
 runSupabase(['--yes', 'db', 'reset', '--local']);
+saveDiagnostics('ready', { status: 0 });
 console.log('Supabase local pronto: Postgres, Auth, PostgREST e Storage em loopback.');
 console.log('Migrations versionadas e seed sintético aplicados somente com --local.');
 console.log(

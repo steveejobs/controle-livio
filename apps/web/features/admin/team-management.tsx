@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { useApiData } from '../shared/use-api-data';
+import { StorageRecoveryPanel } from './storage-recovery-panel';
 
 type Role = { id: string; key: string; name: string };
 type User = {
@@ -436,6 +437,9 @@ export function TeamManagement({
         <button className="secondary" disabled={busy} onClick={() => void reconcile()}>
           Atualizar permissões padrão
         </button>
+      )}
+      {isAdministrator && permissions.includes('storage_recovery:view') && (
+        <StorageRecoveryPanel canManage={permissions.includes('storage_recovery:manage')} />
       )}
     </section>
   );

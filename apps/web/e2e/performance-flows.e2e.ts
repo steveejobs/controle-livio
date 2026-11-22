@@ -49,6 +49,8 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
     } else if (pathname === '/v1/clients') {
       requests.clients += 1;
       body = { items: [], total: 0 };
+    } else if (pathname === '/v1/notifications/push/config' && method === 'GET') {
+      body = { enabled: false, subscriptions: [] };
     } else if (pathname === '/v1/notifications') {
       body = { items: [], unread: 0 };
     } else if (pathname === '/v1/notifications/reconcile' && method === 'POST') {

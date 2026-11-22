@@ -67,6 +67,8 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     SMTP_USER: z.string().min(1).optional(),
     SMTP_PASSWORD: z.string().min(1).optional(),
     SMTP_FROM: z.string().email().optional(),
+    STORAGE_RECOVERY_DISPATCH_ENABLED: booleanEnvironmentValue.default(false),
+    STORAGE_RECOVERY_DELETE_ENABLED: booleanEnvironmentValue.default(false),
     CRON_SECRET: z.string().min(32).optional(),
     VAPID_PUBLIC_KEY: z.string().min(20).optional(),
     VAPID_PRIVATE_KEY: z.string().min(20).optional(),
@@ -77,14 +79,22 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     API_RATE_LIMIT_WRITE: z.coerce.number().int().min(1).max(10_000).default(60),
   })
   .superRefine((environment, context) => {
+    if (Boolean(environment.CLAMAV_GATEWAY_URL) !== Boolean(environment.CLAMAV_GATEWAY_TOKEN)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CLAMAV_GATEWAY_URL'],
+        message: 'O gateway ClamAV exige URL HTTPS e token configurados em conjunto',
+      });
+    }
     if (
       ['staging', 'production'].includes(environment.SUPABASE_ENVIRONMENT ?? '') &&
-      !environment.CLAMAV_HOST
+      !environment.CLAMAV_HOST &&
+      !environment.CLAMAV_GATEWAY_URL
     ) {
       context.addIssue({
         code: 'custom',
         path: ['CLAMAV_HOST'],
-        message: 'CLAMAV_HOST é obrigatório para liberar uploads fora do ambiente local de teste',
+        message: 'Configure ClamAV por host ou gateway HTTPS autenticado antes de liberar uploads',
       });
     }
     const vapidConfigured = Boolean(
