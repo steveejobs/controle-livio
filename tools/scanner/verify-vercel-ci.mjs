@@ -31,7 +31,10 @@ const docker = (args) => {
     maxBuffer: 10 * 1024 * 1024,
   });
   if (result.status !== 0)
-    throw new Error('Owned container operation failed: ' + (result.stderr ?? '').slice(-2000));
+    throw new Error(
+      'Owned container operation failed: ' +
+        ((result.stdout ?? '') + (result.stderr ?? '')).slice(-2000),
+    );
   return result.stdout.trim();
 };
 const check = (name) => {
@@ -110,12 +113,20 @@ try {
   assert.equal((await scan(Buffer.alloc(4 * 1024 * 1024 + 1))).status, 413);
   check('real ClamAV detects EICAR and accepts clean files; auth and size enforced');
   // Exercise the operational refresh without modifying signed vendor databases.
-  const pid = docker(['exec', name, 'pgrep', '-x', 'clamd']);
+  const enginePid = () =>
+    docker([
+      'exec',
+      name,
+      'node',
+      '-e',
+      `const fs=require('node:fs');const pid=fs.readdirSync('/proc').find(p=>{if(!/^\d+$/.test(p))return false;try{return fs.readFileSync('/proc/'+p+'/comm','utf8').trim()==='clamd';}catch{return false;}});if(!pid)throw Error('Engine process missing');process.stdout.write(pid);`,
+    ]);
+  const pid = enginePid();
   docker(['kill', '--signal', 'USR1', name]);
   const afterUpdate = await readyScan();
   assert.deepEqual(afterUpdate.body, { verdict: 'clean' });
   assert.deepEqual((await scan(eicar)).body, { verdict: 'infected' });
-  assert.notEqual(docker(['exec', name, 'pgrep', '-x', 'clamd']), pid);
+  assert.notEqual(enginePid(), pid);
   check('real FreshClam check and engine restart remain within the memory limit');
   report.peakMemoryBytes = Number(docker(['exec', name, 'cat', '/sys/fs/cgroup/memory.peak']));
   assert(report.peakMemoryBytes > 0 && report.peakMemoryBytes <= report.memoryLimitBytes);
