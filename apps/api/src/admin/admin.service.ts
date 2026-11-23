@@ -1,4 +1,9 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { Prisma } from '@livio/db';
 import {
   initialRolePermissions,
@@ -7,6 +12,7 @@ import {
   type SystemRoleKey,
 } from '@livio/shared';
 import { SupabaseAdminService } from '../auth/supabase-admin.service';
+import { hasValidMembershipScope, requiresClientBinding } from '../auth/client-scope';
 import { AuditService } from '../common/audit.service';
 import { PrismaService } from '../prisma/prisma.service';
 import type {
@@ -48,16 +54,19 @@ export class AdminService {
     });
     if (roles.length !== new Set(input.roleIds).size)
       throw new NotFoundException('Papel não encontrado');
+    if (!roles.length || (requiresClientBinding(roles.map((role) => role.key)) && !input.clientId))
+      throw new BadRequestException('O perfil Cliente exige vínculo com um cliente da organização');
     if (
       input.clientId &&
       !(await this.prisma.client.findFirst({
-        where: { id: input.clientId, organizationId: actor.organizationId },
+        where: { id: input.clientId, organizationId: actor.organizationId, deletedAt: null },
       }))
     )
       throw new NotFoundException('Cliente não encontrado');
-    const authUser = await this.supabaseAdmin.invite(input.email, input.fullName);
+    const invitation = await this.supabaseAdmin.invite(input.email, input.fullName, input.delivery);
+    const authUser = invitation.user;
     try {
-      return await this.prisma.$transaction(async (transaction) => {
+      const user = await this.prisma.$transaction(async (transaction) => {
         await transaction.profile.upsert({
           where: { id: authUser.id },
           create: { id: authUser.id, email: input.email, fullName: input.fullName },
@@ -116,10 +125,42 @@ export class AdminService {
         });
         return user;
       });
+      return {
+        ...user,
+        ...(invitation.invitationUrl ? { invitationUrl: invitation.invitationUrl } : {}),
+      };
     } catch (error) {
-      await this.supabaseAdmin.removeUser(authUser.id);
+      // Never remove an Auth identity that already belongs to another organization.
+      if ((await this.prisma.organizationMember.count({ where: { profileId: authUser.id } })) === 0)
+        await this.supabaseAdmin.removeUser(authUser.id);
       throw error;
     }
+  }
+
+  async createRecoveryLink(actor: AuthenticatedActor, userId: string) {
+    const user = await this.prisma.user.findFirst({
+      where: {
+        id: userId,
+        organizationId: actor.organizationId,
+        status: 'ACTIVE',
+        deletedAt: null,
+      },
+      select: { id: true, email: true },
+    });
+    if (!user) throw new NotFoundException('Usuário ativo não encontrado');
+    const recoveryUrl = await this.supabaseAdmin.recoveryLink(user.email);
+    await this.prisma.$transaction(async (transaction) => {
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'UPDATE',
+        resource: 'user',
+        resourceId: user.id,
+        metadata: { recoveryLinkIssued: true },
+      });
+    });
+    return { recoveryUrl };
   }
 
   listUsers(actor: AuthenticatedActor) {
@@ -144,6 +185,18 @@ export class AdminService {
     });
     if (!before) throw new NotFoundException('Usuário não encontrado');
     return this.prisma.$transaction(async (transaction) => {
+      if (input.status === 'ACTIVE') {
+        const membership = await transaction.organizationMember.findUnique({
+          where: { userId },
+          include: { roles: { include: { role: true } }, client: true },
+        });
+        if (
+          !membership ||
+          membership.organizationId !== actor.organizationId ||
+          !hasValidMembershipScope(membership)
+        )
+          throw new BadRequestException('Corrija o vínculo do perfil antes de ativar o usuário');
+      }
       const user = await transaction.user.update({
         where: { id: userId },
         data: {

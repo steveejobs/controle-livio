@@ -149,6 +149,23 @@ export function PushNotificationSettings() {
     }
   };
 
+  const test = async () => {
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await api('/notifications/push/test', { method: 'POST' });
+      setMessage('Notificação de teste enviada. Confira os avisos do celular ou computador.');
+    } catch (error) {
+      setMessage(
+        error instanceof ApiError
+          ? error.message
+          : 'Não foi possível enviar o teste. Confira as permissões do navegador.',
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="surface notification-push" aria-labelledby="notification-push-title">
       <div>
@@ -181,9 +198,14 @@ export function PushNotificationSettings() {
         <p className="notification-push__setup">A configuração do servidor ainda está pendente.</p>
       )}
       {state === 'on' && (
-        <button className="secondary" disabled={busy} onClick={() => void disable()}>
-          {busy ? 'Desativando…' : 'Desativar neste dispositivo'}
-        </button>
+        <div className="form-actions">
+          <button className="primary" disabled={busy} onClick={() => void test()}>
+            Enviar notificação de teste
+          </button>
+          <button className="secondary" disabled={busy} onClick={() => void disable()}>
+            {busy ? 'Desativando…' : 'Desativar neste dispositivo'}
+          </button>
+        </div>
       )}
     </section>
   );

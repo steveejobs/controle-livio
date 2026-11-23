@@ -17,11 +17,11 @@ organização, mas nunca concede acesso sem vínculo ativo. Não existe sessão/
 | `/matters`                      | listar/pesquisar, criar, consultar, editar, arquivar, incluir partes e mover entre etapas                                  |
 | `/pipelines`                    | listar/criar pipelines e configurar etapas                                                                                 |
 | `/finance`                      | contratos, catálogo reutilizável de serviços, recebíveis/parcelas, pagamentos, estornos, ajustes, renegociações e despesas |
-| `/documents`                    | upload, nova versão, metadados e URL assinada temporária                                                                   |
+| `/documents`                    | upload, modelos preenchidos, configurações do escritório, versões, metadados e URL assinada temporária                     |
 | `/work`                         | notas internas, mensagens ao cliente, tarefas/comentários/lembretes e eventos                                              |
 | `/reports`                      | vencimentos, recebimentos, competência, vencidos, aging, caixa, parciais, contratos e receitas                             |
 | `/reports/:report/export.csv`   | exportação CSV protegida contra fórmula                                                                                    |
-| `/notifications`                | alertas de vencimento, listagem pessoal e marcação de leitura                                                              |
+| `/notifications`                | alertas de vencimento e audiência, listagem pessoal e marcação de leitura                                                  |
 | `/admin`                        | usuários, papéis, convites, estados e reconciliação dos papéis de sistema                                                  |
 | `/audit`                        | consulta paginada de auditoria                                                                                             |
 | `/health/live`, `/health/ready` | processo e conectividade PostgreSQL                                                                                        |
@@ -35,11 +35,27 @@ serviço reutilizável, exige `contracts:create`, impede duplicatas por nome nor
 auditoria. O contrato recebe a lista marcada em `terms.services`; `service_name` conserva o primeiro
 serviço marcado para manter a classificação principal dos relatórios.
 
+`POST /finance/contracts` aceita `hearings` quando o contrato inclui audiência. Cada item informa
+`startsAt`, `location` opcional e até oito intervalos `reminderMinutes`; os padrões são 60, 30 e 10
+minutos. Sem audiência, envie uma lista vazia ou omita o campo. A API cria o evento `HEARING` na mesma
+transação, usa duração padrão de uma hora e programa os alertas internos para quem cadastrou o
+contrato. Horários de aviso anteriores à criação não são reprogramados.
+
+`POST /calendar-events` também agenda os alertas padrão quando `type` é `HEARING`; pode receber
+`reminderMinutes` para personalizá-los. Ao editar o horário na Agenda, os avisos ainda pendentes são
+recalculados. Marcar como realizada/cancelada ou trocar o tipo remove avisos que ainda não foram
+enviados.
+
 As rotas exatas, schemas e códigos de resposta devem ser consultados no OpenAPI gerado pelo código.
 
 `GET /v1/notifications/cron` é reservado ao agendador da infraestrutura. A rota exige o Bearer de
 `CRON_SECRET`, não aceita sessão de usuário como substituto e reconcilia parcelas e lembretes de
 tarefas por destinatário, organização e cliente vinculado.
+
+`GET /v1/notifications/hearing-alerts/cron` usa o mesmo segredo e executa a cada cinco minutos para
+publicar os alertas de audiência devidos na central de notificações e enviar push aos dispositivos
+inscritos do responsável. O horário agendado é preciso; a entrega pode atrasar até cinco minutos. A
+frequência exige Vercel Pro. Alertas futuros não aparecem como lidos/não lidos antes do envio.
 
 ## Financeiro
 
@@ -56,6 +72,18 @@ Pagamento pode ter zero ou várias alocações. A soma não pode ultrapassar o p
 ## Documentos
 
 Upload usa `multipart/form-data`, arquivo e metadados validados. Tipos aceitos: PDF, DOCX, PNG e JPEG; o tamanho máximo vem de `MAX_DOCUMENT_SIZE_MB`. URLs assinadas expiram em 300 segundos. Usuário com perfil cliente só acessa documento `CLIENT` ligado ao seu próprio `clientId`.
+
+`POST /documents/generate` recebe `clientId`, `category` (`CONTRATO_HONORARIOS`, `PROCURACAO` ou
+`HIPOSSUFICIENCIA`) e, para contrato de honorários, `contractId`. Exige `documents:create` e
+`clients:view`; o contrato também exige `contracts:view` e `receivables:view`. A API monta um DOCX,
+salva a versão como rascunho interno no bucket privado e registra auditoria. Ao gerar de novo o mesmo
+modelo para o mesmo cliente/contrato, cria outra versão do documento lógico.
+
+`GET/PATCH /documents/office-settings` é exclusivo do Administrador com `organization:view` ou
+`organization:update`, respectivamente. Os dados profissionais ficam em `organizations.settings`, sem
+migration; a atualização preserva as demais configurações e a auditoria não replica instruções de
+pagamento. Os modelos exigem endereço completo do cliente; para pessoa jurídica, nome e CPF do
+representante legal também são necessários.
 
 ## Relatórios e CSV
 
@@ -86,3 +114,25 @@ Erros seguem o envelope central com status, código/mensagem segura, caminho, ti
 ## Push notifications
 
 `GET /notifications/push/config` returns the public VAPID key and the current user's device subscriptions. `POST /notifications/push-subscriptions` registers the browser endpoint; `DELETE` on the same route removes it. These routes require `notifications:update` and are scoped to the authenticated organization/user. Push is sent only when all VAPID settings are present. Browser permission is granted separately on each device.
+
+## Modelos editáveis
+
+`GET /documents/templates` devolve os três textos padrão ou personalizados e a lista de variáveis
+disponíveis, com nome, explicação e exemplo. `PATCH /documents/templates` recebe `category` e
+`content`; bloqueia variáveis desconhecidas/incompletas e a remoção dos dados essenciais de cada
+documento. `DELETE /documents/templates/:category` restaura somente aquele texto padrão. Essas rotas
+exigem papel oficial Administrador e `organization:view`/`organization:update`. O texto é salvo em
+`organizations.settings.legalDocuments.templates`; altera novas emissões, sem regravar versões já
+emitidas.
+
+## Atividades administrativas
+
+`GET /audit-logs` combina alterações auditadas, acessos ao sistema e abertura de módulos/fichas.
+Aceita `page`, `pageSize`, `category` (`all`, `changes`, `access`, `navigation`), `actorUserId`,
+`search`, `dateFrom` e `dateTo`. `GET /audit-logs/actors` fornece os usuários da organização para o
+filtro. As duas consultas exigem o papel oficial Administrador e `audit:view`; o retorno traduz a
+ação e os campos alterados, sem expor valores anteriores/posteriores.
+
+`POST /audit-logs/module-views` registra a abertura de uma área depois de conferir a permissão
+correspondente. `POST /audit-logs/client-views` registra a ficha aberta depois de conferir
+`clients:view` e o escopo da organização/cliente. Ambos usam a organização da sessão autenticada.

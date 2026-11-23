@@ -1,0 +1,18 @@
+﻿<!doctype html>
+<html lang="pt-BR">
+  <meta charset="utf-8" /><title>Convite para o Lívio Jurídico</title>
+  <body>
+    <h1>Lívio Jurídico</h1>
+    <p>Você recebeu um convite para acessar o escritório.</p>
+    <p>
+      <a
+        href="{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&amp;type=invite&amp;next=/reset-password"
+        >Aceitar convite e definir senha</a
+      >
+    </p>
+    <p>
+      Este link é pessoal, temporário e de uso único. Se não esperava este convite, ignore esta
+      mensagem.
+    </p>
+  </body>
+</html>

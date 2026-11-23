@@ -12,7 +12,7 @@ Além das foreign keys, triggers comparam o `organization_id` de cada referênci
   `organization_member_roles`, `roles`, `permissions` e `role_permissions` formam membership e RBAC.
   `users` permanece como identidade operacional por organização para compatibilidade com as FKs do
   domínio. `sessions` e `password_reset_tokens` são legado inativo, não autenticação paralela.
-- `clients` mantém CPF/CNPJ normalizado; `client_contacts` guarda contatos. Um usuário cliente aponta para um único cliente do mesmo tenant.
+- `clients` mantém CPF/CNPJ normalizado; `client_contacts` guarda contatos. Qualificação civil e representante legal para geração documental ficam nas chaves estruturadas `clients.custom_fields.legalIdentity` e `clients.custom_fields.legalRepresentative`, usando a coluna JSON já existente. Um usuário cliente aponta para um único cliente do mesmo tenant.
 - `matters` contém prioridade, responsáveis jurídico/secretaria, próxima ação, etiquetas, origem/perda e número processual normalizado. Em cobranças, `custom_fields.collectionObjective` guarda a descrição de um objetivo explicitamente marcado como sem valor financeiro; isso não altera o ledger.
 - `pipelines` e `pipeline_stages` configuram Comercial, Jurídico e Cobrança. `matter_stage_history` é imutável.
 
@@ -35,7 +35,12 @@ Relatórios distinguem vencimento, recebimento/caixa e competência. Receita por
 
 `documents` é o objeto lógico e pode vincular cliente, processo, parcela ou pagamento. `document_versions` é append-only e guarda metadados do objeto privado, nunca binário.
 
-`internal_notes` e `client_messages` são tabelas distintas: conteúdo interno não pode ser publicado pela troca de um flag. Tarefas usam `tasks`, `task_comments`, `task_reminders` e `task_history`; agenda usa `calendar_events` com tipo audiência, reunião, prazo jurídico ou outro e recorrência básica.
+Os modelos de contrato, procuração e hipossuficiência geram DOCX como rascunhos internos. Nova emissão
+atualiza o documento lógico criando outra linha em `document_versions`. Dados profissionais usados no
+cabeçalho e assinatura são isolados em `organizations.settings.legalDocuments`; não exigem nova coluna
+nem migration.
+
+`internal_notes` e `client_messages` são tabelas distintas: conteúdo interno não pode ser publicado pela troca de um flag. Tarefas usam `tasks`, `task_comments`, `task_reminders` e `task_history`; agenda usa `calendar_events` com tipo audiência, reunião, prazo jurídico ou outro e recorrência básica. Avisos de audiência programados ficam em `notifications` com `scheduled_at` e metadados do evento/intervalo; não exigem tabela ou migration adicional.
 
 `notifications`, `audit_logs` e `activity_events` suportam entrega, evidência técnica e linha do tempo. Auditoria, histórico de etapas/tarefas, versões e estornos são protegidos contra update/delete no banco.
 

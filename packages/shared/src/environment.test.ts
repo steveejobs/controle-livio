@@ -18,6 +18,17 @@ const base = {
 };
 
 describe('Supabase environment boundary', () => {
+  it('caps document uploads below the Vercel function request limit', () => {
+    expect(parseApiEnvironment(base).MAX_DOCUMENT_SIZE_MB).toBe(4);
+    expect(() => parseApiEnvironment({ ...base, MAX_DOCUMENT_SIZE_MB: '5' })).toThrow();
+  });
+
+  it('keeps the production write and read rate limits at their normal defaults', () => {
+    const parsed = parseApiEnvironment(base);
+    expect(parsed.API_RATE_LIMIT_WRITE).toBe(60);
+    expect(parsed.API_RATE_LIMIT_READ).toBe(300);
+  });
+
   it('accepts a coherent Supabase project configuration', () => {
     expect(parseApiEnvironment(base).SUPABASE_PROJECT_REF).toBe('projectref123');
   });
@@ -49,10 +60,50 @@ describe('Supabase environment boundary', () => {
     expect(parsed.SUPABASE_LOCAL).toBe(true);
   });
 
+  it('requires a ClamAV host before staging or production can accept uploads', () => {
+    expect(() => parseApiEnvironment({ ...base, SUPABASE_ENVIRONMENT: 'staging' })).toThrow();
+    expect(
+      parseApiEnvironment({
+        ...base,
+        SUPABASE_ENVIRONMENT: 'staging',
+        CLAMAV_HOST: 'clamav.internal',
+      }).CLAMAV_HOST,
+    ).toBe('clamav.internal');
+  });
+
   it('parses explicit false boolean values without enabling proxy trust', () => {
     const parsed = parseApiEnvironment({ ...base, TRUST_PROXY: 'false', SMTP_SECURE: 'false' });
     expect(parsed.TRUST_PROXY).toBe(false);
     expect(parsed.SMTP_SECURE).toBe(false);
+  });
+
+  it('accepts an authenticated HTTPS scanner gateway in staging without a TCP host', () => {
+    const parsed = parseApiEnvironment({
+      ...base,
+      SUPABASE_ENVIRONMENT: 'staging',
+      CLAMAV_GATEWAY_URL: 'https://scanner.example.com/scan',
+      CLAMAV_GATEWAY_TOKEN: 'synthetic-scanner-token-with-at-least-32-characters',
+    });
+    expect(parsed.CLAMAV_HOST).toBeUndefined();
+    expect(parsed.CLAMAV_GATEWAY_URL).toBe('https://scanner.example.com/scan');
+  });
+
+  it('rejects incomplete and unsafe scanner gateway configuration', () => {
+    const token = 'synthetic-scanner-token-with-at-least-32-characters';
+    expect(() =>
+      parseApiEnvironment({ ...base, CLAMAV_GATEWAY_URL: 'https://scanner.example.com/scan' }),
+    ).toThrow();
+    expect(() => parseApiEnvironment({ ...base, CLAMAV_GATEWAY_TOKEN: token })).toThrow();
+    for (const url of [
+      'http://scanner.example.com/scan',
+      'https://user:password@scanner.example.com/scan',
+      'https://scanner.example.com/scan?token=secret',
+      'https://scanner.example.com/scan#secret',
+    ]) {
+      expect(() =>
+        parseApiEnvironment({ ...base, CLAMAV_GATEWAY_URL: url, CLAMAV_GATEWAY_TOKEN: token }),
+      ).toThrow();
+    }
   });
 
   it('accepts a complete VAPID push configuration', () => {
@@ -102,6 +153,7 @@ describe('Supabase environment boundary', () => {
         SUPABASE_ENVIRONMENT: 'staging',
         CORS_ORIGINS: 'https://app.example.com',
         SUPABASE_AUTH_REDIRECT_URL: 'https://app.example.com/auth/confirm',
+        CLAMAV_HOST: 'clamav.internal',
       }).SUPABASE_ENVIRONMENT,
     ).toBe('staging');
   });

@@ -6,8 +6,13 @@ import {
   HttpStatus,
   type ExceptionFilter,
 } from '@nestjs/common';
-import { Prisma } from '@livio/db';
+import { Prisma, postgresErrorCode } from '@livio/db';
 import type { ApiErrorBody } from '@livio/shared';
+
+export function sanitizeRequestPath(path: string): string {
+  const pathname = path.split('?', 1)[0] || '/';
+  return pathname.replace(/(\/public\/signatures\/)[^/?#]+(?=\/|$)/g, '$1[REDACTED]');
+}
 
 @Catch()
 export class ApiExceptionFilter implements ExceptionFilter {
@@ -31,17 +36,31 @@ export class ApiExceptionFilter implements ExceptionFilter {
       message: safeMessage,
       requestId,
       timestamp: new Date().toISOString(),
-      path: request.originalUrl,
+      path: sanitizeRequestPath(request.originalUrl),
     };
 
     if (status >= 500) {
-      request.log?.error({ err: exception, requestId }, 'Falha não tratada');
+      // Exceptions may embed signed URLs, SQL parameters and financial payloads.
+      // Keep correlation and classification without serializing untrusted error data.
+      const databaseCode =
+        exception instanceof Prisma.PrismaClientKnownRequestError ? exception.code : undefined;
+      const databaseState = postgresErrorCode(exception);
+      request.log?.error(
+        {
+          requestId,
+          statusCode: status,
+          ...(databaseCode ? { databaseCode } : {}),
+          ...(databaseState ? { databaseState } : {}),
+        },
+        'Falha não tratada',
+      );
     }
     response.status(status).json(body);
   }
 
   private messageFor(status: number, payload: string | object | undefined): string {
     if (status >= 500) return 'Ocorreu um erro interno';
+    if (status === HttpStatus.PAYLOAD_TOO_LARGE) return 'A requisição excede o limite de upload.';
     if (typeof payload === 'string') return payload;
     if (payload && 'message' in payload) {
       const message = payload.message;
@@ -56,6 +75,15 @@ export class ApiExceptionFilter implements ExceptionFilter {
 
   private databaseError(exception: unknown): { status: number; message: string } | undefined {
     if (!(exception instanceof Prisma.PrismaClientKnownRequestError)) return undefined;
+
+    if (
+      exception.code === 'P2010' &&
+      ['40001', '40P01'].includes(postgresErrorCode(exception) ?? '')
+    )
+      return {
+        status: HttpStatus.CONFLICT,
+        message: 'Os dados mudaram durante a operação. Atualize a tela e tente novamente.',
+      };
 
     switch (exception.code) {
       case 'P2002':

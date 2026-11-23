@@ -5,8 +5,10 @@ export type Client = {
   type: 'PERSON' | 'COMPANY';
   email?: string;
   phone?: string;
+  photoStorageKey?: string | null;
   taxIdNormalized?: string;
   source?: string;
+  customFields?: Record<string, unknown>;
   address?: {
     street?: string;
     number?: string;
@@ -47,7 +49,9 @@ export type ClientOverview = {
     receivables: Array<{
       id: string;
       reference: string;
+      description: string;
       status: string;
+      contractId?: string | null;
       originalAmount: string;
       currency: string;
       dueDate: string;
@@ -76,6 +80,7 @@ export type ClientOverview = {
     id: string;
     title: string;
     category?: string;
+    contractId?: string | null;
     visibility: string;
     updatedAt: string;
   }>;

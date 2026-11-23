@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
 
 const required = (key) => {

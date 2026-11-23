@@ -10,6 +10,7 @@ export const createUserSchema = z.object({
   fullName: z.string().trim().min(2).max(200),
   clientId: z.string().uuid().optional(),
   roleIds: z.array(z.string().uuid()).min(1).max(20),
+  delivery: z.enum(['LINK', 'EMAIL']).default('LINK'),
 });
 
 export const userStatusSchema = z.object({ status: z.enum(['ACTIVE', 'SUSPENDED', 'ARCHIVED']) });

@@ -1,9 +1,18 @@
 node_modules/
 .next/
+apps/web/public/ocr/
 dist/
 coverage/
 playwright-report/
 test-results/
+.tmp/
+integrated-test-results/
+integrated-playwright-report*.json
+/screenshots/
+/traces/
+/reports/
+/tools/scanner/scanner.env
+docs/auditoria-*/evidencias-*/
 __pycache__/
 *.py[cod]
 *.tsbuildinfo
@@ -19,6 +28,7 @@ chaves
 .vscode/
 packages/db/prisma/dev.db*
 packages/db/prisma/generated/
+packages/db/src/generated/
 supabase/.branches/
 supabase/.temp/
 

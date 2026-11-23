@@ -1,0 +1,50 @@
+name: Scanner deployment package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - tools/scanner/**
+      - .github/workflows/scanner-package.yml
+      - apps/api/src/documents/scanner-https.ts
+  push:
+    branches: [main]
+    paths:
+      - tools/scanner/**
+      - .github/workflows/scanner-package.yml
+      - apps/api/src/documents/scanner-https.ts
+
+permissions:
+  contents: read
+
+jobs:
+  scanner-package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/scanner_ci
+      SCANNER_PACKAGE_CI: disposable
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:api
+      - run: node --test tools/scanner/signature-header.test.mjs
+      - name: Verify real packaged scanner, HTTPS, authentication and fail-closed recovery
+        run: node tools/scanner/verify-package-ci.mjs
+      - name: Verify Vercel container with Hobby memory and scratch limits
+        run: node tools/scanner/verify-vercel-ci.mjs
+      - name: Preserve only the sanitized package summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-package-summary
+          path: |
+            ${{ runner.temp }}/scanner-package-summary.json
+            ${{ runner.temp }}/scanner-vercel-summary.json
+          if-no-files-found: error

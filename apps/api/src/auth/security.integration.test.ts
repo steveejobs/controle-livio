@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  Injectable,
   Module,
   Post,
   type CanActivate,
@@ -16,7 +15,6 @@ import type { RequestWithActor } from '../common/request-with-actor';
 import { PermissionGuard } from './permission.guard';
 import { RequirePermission } from './require-permission.decorator';
 
-@Injectable()
 class IntegrationActorGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const requestWithActor = context.switchToHttp().getRequest<RequestWithActor>();
@@ -31,23 +29,37 @@ class IntegrationActorGuard implements CanActivate {
   }
 }
 
-@Controller('integration-security')
 class IntegrationController {
-  @Get()
-  @RequirePermission('clients:view')
   read() {
     return { ok: true };
   }
 
-  @Post()
-  @RequirePermission('clients:create')
   mutate() {
     return { ok: true };
   }
 }
 
-@Module({ controllers: [IntegrationController] })
 class IntegrationModule {}
+
+const controllerPrototype = IntegrationController.prototype;
+Get()(controllerPrototype, 'read', Object.getOwnPropertyDescriptor(controllerPrototype, 'read')!);
+RequirePermission('clients:view')(
+  controllerPrototype,
+  'read',
+  Object.getOwnPropertyDescriptor(controllerPrototype, 'read')!,
+);
+Post()(
+  controllerPrototype,
+  'mutate',
+  Object.getOwnPropertyDescriptor(controllerPrototype, 'mutate')!,
+);
+RequirePermission('clients:create')(
+  controllerPrototype,
+  'mutate',
+  Object.getOwnPropertyDescriptor(controllerPrototype, 'mutate')!,
+);
+Controller('integration-security')(IntegrationController);
+Module({ controllers: [IntegrationController] })(IntegrationModule);
 
 describe('pipeline HTTP de segurança', () => {
   let app: INestApplication;

@@ -9,9 +9,11 @@ import {
   percentageToRate,
 } from './contract-values';
 import { formatDate, formatMoney } from '../shared/format';
+import { ClientSelectField } from '../shared/client-select-field';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 import { ServiceSelection } from './service-selection';
+import { ContractHearings, type ContractHearingDraft } from './contract-hearings';
 
 type Client = { id: string; displayName: string };
 type Contract = {
@@ -31,15 +33,19 @@ type Contract = {
 };
 
 export function Contracts({ permissions }: { permissions: readonly string[] }) {
+  const canViewClients = permissions.includes('clients:view');
+  const [showForm, setShowForm] = useState(false);
   const contracts = usePaginatedData<Contract>('/finance/contracts');
   const clients = usePaginatedData<Client>(
-    permissions.includes('clients:view') ? '/clients' : undefined,
+    canViewClients && showForm ? '/clients' : undefined,
     100,
   );
-  const [showForm, setShowForm] = useState(false);
+  const clientOptionsReady =
+    canViewClients && Boolean(clients.data?.items.length) && !clients.loading && !clients.error;
   const [feedback, setFeedback] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [feeModel, setFeeModel] = useState('FIXED');
+  const [contractHearings, setContractHearings] = useState<ContractHearingDraft[]>([]);
   const canCreate = permissions.includes('contracts:create');
 
   const create = async (event: FormEvent<HTMLFormElement>) => {
@@ -62,6 +68,15 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
           serviceNames: form
             .getAll('serviceNames')
             .filter((value): value is string => typeof value === 'string'),
+          hearings: contractHearings.map((hearing) => {
+            const startsAt = new Date(hearing.startsAt);
+            return {
+              startsAt: startsAt.toISOString(),
+              endsAt: new Date(startsAt.getTime() + 60 * 60_000).toISOString(),
+              location: hearing.location.trim() || undefined,
+              reminderMinutes: hearing.reminderMinutes,
+            };
+          }),
           startsAt: form.get('startsAt') || undefined,
           endsAt: form.get('endsAt') || undefined,
         }),
@@ -69,6 +84,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
       setFeedback('Contrato cadastrado.');
       setShowForm(false);
       setFeeModel('FIXED');
+      setContractHearings([]);
       target.reset();
       contracts.reload();
     } catch (error) {
@@ -100,6 +116,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
             onClick={() => {
               setShowForm((value) => !value);
               setFeeModel('FIXED');
+              setContractHearings([]);
             }}
           >
             {showForm ? 'Fechar' : 'Novo contrato'}
@@ -116,20 +133,16 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
       )}
       {showForm && canCreate && (
         <form className="surface form-grid" onSubmit={create}>
-          <label>
-            Cliente
-            <select required name="clientId" defaultValue="">
-              <option value="" disabled>
-                Selecione
-              </option>
-              {clients.data?.items.map((client) => (
-                <option key={client.id} value={client.id}>
-                  {client.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
-          {clients.data && (
+          <ClientSelectField
+            items={clients.data?.items}
+            loading={clients.loading || (!clients.data && !clients.error && canViewClients)}
+            error={clients.error?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            name="clientId"
+            required
+          />
+          {showForm && clients.data && (
             <div className="form-wide">
               <LoadMore
                 shown={clients.data.items.length}
@@ -176,6 +189,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
             </label>
           )}
           <ServiceSelection disabled={busy} />
+          <ContractHearings disabled={busy} onChange={setContractHearings} />
           <label>
             Início da vigência (opcional)
             <input name="startsAt" type="date" />
@@ -184,7 +198,7 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
             Fim da vigência (opcional)
             <input name="endsAt" type="date" />
           </label>
-          <button className="primary form-wide" disabled={busy}>
+          <button className="primary form-wide" disabled={busy || !clientOptionsReady}>
             {busy ? 'Cadastrando…' : 'Cadastrar contrato'}
           </button>
         </form>
@@ -192,11 +206,6 @@ export function Contracts({ permissions }: { permissions: readonly string[] }) {
       {contracts.error && !contracts.data && (
         <div role="alert" className="notice notice-error">
           {contracts.error.message} <button onClick={contracts.retry}>Tentar novamente</button>
-        </div>
-      )}
-      {showForm && clients.error && !clients.data && (
-        <div role="alert" className="notice notice-error">
-          {clients.error.message} <button onClick={clients.retry}>Tentar novamente</button>
         </div>
       )}
       {!contracts.data && !contracts.error ? (

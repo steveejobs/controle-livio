@@ -7,6 +7,7 @@ import { Logger } from 'nestjs-pino';
 import { parseCorsOrigins, type ApiEnvironment } from '@livio/shared';
 import { AppModule } from './app.module';
 import { ApiExceptionFilter } from './common/api-exception.filter';
+import { createCorsOptions } from './common/cors-options';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, { bufferLogs: true });
@@ -20,21 +21,7 @@ async function bootstrap(): Promise<void> {
   }
   app.use(helmet());
   app.setGlobalPrefix('v1');
-  app.enableCors({
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: [
-      'Authorization',
-      'Content-Type',
-      'X-Organization-Id',
-      'X-Request-Id',
-      'Idempotency-Key',
-    ],
-    origin(origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) {
-      if (!origin || origins.includes(origin)) return callback(null, true);
-      return callback(new Error('Origem não permitida pelo CORS'), false);
-    },
-  });
+  app.enableCors(createCorsOptions(origins));
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }),
   );

@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+export const MAX_DOCUMENT_UPLOAD_SIZE_MB = 4;
+export const MAX_CLIENT_PHOTO_SIZE_MB = MAX_DOCUMENT_UPLOAD_SIZE_MB;
+
 const postgresqlUrl = z
   .string()
   .url()
@@ -38,21 +41,62 @@ export const apiEnvironmentSchema = baseEnvironmentSchema
     SUPABASE_SERVICE_ROLE_KEY: z.string().min(20),
     SUPABASE_AUTH_REDIRECT_URL: z.string().url().default('http://localhost:3000/auth/confirm'),
     STORAGE_BUCKET: z.string().regex(/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/),
-    MAX_DOCUMENT_SIZE_MB: z.coerce.number().int().min(1).max(100).default(20),
+    MAX_DOCUMENT_SIZE_MB: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_DOCUMENT_UPLOAD_SIZE_MB)
+      .default(MAX_DOCUMENT_UPLOAD_SIZE_MB),
+    CLAMAV_GATEWAY_URL: z
+      .string()
+      .url()
+      .refine((value) => {
+        const url = new URL(value);
+        return (
+          url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash
+        );
+      })
+      .optional(),
+    CLAMAV_GATEWAY_TOKEN: z.string().min(32).optional(),
+    CLAMAV_HOST: z.string().min(1).optional(),
+    CLAMAV_PORT: z.coerce.number().int().min(1).max(65_535).default(3310),
+    CLAMAV_TIMEOUT_MS: z.coerce.number().int().min(500).max(60_000).default(10_000),
     SMTP_HOST: z.string().min(1).optional(),
     SMTP_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
     SMTP_SECURE: booleanEnvironmentValue.default(true),
     SMTP_USER: z.string().min(1).optional(),
     SMTP_PASSWORD: z.string().min(1).optional(),
     SMTP_FROM: z.string().email().optional(),
+    STORAGE_RECOVERY_DISPATCH_ENABLED: booleanEnvironmentValue.default(false),
+    STORAGE_RECOVERY_DELETE_ENABLED: booleanEnvironmentValue.default(false),
     CRON_SECRET: z.string().min(32).optional(),
     VAPID_PUBLIC_KEY: z.string().min(20).optional(),
     VAPID_PRIVATE_KEY: z.string().min(20).optional(),
     VAPID_SUBJECT: z.string().min(8).optional(),
     TRUST_PROXY: booleanEnvironmentValue.default(false),
     LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
+    API_RATE_LIMIT_READ: z.coerce.number().int().min(1).max(10_000).default(300),
+    API_RATE_LIMIT_WRITE: z.coerce.number().int().min(1).max(10_000).default(60),
   })
   .superRefine((environment, context) => {
+    if (Boolean(environment.CLAMAV_GATEWAY_URL) !== Boolean(environment.CLAMAV_GATEWAY_TOKEN)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CLAMAV_GATEWAY_URL'],
+        message: 'O gateway ClamAV exige URL HTTPS e token configurados em conjunto',
+      });
+    }
+    if (
+      ['staging', 'production'].includes(environment.SUPABASE_ENVIRONMENT ?? '') &&
+      !environment.CLAMAV_HOST &&
+      !environment.CLAMAV_GATEWAY_URL
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['CLAMAV_HOST'],
+        message: 'Configure ClamAV por host ou gateway HTTPS autenticado antes de liberar uploads',
+      });
+    }
     const vapidConfigured = Boolean(
       environment.VAPID_PUBLIC_KEY || environment.VAPID_PRIVATE_KEY || environment.VAPID_SUBJECT,
     );

@@ -4,12 +4,24 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma } from '@livio/db';
-import { calculateOutstandingByCurrency, type AuthenticatedActor } from '@livio/shared';
+import { randomUUID } from 'node:crypto';
+import { Prisma, matchesUniqueConstraint } from '@livio/db';
+import {
+  MAX_CLIENT_PHOTO_SIZE_MB,
+  calculateOutstandingByCurrency,
+  type AuthenticatedActor,
+} from '@livio/shared';
 import { AuditService } from '../common/audit.service';
 import { pageResult, pageWindow, type PaginationInput } from '../common/schemas';
 import { normalizeAndValidateTaxId } from '../common/tax-id';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  StorageRecoveryService,
+  type UploadTicket,
+} from '../storage-recovery/storage-recovery.service';
+import { sha256 } from '../storage-recovery/storage-recovery.domain';
+import { StorageService } from '../documents/storage.service';
+import { DocumentScannerService } from '../documents/document-scanner.service';
 import type {
   CreateClientInput,
   CreateContactInput,
@@ -17,12 +29,156 @@ import type {
   UpdateContactInput,
 } from './client.schemas';
 
+type OverviewReceivable = {
+  id: string;
+  reference: string;
+  description: string;
+  status: string;
+  contractId: string | null;
+  originalAmount: Prisma.Decimal;
+  currency: string;
+  dueDate: Date;
+  installments: Array<{
+    id: string;
+    sequence: number;
+    status: string;
+    amount: Prisma.Decimal;
+    dueDate: Date;
+    allocations: Array<{ amount: Prisma.Decimal }>;
+    adjustments: Array<{ amount: Prisma.Decimal; kind: string }>;
+  }>;
+};
+
 @Injectable()
 export class ClientsService {
+  private readonly photoBucket = 'client-photos';
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly storage: StorageService,
+    private readonly scanner: DocumentScannerService,
+    private readonly recovery: StorageRecoveryService,
   ) {}
+
+  async photoUrl(actor: AuthenticatedActor, id: string) {
+    const client = await this.get(actor, id);
+    return {
+      url: client.photoStorageKey
+        ? await this.storage.signedUrl(client.photoStorageKey, 300, this.photoBucket)
+        : null,
+    };
+  }
+
+  async uploadPhoto(actor: AuthenticatedActor, id: string, file?: Express.Multer.File) {
+    const before = await this.get(actor, id);
+    if (!file?.buffer?.length) throw new BadRequestException('Selecione uma foto.');
+    const buffer = file.buffer;
+    const jpeg =
+      buffer.length > 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+    const png =
+      buffer.length > 8 &&
+      buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const webp =
+      buffer.length > 12 &&
+      buffer.toString('ascii', 0, 4) === 'RIFF' &&
+      buffer.toString('ascii', 8, 12) === 'WEBP';
+    const mimeType = jpeg ? 'image/jpeg' : png ? 'image/png' : webp ? 'image/webp' : null;
+    if (!mimeType || buffer.length > MAX_CLIENT_PHOTO_SIZE_MB * 1024 * 1024)
+      throw new BadRequestException(
+        `Use uma foto JPG, PNG ou WebP de até ${MAX_CLIENT_PHOTO_SIZE_MB} MiB.`,
+      );
+    if (file.mimetype !== mimeType)
+      throw new BadRequestException('Tipo de arquivo não corresponde ao conteúdo da foto.');
+    const key = `${actor.organizationId}/clients/${id}/${randomUUID()}.${jpeg ? 'jpg' : png ? 'png' : 'webp'}`;
+    const ticket = await this.recovery.plan({
+      organizationId: actor.organizationId,
+      actorUserId: actor.userId,
+      purpose: 'PHOTO',
+      bucket: 'client-photos',
+      key,
+      resourceType: 'client',
+      resourceId: id,
+      expectedSha256: sha256(buffer),
+      idempotencyKey: 'PHOTO:' + key,
+    });
+    let retired: UploadTicket | null = null;
+    try {
+      await this.recovery.store(ticket, buffer, mimeType, () =>
+        this.scanner.assertClean(buffer, mimeType),
+      );
+      await this.prisma.$transaction(async (transaction) => {
+        await this.recovery.lockForAttachment(transaction, ticket);
+        const result = await transaction.client.updateMany({
+          where: {
+            id,
+            organizationId: actor.organizationId,
+            deletedAt: null,
+            photoStorageKey: before.photoStorageKey,
+          },
+          data: { photoStorageKey: key },
+        });
+        if (result.count !== 1)
+          throw new ConflictException('A foto foi alterada em outra sessão. Atualize a ficha.');
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'UPDATE',
+          resource: 'client_photo',
+          resourceId: id,
+          metadata: { operation: 'upload' },
+        });
+        if (before.photoStorageKey)
+          retired = await this.recovery.retire(
+            transaction,
+            actor.organizationId,
+            'client-photos',
+            before.photoStorageKey,
+          );
+        await this.recovery.complete(transaction, ticket);
+      });
+    } catch (error) {
+      await this.recovery.compensate(ticket, error);
+      throw error;
+    }
+    if (retired) await this.recovery.compensate(retired);
+    return { url: await this.storage.signedUrl(key, 300, this.photoBucket) };
+  }
+
+  async removePhoto(actor: AuthenticatedActor, id: string) {
+    const before = await this.get(actor, id);
+    if (!before.photoStorageKey) return { url: null };
+    const retired = await this.prisma.$transaction(async (transaction) => {
+      const result = await transaction.client.updateMany({
+        where: {
+          id,
+          organizationId: actor.organizationId,
+          deletedAt: null,
+          photoStorageKey: before.photoStorageKey,
+        },
+        data: { photoStorageKey: null },
+      });
+      if (result.count !== 1)
+        throw new ConflictException('A foto foi alterada em outra sessão. Atualize a ficha.');
+      await this.audit.record(transaction, {
+        organizationId: actor.organizationId,
+        actorUserId: actor.userId,
+        actorSessionId: actor.sessionId,
+        action: 'DELETE',
+        resource: 'client_photo',
+        resourceId: id,
+      });
+      return this.recovery.retire(
+        transaction,
+        actor.organizationId,
+        'client-photos',
+        before.photoStorageKey!,
+      );
+    });
+    if (retired) await this.recovery.compensate(retired);
+    return { url: null };
+  }
 
   async list(actor: AuthenticatedActor, input: PaginationInput) {
     const search = input.search?.trim();
@@ -67,12 +223,13 @@ export class ClientsService {
   }
 
   async get(actor: AuthenticatedActor, id: string) {
+    if (actor.clientId && actor.clientId !== id)
+      throw new NotFoundException('Cliente não encontrado');
     const client = await this.prisma.client.findFirst({
       where: {
         id,
         organizationId: actor.organizationId,
         deletedAt: null,
-        ...(actor.clientId ? { id: actor.clientId } : {}),
       },
       include: { contacts: true },
     });
@@ -81,198 +238,222 @@ export class ClientsService {
   }
 
   async overview(actor: AuthenticatedActor, id: string) {
-    const client = await this.get(actor, id);
+    if (actor.clientId && actor.clientId !== id)
+      throw new NotFoundException('Cliente não encontrado');
     const scope = { organizationId: actor.organizationId, clientId: id };
     const can = (permission: (typeof actor.permissions)[number]) =>
       actor.permissions.includes(permission);
-    const [
-      matters,
-      contracts,
-      receivables,
-      balanceReceivables,
-      payments,
-      documents,
-      tasks,
-      events,
-      notes,
-      messages,
-      timeline,
-    ] = await Promise.all([
-      can('matters:view')
-        ? this.prisma.matter.findMany({
-            where: { ...scope, deletedAt: null },
-            select: {
-              id: true,
-              reference: true,
-              title: true,
-              status: true,
-              priority: true,
-              updatedAt: true,
-              currentStage: { select: { name: true } },
+    const clientOverviewInclude = {
+      contacts: true,
+      ...(can('matters:view')
+        ? {
+            matters: {
+              where: { ...scope, deletedAt: null },
+              select: {
+                id: true,
+                reference: true,
+                title: true,
+                status: true,
+                priority: true,
+                updatedAt: true,
+                currentStage: { select: { name: true } },
+              },
+              orderBy: { updatedAt: 'desc' as const },
+              take: 20,
             },
-            orderBy: { updatedAt: 'desc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('contracts:view')
-        ? this.prisma.contract.findMany({
-            where: scope,
-            select: {
-              id: true,
-              number: true,
-              title: true,
-              status: true,
-              feeModel: true,
-              fixedAmount: true,
-              successRate: true,
-              currency: true,
-              serviceName: true,
-              terms: true,
-              createdAt: true,
+          }
+        : {}),
+      ...(can('contracts:view')
+        ? {
+            contracts: {
+              where: scope,
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                status: true,
+                feeModel: true,
+                fixedAmount: true,
+                successRate: true,
+                currency: true,
+                serviceName: true,
+                terms: true,
+                createdAt: true,
+              },
+              orderBy: { createdAt: 'desc' as const },
+              take: 20,
             },
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('receivables:view')
-        ? this.prisma.receivable.findMany({
-            where: scope,
-            select: {
-              id: true,
-              reference: true,
-              status: true,
-              originalAmount: true,
-              currency: true,
-              dueDate: true,
-              installments: {
-                select: {
-                  id: true,
-                  sequence: true,
-                  status: true,
-                  amount: true,
-                  dueDate: true,
-                  allocations: {
-                    where: { reversedAt: null, payment: { status: 'CONFIRMED' } },
-                    select: { amount: true },
-                  },
-                  adjustments: {
-                    where: { approvedAt: { not: null } },
-                    select: { kind: true, amount: true },
+          }
+        : {}),
+      ...(can('receivables:view')
+        ? {
+            receivables: {
+              where: scope,
+              select: {
+                id: true,
+                reference: true,
+                description: true,
+                status: true,
+                contractId: true,
+                originalAmount: true,
+                currency: true,
+                dueDate: true,
+                installments: {
+                  select: {
+                    id: true,
+                    sequence: true,
+                    status: true,
+                    amount: true,
+                    dueDate: true,
+                    allocations: {
+                      where: { reversedAt: null, payment: { status: 'CONFIRMED' } },
+                      select: { amount: true },
+                    },
+                    adjustments: {
+                      where: { approvedAt: { not: null } },
+                      select: { kind: true, amount: true },
+                    },
                   },
                 },
               },
+              orderBy: { dueDate: 'asc' as const },
             },
-            orderBy: { dueDate: 'asc' },
-            take: 50,
-          })
-        : Promise.resolve([]),
-      can('receivables:view')
-        ? this.prisma.receivable.findMany({
-            where: scope,
-            select: {
-              status: true,
-              currency: true,
-              installments: {
-                select: {
-                  amount: true,
-                  status: true,
-                  allocations: {
-                    where: { reversedAt: null, payment: { status: 'CONFIRMED' } },
-                    select: { amount: true },
-                  },
-                  adjustments: {
-                    where: { approvedAt: { not: null } },
-                    select: { kind: true, amount: true },
-                  },
-                },
+          }
+        : {}),
+      ...(can('payments:view')
+        ? {
+            payments: {
+              where: scope,
+              select: {
+                id: true,
+                reference: true,
+                amount: true,
+                currency: true,
+                status: true,
+                paidAt: true,
+                method: true,
+                documents: { select: { id: true, title: true } },
               },
+              orderBy: { paidAt: 'desc' as const },
+              take: 20,
             },
-          })
-        : Promise.resolve([]),
-      can('payments:view')
-        ? this.prisma.payment.findMany({
-            where: scope,
-            select: {
-              id: true,
-              reference: true,
-              amount: true,
-              currency: true,
-              status: true,
-              paidAt: true,
-              method: true,
-              documents: { select: { id: true, title: true } },
+          }
+        : {}),
+      ...(can('documents:view')
+        ? {
+            documents: {
+              where: {
+                ...scope,
+                deletedAt: null,
+                ...(actor.clientId ? { visibility: 'CLIENT' as const } : {}),
+              },
+              select: {
+                id: true,
+                title: true,
+                category: true,
+                contractId: true,
+                visibility: true,
+                updatedAt: true,
+              },
+              orderBy: { updatedAt: 'desc' as const },
+              take: 20,
             },
-            orderBy: { paidAt: 'desc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('documents:view')
-        ? this.prisma.document.findMany({
-            where: {
-              ...scope,
-              deletedAt: null,
-              ...(actor.clientId ? { visibility: 'CLIENT' as const } : {}),
+          }
+        : {}),
+      ...(can('tasks:view')
+        ? {
+            tasks: {
+              where: { ...scope, deletedAt: null },
+              select: { id: true, title: true, status: true, priority: true, dueAt: true },
+              orderBy: { dueAt: 'asc' as const },
+              take: 20,
             },
-            select: { id: true, title: true, category: true, visibility: true, updatedAt: true },
-            orderBy: { updatedAt: 'desc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('tasks:view')
-        ? this.prisma.task.findMany({
-            where: { ...scope, deletedAt: null },
-            select: { id: true, title: true, status: true, priority: true, dueAt: true },
-            orderBy: { dueAt: 'asc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('calendar:view')
-        ? this.prisma.calendarEvent.findMany({
-            where: { ...scope, startsAt: { gte: new Date() } },
-            select: {
-              id: true,
-              title: true,
-              type: true,
-              startsAt: true,
-              endsAt: true,
-              timezone: true,
+          }
+        : {}),
+      ...(can('calendar:view')
+        ? {
+            calendarEvents: {
+              where: { ...scope, startsAt: { gte: new Date() } },
+              select: {
+                id: true,
+                title: true,
+                type: true,
+                startsAt: true,
+                endsAt: true,
+                timezone: true,
+              },
+              orderBy: { startsAt: 'asc' as const },
+              take: 20,
             },
-            orderBy: { startsAt: 'asc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('notes:view')
-        ? this.prisma.internalNote.findMany({
-            where: { ...scope, deletedAt: null },
-            select: { id: true, body: true, createdAt: true, createdById: true },
-            orderBy: { createdAt: 'desc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('messages:view')
-        ? this.prisma.clientMessage.findMany({
-            where: { ...scope, deletedAt: null },
-            select: { id: true, body: true, publishedAt: true, createdById: true },
-            orderBy: { publishedAt: 'desc' },
-            take: 20,
-          })
-        : Promise.resolve([]),
-      can('audit:view')
-        ? this.prisma.activityEvent.findMany({
-            where: { organizationId: actor.organizationId, subjectType: 'client', subjectId: id },
-            select: {
-              id: true,
-              type: true,
-              summary: true,
-              metadata: true,
-              occurredAt: true,
-              actorUserId: true,
+          }
+        : {}),
+      ...(can('notes:view')
+        ? {
+            internalNotes: {
+              where: { ...scope, deletedAt: null },
+              select: { id: true, body: true, createdAt: true, createdById: true },
+              orderBy: { createdAt: 'desc' as const },
+              take: 20,
             },
-            orderBy: { occurredAt: 'desc' },
-            take: 50,
-          })
-        : Promise.resolve([]),
-    ]);
+          }
+        : {}),
+      ...(can('messages:view')
+        ? {
+            clientMessages: {
+              where: { ...scope, deletedAt: null },
+              select: { id: true, body: true, publishedAt: true, createdById: true },
+              orderBy: { publishedAt: 'desc' as const },
+              take: 20,
+            },
+          }
+        : {}),
+    } as const satisfies Prisma.ClientInclude;
+    const { clientRecord, timeline } = await this.prisma.$transaction(
+      async (transaction) => {
+        const clientRecord = (await transaction.client.findFirst({
+          where: { id, organizationId: actor.organizationId, deletedAt: null },
+          include: clientOverviewInclude,
+        })) as Prisma.ClientGetPayload<{ include: typeof clientOverviewInclude }> | null;
+        if (!clientRecord) throw new NotFoundException('Cliente não encontrado');
+        const timeline = can('audit:view')
+          ? await transaction.activityEvent.findMany({
+              where: {
+                organizationId: actor.organizationId,
+                subjectType: 'client',
+                subjectId: id,
+              },
+              select: {
+                id: true,
+                type: true,
+                summary: true,
+                metadata: true,
+                occurredAt: true,
+                actorUserId: true,
+              },
+              orderBy: { occurredAt: 'desc' },
+              take: 50,
+            })
+          : [];
+        return { clientRecord, timeline };
+      },
+      { maxWait: 10_000, timeout: 10_000 },
+    );
+
+    const {
+      contacts,
+      matters = [],
+      contracts = [],
+      receivables: loadedReceivables = [],
+      payments = [],
+      documents = [],
+      tasks = [],
+      calendarEvents: events = [],
+      internalNotes: notes = [],
+      clientMessages: messages = [],
+      ...client
+    } = clientRecord;
+    const balanceReceivables = loadedReceivables as unknown as OverviewReceivable[];
+    const receivables = balanceReceivables.slice(0, 50);
     const outstanding = calculateOutstandingByCurrency(
       balanceReceivables.map((receivable) => ({
         currency: receivable.currency,
@@ -289,11 +470,15 @@ export class ClientsService {
       })),
     );
     return {
-      client,
-      contacts: client.contacts,
+      client: { ...client, contacts },
+      contacts,
       matters,
       contracts,
-      financial: { receivables, payments, outstanding },
+      financial: {
+        receivables,
+        payments,
+        outstanding,
+      },
       documents,
       tasks,
       upcomingEvents: events,
@@ -342,8 +527,10 @@ export class ClientsService {
     } catch (error) {
       if (
         taxIdNormalized &&
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2002'
+        matchesUniqueConstraint(error, {
+          fieldNames: ['tax_id_normalized', 'taxIdNormalized'],
+          indexName: 'clients_organization_id_tax_id_normalized_key',
+        })
       ) {
         throw new ConflictException('Este CPF/CNPJ já está cadastrado nesta organização.');
       }
@@ -353,38 +540,75 @@ export class ClientsService {
 
   async update(actor: AuthenticatedActor, id: string, input: UpdateClientInput) {
     const before = await this.get(actor, id);
-    const { taxId, address, customFields, ...changes } = input;
+    const { taxId, address, customFields, expectedUpdatedAt, ...changes } = input;
     let taxIdNormalized: string | undefined;
     try {
       taxIdNormalized = taxId === undefined ? undefined : normalizeAndValidateTaxId(taxId);
     } catch {
       throw new BadRequestException('CPF/CNPJ inválido');
     }
-    return this.prisma.$transaction(async (transaction) => {
-      const client = await transaction.client.update({
-        where: { id },
-        data: {
-          ...changes,
-          ...(address !== undefined ? { address: address as Prisma.InputJsonValue } : {}),
-          ...(customFields !== undefined
-            ? { customFields: customFields as Prisma.InputJsonValue }
-            : {}),
-          ...(input.email ? { email: input.email.toLowerCase() } : {}),
-          ...(taxId !== undefined ? { taxIdNormalized: taxIdNormalized ?? null } : {}),
-        },
+    try {
+      return await this.prisma.$transaction(async (transaction) => {
+        const client = await transaction.client.update({
+          where: {
+            id,
+            organizationId: actor.organizationId,
+            deletedAt: null,
+            ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}),
+          },
+          data: {
+            ...changes,
+            ...(expectedUpdatedAt
+              ? {
+                  updatedAt: new Date(
+                    Math.max(Date.now(), new Date(expectedUpdatedAt).getTime() + 1),
+                  ),
+                }
+              : {}),
+            ...(address !== undefined ? { address: address as Prisma.InputJsonValue } : {}),
+            ...(customFields !== undefined
+              ? { customFields: customFields as Prisma.InputJsonValue }
+              : {}),
+            ...(input.email !== undefined
+              ? { email: input.email ? input.email.toLowerCase() : null }
+              : {}),
+            ...(input.phone !== undefined ? { phone: input.phone || null } : {}),
+            ...(input.source !== undefined ? { source: input.source || null } : {}),
+            ...(taxId !== undefined ? { taxIdNormalized: taxIdNormalized ?? null } : {}),
+          },
+        });
+        await this.audit.record(transaction, {
+          organizationId: actor.organizationId,
+          actorUserId: actor.userId,
+          actorSessionId: actor.sessionId,
+          action: 'UPDATE',
+          resource: 'client',
+          resourceId: id,
+          before,
+          after: client,
+        });
+        return client;
       });
-      await this.audit.record(transaction, {
-        organizationId: actor.organizationId,
-        actorUserId: actor.userId,
-        actorSessionId: actor.sessionId,
-        action: 'UPDATE',
-        resource: 'client',
-        resourceId: id,
-        before,
-        after: client,
-      });
-      return client;
-    });
+    } catch (error) {
+      if (
+        expectedUpdatedAt &&
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      )
+        throw new ConflictException(
+          'O cadastro foi alterado em outra sessão. Atualize a ficha antes de salvar.',
+        );
+      if (
+        taxIdNormalized &&
+        matchesUniqueConstraint(error, {
+          fieldNames: ['tax_id_normalized', 'taxIdNormalized'],
+          indexName: 'clients_organization_id_tax_id_normalized_key',
+        })
+      ) {
+        throw new ConflictException('Este CPF/CNPJ ja esta cadastrado nesta organizacao.');
+      }
+      throw error;
+    }
   }
 
   async archive(actor: AuthenticatedActor, id: string): Promise<void> {

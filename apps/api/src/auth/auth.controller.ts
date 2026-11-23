@@ -40,7 +40,7 @@ export class AuthController {
         profileId: actor.profileId,
         name: membership.profile.fullName,
         email: membership.profile.email,
-        clientId: membership.clientId,
+        clientId: actor.clientId ?? null,
         permissions: actor.permissions,
         isAdministrator: actor.isAdministrator ?? false,
       },

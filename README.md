@@ -1,123 +1,64 @@
-# Controle Financeiro Lívio
+# Lívio
 
-CRM jurídico e controle financeiro multiempresa. Supabase é a plataforma única de dados: Database,
-Auth, Storage e Row Level Security. A API NestJS permanece responsável por operações críticas e o
-Prisma é o ORM tipado, não o executor de migrations.
+CRM jurídico e controle financeiro multiempresa. Supabase concentra Database, Auth e Storage; a API aplica autorização, regras de negócio e auditoria. Prisma é o ORM, e as migrations operacionais ficam no Supabase.
 
 ## Requisitos
 
-- Node.js 22+ e npm 10+;
-- Docker Desktop em execução;
-- Supabase CLI instalada pelo `npm install`.
+- Node.js >=24.15 <25; versão validada 24.22.3.
+- npm >=10; instale a árvore exata com `npm ci`.
+- Docker e Supabase CLI para executar a stack local isolada.
 
-Não instale PostgreSQL, Auth ou Storage paralelos para o produto.
+No Windows, [o helper de runtime](tools/runtime/README.md) permite usar o Node portátil sem alterar a instalação global.
 
-## Subir a fundação local
+## Estrutura
+
+```text
+apps/
+  api/          API NestJS
+  web/          Aplicação Next.js
+packages/
+  db/           Prisma, adaptador e pool PostgreSQL
+  shared/       Contratos, validações e regras puras
+  ui/           Componentes compartilhados
+supabase/       Configuração local e migrations versionadas
+tools/          Ferramentas agrupadas por domínio
+docs/           Documentação técnica e operacional atual
+```
+
+## Desenvolvimento
 
 ```powershell
-npm install
+npm ci
 npm run supabase:start
 npm run supabase:status
 ```
 
-Copie `.env.example` para `.env` e substitua somente os placeholders pelas credenciais retornadas
-pela stack local. Em seguida, recrie o banco local exclusivamente pelo histórico versionado:
+Prepare `.env` a partir de `.env.example`, usando exclusivamente credenciais da stack local. Configure o banco conforme [a arquitetura Supabase](docs/SUPABASE_ARCHITECTURE.md), respeitando as confirmações de destino e as regras do repositório. Depois:
 
 ```powershell
-npm run db:migrate:dev
-npm run test:supabase
 npm run dev
 ```
 
-`db:migrate:dev` executa `supabase db reset`: é destrutivo e permitido somente quando
-`SUPABASE_LOCAL=true`, em `development` ou `test`. O reset aplica todas as migrations e
-`supabase/seed.sql`, com duas organizações e usuários exclusivamente fictícios. As credenciais locais
-estão comentadas no próprio seed e nunca devem ser reutilizadas fora da stack local.
+Web: `http://localhost:3000`. API: `http://localhost:3001/v1`. OpenAPI: `http://localhost:3001/v1/docs`.
 
-- Web: `http://localhost:3000`
-- API: `http://localhost:3001/v1`
-- OpenAPI: `http://localhost:3001/v1/docs`
-- Studio: `http://localhost:54323`
-- Caixa de e-mail local (Inbucket): `http://localhost:54324`
-
-## Auth e organização
-
-O login, refresh, recuperação e logout usam Supabase Auth. O Next mantém a sessão com `@supabase/ssr`
-e envia o access token à API como Bearer JWT. A API valida o token no Supabase e resolve:
-
-```text
-auth.users → profiles → organization_members → organization_member_roles → roles → permissions
-```
-
-`organization_id` nunca é aceito como prova de autorização. Quando houver mais de uma membership,
-`X-Organization-Id` apenas seleciona uma organização; a API exige uma membership ativa correspondente.
-As tabelas legadas `sessions` e `password_reset_tokens` permanecem somente como arquivo de schema e
-não participam do runtime.
-
-## Primeiro administrador
-
-O bootstrap usa Supabase Auth Admin no servidor e não grava senha própria:
-
-```powershell
-npm run bootstrap:admin
-```
-
-Defina fora do Git `BOOTSTRAP_ORGANIZATION_SLUG`, `BOOTSTRAP_ORGANIZATION_NAME`,
-`BOOTSTRAP_ADMIN_NAME`, `BOOTSTRAP_ADMIN_EMAIL` e `BOOTSTRAP_ADMIN_PASSWORD`. Ambiente remoto exige
-`ALLOW_REMOTE_BOOTSTRAP=true` e project ref confirmado; produção exige também
-`ALLOW_PRODUCTION_BOOTSTRAP=true`. O script é idempotente para organização, perfil, membership, papel
-e permissões e nunca imprime senha ou token.
-
-## Migrations
-
-`supabase/migrations` é o único histórico oficial e Supabase CLI é o único executor:
-
-1. `20260807134500_initial_foundation.sql` — schema inicial, constraints e tenant triggers;
-2. `20260807170000_finance_document_links.sql` — documento→contrato, documento→despesa e despesa→cliente;
-3. `20260807180000_supabase_auth_rls.sql` — vínculo Auth inicial, RLS e bucket privado;
-4. `20260809120000_auth_memberships_hardening.sql` — profiles, memberships, Auth definitivo e hardening RLS/Storage.
-
-Estado cloud em 2026-08-11: as quatro migrations acima estão aplicadas no projeto Supabase remoto. A
-verificação encontrou 39 tabelas com RLS habilitada e forçada, 141 policies, bucket privado e zero
-objetos. A organização `bandeira` e seu primeiro administrador foram vinculados pelo bootstrap; nenhum
-seed foi aplicado remotamente.
-
-O histórico Prisma em `packages/db/prisma/migrations` é arquivo imutável e não é executado. Para um
-remoto confirmado, apenas após validar localmente:
-
-```powershell
-npm run db:migrate:status
-npm run db:migrate:deploy
-```
-
-Produção exige `ALLOW_PRODUCTION_MIGRATION=true`. Nunca use reset, seed ou E2E em remoto persistente.
+Não reutilize credenciais locais em produção. Reset e seed não fazem parte da publicação e não devem ser executados em banco compartilhado.
 
 ## Qualidade
 
 ```powershell
 npm run format:check
 npm run lint
+npm run release:check
 npm run typecheck
 npm test
-npm run test:supabase
 npm run db:validate
 npm run build
 ```
 
-`test:supabase` exige stack local e prova isolamento entre duas organizações, roles, nota interna e
-Storage. Leia [docs/ENVIRONMENTS.md](docs/ENVIRONMENTS.md),
-[docs/SUPABASE_ARCHITECTURE.md](docs/SUPABASE_ARCHITECTURE.md) e [docs/SECURITY.md](docs/SECURITY.md).
+A CI também valida navegador, Auth/RLS/Storage, concorrência financeira, scanner, captura local de email e recuperação em infraestrutura descartável. Resultados anteriores e limites estão na [homologação atual](docs/HOMOLOGACAO_2026_11_22.md).
 
-## SMTP, backup e restauração
+## Documentação e operação
 
-Auth local entrega e-mails no Inbucket. Antes de produção, configure custom SMTP no painel/configuração
-do Supabase, domínio remetente, SPF/DKIM/DMARC e redirects permitidos.
+Comece pelo [índice técnico](docs/README.md). O roteiro de publicação está em [DEPLOYMENT.md](docs/DEPLOYMENT.md); organização, decisões e pendências atuais estão em [PROJECT_CONTEXT.md](PROJECT_CONTEXT.md).
 
-Backup do Database e retenção/backup dos objetos de Storage são planos separados. Uma restauração deve
-ocorrer primeiro em projeto isolado, reaplicar/validar RLS, memberships, tenant triggers, checks
-financeiros, bucket privado e hashes dos documentos antes de qualquer promoção.
-
-## Publicação
-
-Web e API são serviços separados e precisam de URLs HTTPS próprias. O roteiro de variáveis, ordem de
-publicação, health checks e gate de promoção está em [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Relatórios gerados, capturas e traces não pertencem ao código. Ferramentas devem gravá-los em `test-results/` ou em uma pasta privada explicitamente escolhida; esses materiais ficam fora do Git e do upload Vercel.

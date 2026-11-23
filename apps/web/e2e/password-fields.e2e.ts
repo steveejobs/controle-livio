@@ -90,6 +90,8 @@ test('password recovery requests the expected redirect and shows a neutral confi
   await page.getByRole('button', { name: 'Esqueci minha senha' }).click();
   await page.getByLabel('E-mail').fill('qa@example.test');
   await page.getByRole('button', { name: 'Solicitar recuperação' }).click();
-  await expect(page.getByText('Solicitação recebida. Verifique seu e-mail.')).toBeVisible();
+  await expect(
+    page.getByText('Solicitação recebida. Verifique seu e-mail ou peça um link ao administrador.'),
+  ).toBeVisible();
   expect(recoveryRequested).toBe(true);
 });

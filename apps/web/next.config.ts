@@ -83,8 +83,9 @@ const contentSecurityPolicy = [
   "frame-ancestors 'none'",
   "img-src 'self' data: blob:",
   "object-src 'none'",
-  `script-src 'self' 'unsafe-inline'${developmentScriptDirective}`,
+  `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'${developmentScriptDirective}`,
   "style-src 'self' 'unsafe-inline'",
+  "worker-src 'self' blob:",
 ].join('; ');
 
 const securityHeaders = [
@@ -102,7 +103,11 @@ const nextConfig: NextConfig = {
   poweredByHeader: false,
   reactStrictMode: true,
   transpilePackages: ['@livio/ui', '@livio/shared'],
-  experimental: { optimizePackageImports: ['@livio/ui'] },
+  experimental: {
+    optimizePackageImports: ['@livio/ui'],
+    // Native page workers exhaust memory on the local Windows machine.
+    ...(process.platform === 'win32' ? { cpus: 1 } : {}),
+  },
   async headers() {
     return [
       { source: '/:path*', headers: securityHeaders },

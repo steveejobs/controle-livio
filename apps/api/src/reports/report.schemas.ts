@@ -15,6 +15,8 @@ export const reportNameSchema = z.enum([
   'overdue',
   'aging',
   'cash-forecast',
+  'cash-flow',
+  'cash-flow-by-client',
   'partial-payments',
   'active-contracts',
   'revenue-by-lawyer',

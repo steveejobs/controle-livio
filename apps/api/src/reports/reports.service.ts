@@ -65,13 +65,137 @@ export class ReportsService {
   async cashForecast(actor: AuthenticatedActor) {
     const rows = await this.prisma.$queryRaw<Row[]>(Prisma.sql`
       ${this.balancesCte(actor.organizationId)}
-      SELECT date_trunc('week', due_date)::date AS period,
-             SUM(balance)::numeric(19,4) AS expected_amount,
-             COUNT(*)::int AS installments
-      FROM balances
-      WHERE due_date >= CURRENT_DATE AND balance > 0 AND status NOT IN ('CANCELLED', 'RENEGOTIATED')
-      GROUP BY 1 ORDER BY 1`);
-    return { basis: 'previsão_por_vencimento', rows: this.normalize(rows) };
+      , incoming AS (
+        SELECT date_trunc('week', due_date)::date AS period, currency,
+               SUM(balance)::numeric(19,4) AS expected_amount,
+               COUNT(*)::int AS installments
+          FROM balances
+         WHERE due_date >= CURRENT_DATE AND balance > 0
+           AND status NOT IN ('CANCELLED', 'RENEGOTIATED')
+         GROUP BY 1, 2
+      ), outgoing AS (
+        SELECT date_trunc('week', due_date)::date AS period, currency,
+               SUM(amount)::numeric(19,4) AS expected_expenses,
+               COUNT(*)::int AS expenses_due
+          FROM expenses
+         WHERE organization_id = ${actor.organizationId}::uuid
+           AND status = 'APPROVED' AND due_date >= CURRENT_DATE
+         GROUP BY 1, 2
+      )
+      SELECT COALESCE(i.period, o.period) AS period, COALESCE(i.currency, o.currency) AS currency,
+             COALESCE(i.expected_amount, 0)::numeric(19,4) AS expected_amount,
+             COALESCE(i.installments, 0)::int AS installments,
+             COALESCE(o.expected_expenses, 0)::numeric(19,4) AS expected_expenses,
+             COALESCE(o.expenses_due, 0)::int AS expenses_due,
+             (COALESCE(i.expected_amount, 0) - COALESCE(o.expected_expenses, 0))::numeric(19,4) AS projected_net
+        FROM incoming i FULL JOIN outgoing o USING (period, currency)
+       ORDER BY period, currency`);
+    return { basis: 'previsão_por_vencimento', rows: this.normalizeExact(rows) };
+  }
+
+  async cashFlow(actor: AuthenticatedActor, range: ReportRange) {
+    const unit = Prisma.raw(`'${range.groupBy}'`);
+    const rows = await this.prisma.$queryRaw<Row[]>(Prisma.sql`
+      ${this.balancesCte(actor.organizationId)}, incoming AS (
+        SELECT date_trunc(${unit}, due_date)::date AS period, currency,
+               SUM(balance)::numeric(19,4) AS expected_receivables,
+               COUNT(*)::int AS open_installments
+          FROM balances
+         WHERE due_date >= ${range.from}::date AND due_date < ${range.to}::date
+           AND balance > 0 AND status NOT IN ('CANCELLED', 'RENEGOTIATED')
+         GROUP BY 1, 2
+      ), received AS (
+        SELECT date_trunc(${unit}, paid_at)::date AS period, currency,
+               SUM(amount)::numeric(19,4) AS received_amount,
+               COUNT(*)::int AS confirmed_payments
+          FROM payments
+         WHERE organization_id = ${actor.organizationId}::uuid
+           AND status = 'CONFIRMED'
+           AND paid_at >= ${range.from} AND paid_at < ${range.to}
+         GROUP BY 1, 2
+      ), planned_expenses AS (
+        SELECT date_trunc(${unit}, due_date)::date AS period, currency,
+               SUM(amount) FILTER (WHERE status = 'APPROVED')::numeric(19,4) AS expected_expenses,
+               SUM(amount) FILTER (WHERE status = 'PENDING_APPROVAL')::numeric(19,4) AS pending_approval_expenses,
+               COUNT(*) FILTER (WHERE status = 'APPROVED')::int AS approved_expenses
+          FROM expenses
+         WHERE organization_id = ${actor.organizationId}::uuid
+           AND status IN ('APPROVED', 'PENDING_APPROVAL')
+           AND due_date >= ${range.from}::date AND due_date < ${range.to}::date
+         GROUP BY 1, 2
+      ), paid_expenses AS (
+        SELECT date_trunc(${unit}, paid_at)::date AS period, currency,
+               SUM(amount)::numeric(19,4) AS paid_expenses,
+               COUNT(*)::int AS paid_expense_count
+          FROM expenses
+         WHERE organization_id = ${actor.organizationId}::uuid AND status = 'PAID'
+           AND paid_at >= ${range.from}::date AND paid_at < ${range.to}::date
+         GROUP BY 1, 2
+      ), periods AS (
+        SELECT period, currency FROM incoming UNION SELECT period, currency FROM received
+        UNION SELECT period, currency FROM planned_expenses UNION SELECT period, currency FROM paid_expenses
+      )
+      SELECT p.period, p.currency,
+             COALESCE(r.received_amount, 0)::numeric(19,4) AS received_amount,
+             COALESCE(pe.paid_expenses, 0)::numeric(19,4) AS paid_expenses,
+             (COALESCE(r.received_amount, 0) - COALESCE(pe.paid_expenses, 0))::numeric(19,4) AS net_cash,
+             COALESCE(i.expected_receivables, 0)::numeric(19,4) AS expected_receivables,
+             COALESCE(pl.expected_expenses, 0)::numeric(19,4) AS expected_expenses,
+             (COALESCE(i.expected_receivables, 0) - COALESCE(pl.expected_expenses, 0))::numeric(19,4) AS projected_net,
+             COALESCE(pl.pending_approval_expenses, 0)::numeric(19,4) AS pending_approval_expenses,
+             COALESCE(i.open_installments, 0)::int AS open_installments,
+             COALESCE(r.confirmed_payments, 0)::int AS confirmed_payments,
+             COALESCE(pl.approved_expenses, 0)::int AS approved_expenses,
+             COALESCE(pe.paid_expense_count, 0)::int AS paid_expense_count
+        FROM periods p
+        LEFT JOIN incoming i USING (period, currency)
+        LEFT JOIN received r USING (period, currency)
+        LEFT JOIN planned_expenses pl USING (period, currency)
+        LEFT JOIN paid_expenses pe USING (period, currency)
+       ORDER BY p.period, p.currency`);
+    return { basis: 'caixa_real_e_previsão_por_vencimento', rows: this.normalizeExact(rows) };
+  }
+
+  async cashFlowByClient(actor: AuthenticatedActor, range: ReportRange) {
+    const rows = await this.prisma.$queryRaw<Row[]>(Prisma.sql`
+      WITH received AS (
+        SELECT r.client_id, r.matter_id, p.currency,
+               SUM(pa.amount)::numeric(19,4) AS received_amount
+          FROM payment_allocations pa
+          JOIN payments p ON p.id = pa.payment_id
+            AND p.organization_id = ${actor.organizationId}::uuid
+            AND p.status = 'CONFIRMED'
+          JOIN receivable_installments i ON i.id = pa.installment_id
+          JOIN receivables r ON r.id = i.receivable_id
+            AND r.organization_id = ${actor.organizationId}::uuid
+         WHERE pa.organization_id = ${actor.organizationId}::uuid
+           AND pa.reversed_at IS NULL
+           AND p.paid_at >= ${range.from} AND p.paid_at < ${range.to}
+         GROUP BY r.client_id, r.matter_id, p.currency
+      ), paid_expenses AS (
+        SELECT client_id, matter_id, currency, SUM(amount)::numeric(19,4) AS paid_expenses
+          FROM expenses
+         WHERE organization_id = ${actor.organizationId}::uuid
+           AND status = 'PAID' AND paid_at >= ${range.from}::date AND paid_at < ${range.to}::date
+         GROUP BY client_id, matter_id, currency
+      ), dimensions AS (
+        SELECT client_id, matter_id, currency FROM received
+        UNION SELECT client_id, matter_id, currency FROM paid_expenses
+      )
+      SELECT d.client_id, c.display_name AS client, d.currency,
+             d.matter_id, m.reference AS matter,
+             COALESCE(r.received_amount, 0)::numeric(19,4) AS received_amount,
+             COALESCE(e.paid_expenses, 0)::numeric(19,4) AS paid_expenses,
+             (COALESCE(r.received_amount, 0) - COALESCE(e.paid_expenses, 0))::numeric(19,4) AS net_cash
+        FROM dimensions d
+        LEFT JOIN clients c ON c.id = d.client_id AND c.organization_id = ${actor.organizationId}::uuid
+        LEFT JOIN matters m ON m.id = d.matter_id AND m.organization_id = ${actor.organizationId}::uuid
+        LEFT JOIN received r ON r.client_id IS NOT DISTINCT FROM d.client_id
+          AND r.matter_id IS NOT DISTINCT FROM d.matter_id AND r.currency = d.currency
+        LEFT JOIN paid_expenses e ON e.client_id IS NOT DISTINCT FROM d.client_id
+          AND e.matter_id IS NOT DISTINCT FROM d.matter_id AND e.currency = d.currency
+       ORDER BY c.display_name, m.reference, d.currency`);
+    return { basis: 'caixa_por_cliente_e_processo', rows: this.normalizeExact(rows) };
   }
 
   async partialPayments(actor: AuthenticatedActor) {
@@ -167,6 +291,12 @@ export class ReportsService {
       overdue: () => this.overdue(actor),
       aging: () => this.aging(actor),
       'cash-forecast': () => this.cashForecast(actor),
+      'cash-flow': () =>
+        range ? this.cashFlow(actor, range) : Promise.reject(new Error('Relatório exige período')),
+      'cash-flow-by-client': () =>
+        range
+          ? this.cashFlowByClient(actor, range)
+          : Promise.reject(new Error('Relatório exige período')),
       'partial-payments': () => this.partialPayments(actor),
       'active-contracts': () => this.activeContracts(actor),
       'revenue-by-lawyer': () => this.revenueByLawyer(actor),
@@ -211,7 +341,7 @@ export class ReportsService {
       WHERE pa.organization_id = ${organizationId}::uuid AND pa.reversed_at IS NULL AND p.status = 'CONFIRMED'
       GROUP BY pa.installment_id
     ), balances AS (
-      SELECT i.id AS installment_id, i.receivable_id, r.client_id, i.due_date,
+      SELECT i.id AS installment_id, i.receivable_id, r.client_id, i.currency, i.due_date,
         COALESCE(i.competence_date, r.competence_date, r.issue_date) AS competence_date,
         i.status, COALESCE(p.amount, 0) AS paid,
         (i.amount + COALESCE(a.delta, 0) - COALESCE(p.amount, 0)) AS balance
@@ -229,6 +359,17 @@ export class ReportsService {
         Object.entries(row).map(([key, value]) => [
           key,
           Prisma.Decimal.isDecimal(value) ? value.toFixed(2) : value,
+        ]),
+      ),
+    );
+  }
+
+  private normalizeExact(rows: Row[]): Row[] {
+    return rows.map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([key, value]) => [
+          key,
+          Prisma.Decimal.isDecimal(value) ? value.toFixed(4) : value,
         ]),
       ),
     );

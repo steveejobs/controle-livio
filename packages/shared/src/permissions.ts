@@ -9,6 +9,7 @@ export const permissionActions = [
 ] as const;
 
 export const permissionResources = [
+  'storage_recovery',
   'organization',
   'users',
   'roles',
@@ -18,6 +19,7 @@ export const permissionResources = [
   'contracts',
   'receivables',
   'payments',
+  'receipts',
   'expenses',
   'documents',
   'notes',
@@ -51,13 +53,19 @@ const workActions = ['view', 'create', 'update', 'export'] as const;
 const viewOnly = ['view'] as const;
 
 export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly PermissionCode[]>> = {
-  administrator: permissionResources.flatMap((resource) => codes(resource, allActions)),
+  administrator: [
+    ...permissionResources
+      .filter((resource) => resource !== 'storage_recovery')
+      .flatMap((resource) => codes(resource, allActions)),
+    ...codes('storage_recovery', ['view', 'manage']),
+  ],
   lawyer: [
     ...codes('clients', workActions),
     ...codes('matters', workActions),
     ...codes('pipelines', viewOnly),
     ...codes('contracts', ['view', 'create', 'update']),
     ...codes('receivables', viewOnly),
+    ...codes('receipts', ['view', 'create']),
     ...codes('documents', workActions),
     ...codes('notes', workActions),
     ...codes('messages', workActions),
@@ -71,6 +79,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('matters', ['view', 'create', 'update']),
     ...codes('pipelines', viewOnly),
     ...codes('documents', ['view', 'create', 'update']),
+    ...codes('receipts', ['view', 'create']),
     ...codes('notes', workActions),
     ...codes('messages', workActions),
     ...codes('tasks', workActions),
@@ -84,6 +93,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('contracts', ['view', 'create', 'update', 'approve', 'export']),
     ...codes('receivables', ['view', 'create', 'update', 'approve', 'export']),
     ...codes('payments', ['view', 'create', 'update', 'approve', 'export']),
+    ...codes('receipts', ['view', 'create', 'approve']),
     ...codes('expenses', ['view', 'create', 'update', 'approve', 'export']),
     ...codes('documents', viewOnly),
     ...codes('messages', ['view', 'create']),
@@ -98,6 +108,7 @@ export const initialRolePermissions: Readonly<Record<SystemRoleKey, readonly Per
     ...codes('contracts', viewOnly),
     ...codes('receivables', viewOnly),
     ...codes('payments', viewOnly),
+    ...codes('receipts', ['view', 'create']),
     ...codes('documents', viewOnly),
     ...codes('messages', ['view', 'create']),
     ...codes('calendar', viewOnly),

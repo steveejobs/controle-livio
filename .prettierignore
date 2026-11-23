@@ -4,4 +4,12 @@ dist
 coverage
 package-lock.json
 packages/db/prisma/migrations
+packages/db/src/generated
 apps/web/next-env.d.ts
+# Machine-generated QA evidence is immutable and must not be reformatted.
+test-results/
+playwright-report/
+integrated-playwright-report.json
+integrated-test-results/
+# Historical Playwright state is generated evidence, not source code.
+**/.last-run.json

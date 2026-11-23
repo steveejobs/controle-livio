@@ -23,7 +23,7 @@ port = 54323
 [auth]
 enabled = true
 site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000/**"]
+additional_redirect_urls = ["http://localhost:3000/**", "http://127.0.0.1:3010/**"]
 enable_signup = false
 minimum_password_length = 6
 

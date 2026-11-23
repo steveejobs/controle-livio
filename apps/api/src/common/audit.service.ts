@@ -22,19 +22,28 @@ function json(value: unknown): Prisma.InputJsonValue {
 @Injectable()
 export class AuditService {
   record(transaction: Prisma.TransactionClient, input: AuditInput) {
+    const metadata = json(input.metadata ?? {});
+    const details =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+        ? metadata
+        : { details: metadata };
     return transaction.auditLog.create({
       data: {
         organizationId: input.organizationId,
         action: input.action,
         resource: input.resource,
         ...(input.actorUserId ? { actorUserId: input.actorUserId } : {}),
-        ...(input.actorSessionId ? { actorSessionId: input.actorSessionId } : {}),
         ...(input.resourceId ? { resourceId: input.resourceId } : {}),
         ...(input.requestId ? { requestId: input.requestId } : {}),
         ...(input.ipHash ? { ipHash: input.ipHash } : {}),
         ...(input.before !== undefined ? { before: json(input.before) } : {}),
         ...(input.after !== undefined ? { after: json(input.after) } : {}),
-        metadata: json(input.metadata ?? {}),
+        // actor_session_id belongs to the retired sessions table and has a legacy tenant trigger.
+        // Supabase session IDs remain traceable without recreating legacy authentication rows.
+        metadata: {
+          ...details,
+          ...(input.actorSessionId ? { authSessionId: input.actorSessionId } : {}),
+        },
       },
     });
   }

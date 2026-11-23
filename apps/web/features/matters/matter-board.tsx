@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { Empty, Loading, Notice, Title } from '../shared/crm-ui';
+import { ClientSelectField } from '../shared/client-select-field';
 import { LoadMore } from '../shared/load-more';
 import { usePaginatedData } from '../shared/use-paginated-data';
 
@@ -11,6 +12,7 @@ type Client = {
   id: string;
   displayName: string;
 };
+type ResponsibleLawyer = { id: string; fullName: string };
 type Matter = {
   id: string;
   reference: string;
@@ -18,6 +20,7 @@ type Matter = {
   status: string;
   priority: string;
   client?: { id: string; displayName: string };
+  responsibleLawyer?: ResponsibleLawyer | null;
   currentStage?: Stage | null;
   pipeline?: Pipeline | null;
   nextAction?: string;
@@ -29,6 +32,21 @@ type Matter = {
   area?: string;
   courtNumberNormalized?: string;
   updatedAt?: string;
+};
+type MatterTimeline = {
+  matter: {
+    reference: string;
+    title: string;
+    courtNumberNormalized?: string | null;
+    client: { displayName: string };
+  };
+  entries: Array<{
+    id: string;
+    type: string;
+    title: string;
+    description?: string;
+    occurredAt: string;
+  }>;
 };
 type Stage = { id: string; name: string; color?: string; position: number; isTerminal?: boolean };
 type Pipeline = {
@@ -73,6 +91,7 @@ export function MatterBoard({
   permissions: readonly string[];
 }) {
   const canViewPipelines = permissions.includes('pipelines:view');
+  const canViewClients = permissions.includes('clients:view');
   const canCreate = permissions.includes('matters:create');
   const canMove = permissions.includes('matters:update');
   const description = Array.isArray(kind)
@@ -90,9 +109,14 @@ export function MatterBoard({
     error: pipeError,
     reload: reloadPipes,
   } = useLoad<Pipeline[]>(canViewPipelines ? '/pipelines' : undefined);
-  const clients = usePaginatedData<Client>(canCreate && showForm ? '/clients' : undefined, 100);
+  const clients = usePaginatedData<Client>(
+    canCreate && showForm && canViewClients ? '/clients' : undefined,
+    100,
+  );
   const clientPage = clients.data;
   const clientsError = clients.error;
+  const clientOptionsReady =
+    canViewClients && Boolean(clientPage?.items.length) && !clients.loading && !clientsError;
   const {
     data: matters,
     error,
@@ -103,6 +127,7 @@ export function MatterBoard({
   } = usePaginatedData<Matter>('/matters');
   const [moving, setMoving] = useState<string>();
   const [feedback, setFeedback] = useState<string>();
+  const [timelineMatterId, setTimelineMatterId] = useState<string>();
   const filtered = useMemo(
     () => matters?.items.filter((item) => matchesPipelineKind(kind, item.pipeline?.kind)) ?? [],
     [matters, kind],
@@ -136,6 +161,9 @@ export function MatterBoard({
   const isCollectionCreate = createKind === 'COLLECTION';
   const showLegalFields =
     createKind === 'LEGAL' || (!isUnifiedCrm && createKind === undefined && kind === undefined);
+  const lawyers = useLoad<ResponsibleLawyer[]>(
+    canCreate && showForm && showLegalFields ? '/matters/responsibles/lawyers' : undefined,
+  );
   const recordNameLabel =
     isUnifiedCrm && !createPipeline
       ? 'Nome do processo ou da oportunidade'
@@ -204,6 +232,7 @@ export function MatterBoard({
             : undefined,
           labels: [],
           confidential: form.get('confidential') === 'on',
+          responsibleLawyerId: form.get('responsibleLawyerId') || undefined,
         }),
       });
       setFeedback(
@@ -306,21 +335,20 @@ export function MatterBoard({
           {feedback}
         </div>
       )}
+      {timelineMatterId && (
+        <MatterTimelinePanel id={timelineMatterId} onClose={() => setTimelineMatterId(undefined)} />
+      )}
       {showForm && canCreate && (
         <form className="surface form-grid" onSubmit={create}>
-          <label>
-            Cliente
-            <select required name="clientId" defaultValue="">
-              <option value="" disabled>
-                Selecione
-              </option>
-              {clientPage?.items.map((client) => (
-                <option value={client.id} key={client.id}>
-                  {client.displayName}
-                </option>
-              ))}
-            </select>
-          </label>
+          <ClientSelectField
+            items={clientPage?.items}
+            loading={clients.loading || (!clientPage && !clientsError && canViewClients)}
+            error={clientsError?.message}
+            onRetry={clients.retry}
+            canListClients={canViewClients}
+            name="clientId"
+            required
+          />
           {clientPage && (
             <div className="form-wide">
               <LoadMore
@@ -393,6 +421,38 @@ export function MatterBoard({
               {showLegalFields && (
                 <>
                   <label>
+                    Advogado responsável (opcional)
+                    <select
+                      name="responsibleLawyerId"
+                      defaultValue=""
+                      aria-busy={!lawyers.data && !lawyers.error}
+                    >
+                      <option value="">Definir depois</option>
+                      {lawyers.data?.map((lawyer) => (
+                        <option value={lawyer.id} key={lawyer.id}>
+                          {lawyer.fullName}
+                        </option>
+                      ))}
+                    </select>
+                    {!lawyers.data && !lawyers.error && (
+                      <small role="status">Carregando advogados ativos da organização…</small>
+                    )}
+                    {lawyers.data?.length === 0 && (
+                      <small role="status">
+                        Nenhum advogado ativo está disponível para atribuição.
+                      </small>
+                    )}
+                    <small>Mostramos apenas advogados ativos desta organização.</small>
+                  </label>
+                  {lawyers.error && (
+                    <div className="notice notice-error" role="alert">
+                      Não foi possível carregar os advogados: {lawyers.error.message}{' '}
+                      <button type="button" onClick={lawyers.reload}>
+                        Tentar novamente
+                      </button>
+                    </div>
+                  )}
+                  <label>
                     Número judicial ou CNJ (opcional)
                     <input name="courtNumber" maxLength={80} />
                   </label>
@@ -447,14 +507,18 @@ export function MatterBoard({
           )}
           <button
             className="primary form-wide"
-            disabled={moving === 'create' || (isUnifiedCrm && !selectedPipelines.length)}
+            disabled={
+              moving === 'create' ||
+              !clientOptionsReady ||
+              (isUnifiedCrm && !selectedPipelines.length)
+            }
           >
             {moving === 'create' ? 'Cadastrando…' : createButtonLabel}
           </button>
         </form>
       )}
       <Notice
-        error={pipeError ?? clientsError ?? (!matters ? error : undefined)}
+        error={pipeError ?? (!matters ? error : undefined)}
         onRetry={() => {
           void reload();
           void reloadPipes();
@@ -517,6 +581,12 @@ export function MatterBoard({
                           <article className="kanban-card" key={matter.id}>
                             <b>{matter.reference}</b>
                             <strong>{matter.title}</strong>
+                            <button
+                              className="matter-timeline-button"
+                              onClick={() => setTimelineMatterId(matter.id)}
+                            >
+                              Ver acompanhamento
+                            </button>
                             {matter.customFields?.collectionObjective?.description && (
                               <small>
                                 <span className="badge">Objetivo sem valor financeiro</span>{' '}
@@ -524,6 +594,9 @@ export function MatterBoard({
                               </small>
                             )}
                             <small>{matter.client?.displayName ?? 'Cliente nao informado'}</small>
+                            <small>
+                              Advogado: {matter.responsibleLawyer?.fullName ?? 'Não atribuído'}
+                            </small>
                             <div>
                               <span className={`badge priority-${matter.priority.toLowerCase()}`}>
                                 {asText(matter.priority)}
@@ -605,6 +678,7 @@ export function MatterBoard({
               update={update}
               pipelines={selectedPipelines}
               assignToPipeline={assignToPipeline}
+              onOpenTimeline={setTimelineMatterId}
             />
           )}
         </>
@@ -617,6 +691,7 @@ export function MatterBoard({
           update={update}
           pipelines={selectedPipelines}
           assignToPipeline={assignToPipeline}
+          onOpenTimeline={setTimelineMatterId}
         />
       ) : (
         <Empty>Crie e configure um pipeline antes de movimentar processos.</Empty>
@@ -643,6 +718,7 @@ function MatterFallbackTable({
   update,
   pipelines,
   assignToPipeline,
+  onOpenTimeline,
 }: {
   title: string;
   matters: Matter[];
@@ -651,6 +727,7 @@ function MatterFallbackTable({
   update: (matter: Matter, changes: Record<string, unknown>) => Promise<void>;
   pipelines: Pipeline[];
   assignToPipeline: (matter: Matter, pipelineId: string) => Promise<void>;
+  onOpenTimeline: (matterId: string) => void;
 }) {
   return (
     <section className="surface table-wrap">
@@ -661,9 +738,11 @@ function MatterFallbackTable({
             <th>Referência</th>
             <th>Processo</th>
             <th>Cliente</th>
+            <th>Advogado responsável</th>
             <th>Status</th>
             <th>Prioridade</th>
             <th>Etapa</th>
+            <th>Acompanhamento</th>
           </tr>
         </thead>
         <tbody>
@@ -672,6 +751,7 @@ function MatterFallbackTable({
               <td>{matter.reference}</td>
               <td>{matter.title}</td>
               <td>{matter.client?.displayName ?? '—'}</td>
+              <td>{matter.responsibleLawyer?.fullName ?? 'Não atribuído'}</td>
               <td>
                 {canUpdate ? (
                   <select
@@ -728,10 +808,74 @@ function MatterFallbackTable({
                   'Sem etapa configurada'
                 )}
               </td>
+              <td>
+                <button className="table-action" onClick={() => onOpenTimeline(matter.id)}>
+                  Linha do tempo
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </section>
+  );
+}
+
+function MatterTimelinePanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const { data, error, reload } = useLoad<MatterTimeline>(`/matters/${id}/timeline`);
+  return (
+    <section className="surface matter-timeline" aria-labelledby="matter-timeline-title">
+      <header>
+        <div>
+          <p>Acompanhamento do processo</p>
+          <h2 id="matter-timeline-title">{data?.matter.title ?? 'Carregando linha do tempo…'}</h2>
+          {data?.matter && (
+            <small>
+              {data.matter.reference} · {data.matter.client.displayName}
+              {data.matter.courtNumberNormalized ? ` · ${data.matter.courtNumberNormalized}` : ''}
+            </small>
+          )}
+        </div>
+        <button className="secondary" onClick={onClose}>
+          Fechar acompanhamento
+        </button>
+      </header>
+      {error && (
+        <div role="alert" className="notice notice-error">
+          {error.message} <button onClick={reload}>Tentar novamente</button>
+        </div>
+      )}
+      {!data && !error ? (
+        <Loading />
+      ) : data?.entries.length ? (
+        <ol className="timeline-list">
+          {data.entries.map((entry) => (
+            <li
+              key={`${entry.type}-${entry.id}`}
+              className={`timeline-entry timeline-${entry.type.toLowerCase()}`}
+            >
+              <span aria-hidden="true" className="timeline-dot" />
+              <div>
+                <div className="timeline-entry-heading">
+                  <strong>{entry.title}</strong>
+                  <time dateTime={entry.occurredAt}>
+                    {new Date(entry.occurredAt).toLocaleString('pt-BR', {
+                      dateStyle: 'short',
+                      timeStyle: 'short',
+                    })}
+                  </time>
+                </div>
+                {entry.description && <p>{entry.description}</p>}
+              </div>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="section-note">
+          Ainda não há movimentações registradas. As próximas etapas, prazos, audiências e
+          documentos aparecerão aqui.
+        </p>
+      )}
     </section>
   );
 }

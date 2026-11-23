@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!gateway.mjs
+!healthcheck.mjs
+!Dockerfile.vercel
+!vercel-entrypoint.mjs
+!clamd-vercel.conf
+!freshclam-vercel.conf
+!signature-header.mjs

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient } from '@livio/db';
 
 function loadEnvironment() {
   for (const path of ['.env', '.env.infrastructure']) {

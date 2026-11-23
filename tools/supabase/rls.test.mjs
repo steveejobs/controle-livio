@@ -1,4 +1,32 @@
+import { PrismaClient } from '@livio/db';
 import { createClient } from '@supabase/supabase-js';
+import { createHash } from 'node:crypto';
+import {
+  observedStorageFetch,
+  sdkDenialProven,
+  sdkWriteBarrier,
+} from '../qa/sdk-storage-proof.mjs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import assert from 'node:assert/strict';
+import { sanitizeProviderPayload } from '../qa/storage-authorization-proof.mjs';
+const observed = observedStorageFetch();
+const evidence = { scope: 'DISPOSABLE_REAL_SDK_STORAGE', cases: [] };
+
+if (
+  process.platform !== 'linux' ||
+  process.env.GITHUB_ACTIONS !== 'true' ||
+  process.env.NODE_ENV !== 'test' ||
+  process.env.SUPABASE_LOCAL !== 'true' ||
+  process.env.SUPABASE_ENVIRONMENT !== 'test' ||
+  process.env.SUPABASE_ACCESS_TOKEN ||
+  process.env.SUPABASE_DB_PASSWORD
+) {
+  throw new Error('Trusted Storage isolation fixture requires disposable Linux CI');
+}
+const databaseHost = new URL(process.env.DATABASE_URL).hostname;
+if (!['localhost', '127.0.0.1'].includes(databaseHost))
+  throw new Error('External database rejected before trusted Storage fixture');
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? process.env.SUPABASE_ANON_KEY;
@@ -13,7 +41,10 @@ const clientA = '11000000-0000-4000-8000-000000000001';
 const clientB = '21000000-0000-4000-8000-000000000001';
 
 async function signedIn(email) {
-  const client = createClient(url, anonKey, { auth: { persistSession: false } });
+  const client = createClient(url, anonKey, {
+    auth: { persistSession: false },
+    global: { fetch: observed.fetch },
+  });
   const { error } = await client.auth.signInWithPassword({ email, password });
   if (error) throw new Error(`Login local falhou para ${email}: ${error.message}`);
   return client;
@@ -100,60 +131,209 @@ expect(
   'cliente portal visualizou nota interna',
 );
 
-const objectPath = `organizations/${orgA}/documents/rls-test/proof.txt`;
-const uploadA = await lawyerA.storage
-  .from('legal-documents')
-  .upload(objectPath, new Blob(['conteudo ficticio']), {
-    contentType: 'text/plain',
-    upsert: false,
-  });
-expect(!uploadA.error, `upload autorizado falhou: ${uploadA.error?.message ?? ''}`);
-
-const uploadCross = await adminB.storage
-  .from('legal-documents')
-  .upload(`organizations/${orgA}/documents/rls-test/cross.txt`, new Blob(['negado']), {
-    contentType: 'text/plain',
-    upsert: false,
-  });
-expect(Boolean(uploadCross.error), 'organização B fez upload no path da organização A');
-
-const documentId = crypto.randomUUID();
-const versionId = crypto.randomUUID();
-const documentInsert = await lawyerA.from('documents').insert({
-  id: documentId,
-  organization_id: orgA,
-  client_id: clientA,
-  title: 'Documento ficticio de teste RLS',
-  status: 'ACTIVE',
-  visibility: 'CLIENT',
-  current_version: 1,
-  created_by_id: 'a1000000-0000-4000-8000-000000000002',
-  updated_at: new Date().toISOString(),
+// Trusted synthetic fixture setup only; this does not certify a product API upload.
+const objectPath = 'organizations/' + orgA + '/documents/rls-test/' + crypto.randomUUID() + '.txt';
+const fixtureBytes = Buffer.from('SYNTHETIC RLS FIXTURE');
+const fixtureHash = createHash('sha256').update(fixtureBytes).digest('hex');
+const fixtureStorage = createClient(url, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+  auth: { persistSession: false, autoRefreshToken: false },
 });
-expect(
-  !documentInsert.error,
-  `metadata de documento falhou: ${documentInsert.error?.message ?? ''}`,
-);
-const versionInsert = await lawyerA.from('document_versions').insert({
-  id: versionId,
-  organization_id: orgA,
-  document_id: documentId,
-  version: 1,
-  storage_key: objectPath,
-  file_name: 'proof.txt',
-  mime_type: 'text/plain',
-  size_bytes: 18,
-  sha256: '0'.repeat(64),
-  uploaded_by_id: 'a1000000-0000-4000-8000-000000000002',
-});
-expect(!versionInsert.error, `metadata de versão falhou: ${versionInsert.error?.message ?? ''}`);
+const seeded = await fixtureStorage.storage
+  .from('legal-documents')
+  .upload(objectPath, fixtureBytes, { contentType: 'text/plain', upsert: false });
+expect(!seeded.error, 'trusted local Storage fixture failed');
+const fixtureUpsert = await fixtureStorage.storage
+  .from('legal-documents')
+  .upload(objectPath, fixtureBytes, { contentType: 'text/plain', upsert: true });
+expect(!fixtureUpsert.error, 'trusted same-operation upsert control failed');
 
-const ownSignedUrl = await lawyerA.storage.from('legal-documents').createSignedUrl(objectPath, 60);
-expect(
-  !ownSignedUrl.error && Boolean(ownSignedUrl.data.signedUrl),
-  'usuário A não gerou URL autorizada',
-);
-const crossSignedUrl = await adminB.storage.from('legal-documents').createSignedUrl(objectPath, 60);
-expect(Boolean(crossSignedUrl.error), 'usuário B gerou download do documento A');
+if (
+  process.env.SUPABASE_LOCAL !== 'true' ||
+  process.env.SUPABASE_ENVIRONMENT !== 'test' ||
+  !['127.0.0.1', 'localhost'].includes(new URL(process.env.DATABASE_URL).hostname)
+)
+  throw new Error('Metadata fixtures require disposable loopback PostgreSQL');
+const database = new PrismaClient();
+try {
+  const documentId = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
+  const documentInsert = await lawyerA.from('documents').insert({
+    id: documentId,
+    organization_id: orgA,
+    client_id: clientA,
+    title: 'Documento ficticio de teste RLS',
+    status: 'ACTIVE',
+    visibility: 'CLIENT',
+    current_version: 1,
+    created_by_id: 'a1000000-0000-4000-8000-000000000002',
+    updated_at: new Date().toISOString(),
+  });
+  expect(
+    documentInsert.error?.code === '42501',
+    `metadata de documento falhou: ${documentInsert.error?.message ?? ''}`,
+  );
+  await database.document.create({
+    data: {
+      id: documentId,
+      organizationId: orgA,
+      clientId: clientA,
+      title: 'Synthetic RLS metadata',
+      status: 'ACTIVE',
+      visibility: 'CLIENT',
+      currentVersion: 1,
+      createdById: 'a1000000-0000-4000-8000-000000000002',
+    },
+  });
+  const versionInsert = await lawyerA.from('document_versions').insert({
+    id: versionId,
+    organization_id: orgA,
+    document_id: documentId,
+    version: 1,
+    storage_key: objectPath,
+    file_name: 'proof.txt',
+    mime_type: 'text/plain',
+    size_bytes: fixtureBytes.length,
+    sha256: fixtureHash,
+    uploaded_by_id: 'a1000000-0000-4000-8000-000000000002',
+  });
+  expect(
+    versionInsert.error?.code === '42501',
+    `metadata de versão falhou: ${versionInsert.error?.message ?? ''}`,
+  );
 
-console.log('RLS, roles, internal notes and Storage isolation tests passed.');
+  await database.documentVersion.create({
+    data: {
+      id: versionId,
+      organizationId: orgA,
+      documentId,
+      version: 1,
+      storageKey: objectPath,
+      fileName: 'proof.txt',
+      mimeType: 'text/plain',
+      sizeBytes: BigInt(fixtureBytes.length),
+      sha256: fixtureHash,
+      uploadedById: 'a1000000-0000-4000-8000-000000000002',
+    },
+  });
+  const ownSignedUrl = await lawyerA.storage
+    .from('legal-documents')
+    .createSignedUrl(objectPath, 60);
+  expect(
+    !ownSignedUrl.error && Boolean(ownSignedUrl.data.signedUrl),
+    'usuário A não gerou URL autorizada',
+  );
+  const downloaded = await fetch(ownSignedUrl.data.signedUrl);
+  expect(downloaded.ok, 'authorized private download failed');
+  expect(
+    createHash('sha256')
+      .update(Buffer.from(await downloaded.arrayBuffer()))
+      .digest('hex') === fixtureHash,
+    'private download hash mismatch',
+  );
+  // The negative update requires a linked, readable object, not just bytes with
+  // missing metadata that would already be invisible under the old SELECT policy.
+  // Both actors target the same existing object and persisted document/version.
+  // The trusted fixture upload above is a provider positive control, not an end-user permission.
+  async function physicalSnapshot() {
+    const physical = await fixtureStorage.storage.from('legal-documents').download(objectPath);
+    expect(!physical.error, 'fixture must physically exist');
+    return {
+      hash: createHash('sha256')
+        .update(Buffer.from(await physical.data.arrayBuffer()))
+        .digest('hex'),
+      document: await database.document.findUniqueOrThrow({ where: { id: documentId } }),
+      versions: await database.documentVersion.findMany({
+        where: { documentId },
+        orderBy: { id: 'asc' },
+      }),
+      audit: await database.auditLog.findMany({
+        where: { organizationId: orgA },
+        orderBy: { id: 'asc' },
+      }),
+      objects: await database.$queryRawUnsafe(
+        "SELECT to_jsonb(o)-'last_accessed_at' AS object FROM storage.objects o WHERE bucket_id='legal-documents' AND name=$1",
+        objectPath,
+      ),
+    };
+  }
+  const outputRoot =
+    process.env.LIVIO_QA_OUTPUT ?? resolve(process.env.RUNNER_TEMP, 'livio-integrated-artifacts');
+  const evidencePath = resolve(outputRoot, 'workflow-stages/rls-storage.json');
+  const save = () => {
+    mkdirSync(resolve(outputRoot, 'workflow-stages'), { recursive: true });
+    writeFileSync(
+      evidencePath,
+      JSON.stringify(
+        sanitizeProviderPayload(evidence),
+        (_k, v) => (typeof v === 'bigint' ? v.toString() : v),
+        2,
+      ) + '\n',
+    );
+  };
+  for (const [name, client, organizationId] of [
+    ['cross-org', adminB, orgB],
+    ['own-linked', lawyerA, orgA],
+  ]) {
+    const row = { name, status: 'FAIL', organizationId };
+    evidence.cases.push(row);
+    const identity = await client.auth.getUser();
+    expect(!identity.error && identity.data.user?.id, 'actor JWT must be admitted by real Auth');
+    row.profileId = identity.data.user.id;
+    row.authorization = await sdkWriteBarrier(database, row.profileId, organizationId);
+    row.before = await physicalSnapshot();
+    save();
+    const offset = observed.observations.length;
+    const result = await client.storage
+      .from('legal-documents')
+      .upload(objectPath, new Blob(['SYNTHETIC FORBIDDEN CHANGE']), {
+        contentType: 'text/plain',
+        upsert: true,
+      });
+    row.response =
+      observed.observations
+        .slice(offset)
+        .find(
+          (o) =>
+            o.method === 'POST' && o.path === '/storage/v1/object/legal-documents/' + objectPath,
+        ) ?? null;
+    row.sdkError = result.error
+      ? { name: result.error.name, statusCode: result.error.statusCode, code: result.error.code }
+      : null;
+    row.after = await physicalSnapshot();
+    row.snapshotPreserved =
+      JSON.stringify(row.before, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)) ===
+      JSON.stringify(row.after, (_k, v) => (typeof v === 'bigint' ? v.toString() : v));
+    row.securityProven = sdkDenialProven(row.response, {
+      path: '/storage/v1/object/legal-documents/' + objectPath,
+      jwtValidated: true,
+      exists: row.before.hash === fixtureHash,
+      unchanged: row.snapshotPreserved,
+      positiveControl: !seeded.error && !fixtureUpsert.error,
+      writeBarrier: row.authorization.writeBarrier,
+    });
+    save();
+    assert.deepEqual(row.after, row.before, 'SDK mutation changed protected fixture');
+    expect(
+      row.securityProven,
+      'INCONCLUSIVE: SDK denial requires original structured response and independent authorization proof',
+    );
+    row.status = 'PASS';
+    save();
+  }
+  const preserved = await fixtureStorage.storage.from('legal-documents').download(objectPath);
+  expect(!preserved.error, 'existing fixture disappeared');
+  expect(
+    createHash('sha256')
+      .update(Buffer.from(await preserved.data.arrayBuffer()))
+      .digest('hex') === fixtureHash,
+    'direct attempt changed fixture bytes',
+  );
+  const crossSignedUrl = await adminB.storage
+    .from('legal-documents')
+    .createSignedUrl(objectPath, 60);
+  expect(Boolean(crossSignedUrl.error), 'usuário B gerou download do documento A');
+
+  console.log('RLS, roles, internal notes and Storage isolation tests passed.');
+} finally {
+  await database.$disconnect();
+}

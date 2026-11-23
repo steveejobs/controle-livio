@@ -19,6 +19,12 @@ import {
   createContractSchema,
   createServiceCatalogItemSchema,
   createExpenseSchema,
+  expenseApprovalPolicySchema,
+  expenseListQuerySchema,
+  expenseHistoryQuerySchema,
+  expensePaymentSchema,
+  expenseRejectionSchema,
+  expenseSummaryQuerySchema,
   createPaymentSchema,
   paymentChangeSchema,
   paymentChangeDecisionSchema,
@@ -29,6 +35,11 @@ import {
   type CreateContractInput,
   type CreateServiceCatalogItemInput,
   type CreateExpenseInput,
+  type ExpenseListQuery,
+  type ExpenseHistoryQuery,
+  type ExpensePaymentInput,
+  type ExpenseSummaryQuery,
+  type UpdateExpenseInput,
   type CreatePaymentInput,
   type PaymentChangeInput,
   type PaymentChangeDecisionInput,
@@ -36,6 +47,7 @@ import {
   type RenegotiationInput,
   type ReversalInput,
   financeListQuerySchema,
+  updateExpenseSchema,
   type FinanceListQuery,
 } from './finance.schemas';
 import { FinanceService } from './finance.service';
@@ -177,6 +189,98 @@ export class FinanceController {
   ) {
     return this.finance.createExpense(actor, input);
   }
+
+  @Get('expenses/approval-policy')
+  @RequirePermission('expenses:view')
+  expenseApprovalPolicy(@CurrentActor() actor: AuthenticatedActor) {
+    return this.finance.expenseApprovalPolicy(actor);
+  }
+
+  @Get('expenses/responsibles')
+  @RequirePermission('expenses:view')
+  expenseResponsibles(@CurrentActor() actor: AuthenticatedActor) {
+    return this.finance.expenseResponsibles(actor);
+  }
+
+  @Patch('expenses/approval-policy')
+  @RequirePermission('organization:update')
+  @RequireAdministrator()
+  updateExpenseApprovalPolicy(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Body(new ZodValidationPipe(expenseApprovalPolicySchema)) input: { required: boolean },
+  ) {
+    return this.finance.updateExpenseApprovalPolicy(actor, input.required);
+  }
+
+  @Patch('expenses/:id')
+  @RequirePermission('expenses:update')
+  updateExpense(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(updateExpenseSchema)) input: UpdateExpenseInput,
+  ) {
+    return this.finance.updateExpense(actor, id, input);
+  }
+
+  @Post('expenses/:id/submit')
+  @RequirePermission('expenses:update')
+  submitExpense(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
+    return this.finance.submitExpense(actor, id);
+  }
+
+  @Get('expenses/:id/history')
+  @RequirePermission('expenses:view')
+  expenseHistory(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query(new ZodValidationPipe(expenseHistoryQuerySchema)) query: ExpenseHistoryQuery,
+  ) {
+    return this.finance.expenseHistory(actor, id, query);
+  }
+
+  @Post('expenses/:id/approve')
+  @RequirePermission('expenses:approve')
+  approveExpense(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.finance.decideExpense(actor, id, 'APPROVE');
+  }
+
+  @Post('expenses/:id/reject')
+  @RequirePermission('expenses:approve')
+  rejectExpense(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(expenseRejectionSchema)) input: { reason: string },
+  ) {
+    return this.finance.decideExpense(actor, id, 'REJECT', input.reason);
+  }
+
+  @Post('expenses/:id/payment')
+  @RequirePermission('expenses:update')
+  payExpense(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body(new ZodValidationPipe(expensePaymentSchema)) input: ExpensePaymentInput,
+  ) {
+    return this.finance.payExpense(actor, id, input);
+  }
+
+  @Post('expenses/:id/cancel')
+  @RequirePermission('expenses:update')
+  cancelExpense(@CurrentActor() actor: AuthenticatedActor, @Param('id', ParseUUIDPipe) id: string) {
+    return this.finance.cancelExpense(actor, id);
+  }
+
+  @Get('expenses/summary')
+  @RequirePermission('expenses:view')
+  expenseSummary(
+    @CurrentActor() actor: AuthenticatedActor,
+    @Query(new ZodValidationPipe(expenseSummaryQuerySchema)) query: ExpenseSummaryQuery,
+  ) {
+    return this.finance.expenseSummary(actor, query);
+  }
   @Get('contracts')
   @RequirePermission('contracts:view')
   contracts(
@@ -208,7 +312,7 @@ export class FinanceController {
   @RequirePermission('expenses:view')
   expenses(
     @CurrentActor() actor: AuthenticatedActor,
-    @Query(new ZodValidationPipe(financeListQuerySchema)) query: FinanceListQuery,
+    @Query(new ZodValidationPipe(expenseListQuerySchema)) query: ExpenseListQuery,
   ) {
     return this.finance.listExpenses(actor, query);
   }

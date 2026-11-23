@@ -95,7 +95,9 @@ test('push alerts can be enabled and disabled for this browser', async ({ page }
     const pathname = new URL(request.url()).pathname;
     const method = request.method();
     let body: unknown = {};
-    if (pathname === '/v1/auth/me') {
+    if (pathname === '/v1/audit-logs/module-views' && method === 'POST') {
+      body = { recorded: true };
+    } else if (pathname === '/v1/auth/me') {
       body = {
         user: {
           id: 'push-qa-user',

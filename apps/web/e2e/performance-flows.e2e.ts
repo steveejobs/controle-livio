@@ -12,7 +12,9 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
     const responseHeaders = { 'access-control-allow-origin': '*' };
     let body: unknown;
 
-    if (pathname === '/v1/auth/me') {
+    if (pathname === '/v1/audit-logs/module-views' && method === 'POST') {
+      body = { recorded: true };
+    } else if (pathname === '/v1/auth/me') {
       body = {
         user: {
           id: 'e2e-admin',
@@ -40,11 +42,15 @@ test('mobile navigation, deferred clients and notification refresh', async ({ pa
       };
     } else if (pathname === '/v1/matters') {
       body = { items: [], total: 0 };
+    } else if (pathname === '/v1/matters/responsibles/lawyers') {
+      body = [{ id: 'e2e-lawyer', fullName: 'Advogado QA' }];
     } else if (pathname === '/v1/pipelines') {
       body = [];
     } else if (pathname === '/v1/clients') {
       requests.clients += 1;
       body = { items: [], total: 0 };
+    } else if (pathname === '/v1/notifications/push/config' && method === 'GET') {
+      body = { enabled: false, subscriptions: [] };
     } else if (pathname === '/v1/notifications') {
       body = { items: [], unread: 0 };
     } else if (pathname === '/v1/notifications/reconcile' && method === 'POST') {

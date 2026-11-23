@@ -3,33 +3,36 @@ name: Quality
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, 'validation/**']
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   application:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
-      DATABASE_URL: postgresql://postgres.projectref123:placeholder@aws-0-region.pooler.supabase.com:6543/postgres
-      NEXT_PUBLIC_API_URL: https://api.example.invalid/v1
-      NEXT_PUBLIC_SUPABASE_URL: https://projectref123.supabase.co
-      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-public-anon-key-placeholder
-      SUPABASE_URL: https://projectref123.supabase.co
-      SUPABASE_ANON_KEY: ci-public-anon-key-placeholder
-      SUPABASE_SERVICE_ROLE_KEY: ci-service-role-key-placeholder
-      SUPABASE_ENVIRONMENT: staging
-      SUPABASE_PROJECT_REF: projectref123
-      CONFIRM_SUPABASE_PROJECT_REF: projectref123
-      SUPABASE_LOCAL: 'false'
-      SUPABASE_AUTH_REDIRECT_URL: https://app.example.invalid/auth/confirm
-      CORS_ORIGINS: https://app.example.invalid
+      # Loopback placeholders keep unit/build jobs unable to reach shared services.
+      NEXT_TELEMETRY_DISABLED: '1'
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/livio_ci?schema=public
+      NEXT_PUBLIC_API_URL: http://127.0.0.1:3001/v1
+      NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:54321
+      NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-only-public-anon-key-placeholder
+      SUPABASE_URL: http://127.0.0.1:54321
+      SUPABASE_ANON_KEY: ci-only-public-anon-key-placeholder
+      SUPABASE_SERVICE_ROLE_KEY: ci-only-service-role-placeholder-not-a-credential
+      SUPABASE_ENVIRONMENT: test
+      SUPABASE_LOCAL: 'true'
+      SUPABASE_AUTH_REDIRECT_URL: http://localhost:3000/auth/confirm
+      CORS_ORIGINS: http://localhost:3000
       STORAGE_BUCKET: legal-documents
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -37,28 +40,230 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run lint
+      - name: Verify deployment includes every versioned runtime source
+        run: npm run release:check && node --test tools/release/verify-upload.test.mjs
       - run: npm run typecheck
+      - name: Verify production deployment rejects missing scanner configuration
+        run: node --test tools/release/verify-environment.test.mjs
       - run: npm test
       - run: npm run db:validate
       - run: npm run build
+      - name: Verify OCR assets and extraction from the compiled API
+        run: node tools/qa/verify-receipt-runtime-ci.mjs
       - run: npm run perf:bundle
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e
+      - name: Start prebuilt Chromium with verified loopback bridge
+        run: node tools/qa/prebuilt-ci-dependencies.mjs browser
+      - name: Playwright mocked E2E
+        run: npm run test:e2e
+        timeout-minutes: 15
+      - name: Stop only this disposable browser server
+        if: always()
+        run: node tools/qa/prebuilt-ci-dependencies.mjs stop
+      - name: Upload sanitized Playwright run summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            test-results/playwright/.last-run.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*
+            ${{ runner.temp }}/livio-integrated-artifacts/receipt-runtime-validation.json
+          if-no-files-found: ignore
 
   supabase-isolation:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Run against the disposable local stack for PRs, main and the authorized validation branch.
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '13310'
+      CLAMAV_TIMEOUT_MS: '10000'
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx supabase start
-      - name: Test RLS and Storage isolation
-        shell: bash
+      - name: Install official hash-pinned qpdf and verify real PDF checks
+        run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
+      - name: Start prebuilt Chromium with verified loopback bridge
+        run: node tools/qa/prebuilt-ci-dependencies.mjs browser
+      - name: Start disposable Supabase and export loopback-only credentials
+        id: supabase-start
+        run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
+      - name: Start official ClamAV bound to runner loopback
+        id: clamav-start
+        run: node tools/qa/start-clamav-ci.mjs
+      - name: Build API for scanner validation
+        run: npm run build:api
+      - name: Verify clean and EICAR verdicts with the real scanner
+        id: clamav-ready
+        run: node tools/qa/validate-clamav-ci.mjs --ready
+      - name: Test real Auth, PostgreSQL RLS and Storage isolation
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: npm run test:supabase
+      - name: Verify invitation and recovery with local email capture
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: node tools/qa/verify-smtp-capture-ci.mjs
+      - name: Run authenticated browser and workflow journeys
+        if: ${{ always() && steps.supabase-start.outcome == 'success' && steps.clamav-start.outcome == 'success' }}
+        run: node tools/qa/run-integrated-browser-ci.mjs
+      - name: Verify scanner timeout and unavailable fail-closed behavior
+        if: ${{ always() && steps.clamav-start.outcome == 'success' }}
+        run: node tools/qa/validate-clamav-ci.mjs --failure-modes
+      - name: Verify receipt migration, database roles, RLS and concurrent identifiers
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: node tools/qa/verify-payment-receipts-ci.mjs
+      - name: Stop only this disposable browser server
+        if: always()
+        run: node tools/qa/prebuilt-ci-dependencies.mjs stop
+      - name: Upload sanitized integrated evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-supabase-browser-evidence
+          path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-*
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/browser-navigation-metrics-*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics.json
+            ${{ runner.temp }}/livio-integrated-artifacts/two-session-navigation-metrics-*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report-focused.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-playwright-report-full.json
+            ${{ runner.temp }}/livio-integrated-artifacts/operation-traces/*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/workflow-stages/*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results/**
+            ${{ runner.temp }}/livio-integrated-artifacts/integrated-test-results-focused/**
+            ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/smtp-capture-validation.json
+            ${{ runner.temp }}/livio-integrated-artifacts/receipt-migration-validation.json
+            ${{ runner.temp }}/livio-integrated-artifacts/rate-limit-isolation.json
+            ${{ runner.temp }}/livio-integrated-artifacts/api-timings.log
+            ${{ runner.temp }}/livio-integrated-artifacts/api-timings-focused.log
+            ${{ runner.temp }}/livio-integrated-artifacts/api-timings-full.log
+            ${{ runner.temp }}/livio-integrated-artifacts/web-server.log
+            ${{ runner.temp }}/livio-integrated-artifacts/web-server-focused.log
+            ${{ runner.temp }}/livio-integrated-artifacts/web-server-full.log
+            ${{ runner.temp }}/livio-integrated-artifacts/screenshots/*.png
+          if-no-files-found: ignore
+      - name: Stop only this disposable Supabase project
+        if: always()
+        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || true
+      - name: Stop only this ClamAV test container
+        if: always()
+        run: node tools/qa/stop-clamav-ci.mjs
+
+  financial-security:
+    # Separate disposable host: financial HTTP/SQL evidence never waits for Chromium.
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CLAMAV_HOST: 127.0.0.1
+      CLAMAV_PORT: '13310'
+      CLAMAV_TIMEOUT_MS: '10000'
+      LIVIO_FINANCIAL_INTEGRATION: disposable
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Refuse linked projects, shared env and external credentials before installation
+        run: node tools/qa/run-financial-integrity-ci.mjs --preflight
+      - run: npm ci
+      - name: Build the real API without web or browser
+        id: api-build
+        run: npm run build:api
+      - name: Verify financial runner guards and existing harness support
+        run: node --test tools/qa/financial-runner.test.mjs tools/qa/financial-integrity-support.test.mjs tools/qa/financial-security-support.test.mjs tools/qa/document-security.test.mjs
+      - name: Install and validate only official qpdf; no browser or image pull
+        run: node tools/qa/prebuilt-ci-dependencies.mjs qpdf
+      - name: Start own disposable PostgreSQL, Auth, PostgREST and Storage; apply migrations
+        id: supabase-start
+        run: node tools/qa/prepare-local-supabase-ci.mjs --smtp-capture
+      - name: Start own official ClamAV bound to loopback
+        id: clamav-start
+        run: node tools/qa/start-clamav-ci.mjs
+      - name: Validate real scanner and PDF fixtures
+        id: clamav-ready
+        run: node tools/qa/validate-clamav-ci.mjs --ready
+      - name: Run unchanged financial harness against the real API and disposable database
+        run: node tools/qa/run-financial-integrity-ci.mjs
+      - name: Preserve Auth, RLS and Storage isolation regressions
+        if: ${{ always() && steps.supabase-start.outcome == 'success' }}
+        run: npm run test:supabase
+      - name: Preserve receipt database, roles and concurrency regressions
+        if: ${{ always() && steps.supabase-start.outcome == 'success' && steps.api-build.outcome == 'success' }}
+        run: node tools/qa/verify-payment-receipts-ci.mjs
+      - name: Preserve scanner failure-mode regressions
+        if: ${{ always() && steps.clamav-ready.outcome == 'success' }}
+        run: node tools/qa/validate-clamav-ci.mjs --failure-modes
+      - name: Stop only this job's disposable Supabase project
+        if: ${{ always() && steps.supabase-start.outcome != 'skipped' }}
         run: |
-          eval "$(npx supabase status -o env)"
-          SUPABASE_URL="$API_URL" SUPABASE_ANON_KEY="$ANON_KEY" npm run test:supabase
+          stop_code=0
+          npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || stop_code=$?
+          node tools/qa/supabase-start-diagnostics.mjs --cleanup-check "$stop_code"
+          exit "$stop_code"
+      - name: Stop only this job's ClamAV container
+        if: always()
+        run: node tools/qa/stop-clamav-ci.mjs
+      - name: Upload independent sanitized financial evidence, including partial failures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: financial-security-evidence
+          path: |
+            ${{ runner.temp }}/livio-financial-security/financial-runner-summary.json
+            ${{ runner.temp }}/livio-financial-security/financial-api.log
+            ${{ runner.temp }}/livio-financial-security/workflow-stages/financial-stage3.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-qpdf.json
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-supabase-*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/clamav-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/receipt-migration-validation.json
+          if-no-files-found: ignore
+
+  synthetic-restore:
+    # The restore rehearsal has its own ephemeral Supabase/PostgreSQL stack and cannot be skipped by browser failures.
+    if: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/validation/gha-ci-20261029' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Start a restore-only disposable Supabase and PostgreSQL stack
+        run: node tools/qa/prepare-local-supabase-ci.mjs
+      - name: Restore synthetic archive to a new database and verify recovery invariants
+        run: node tools/qa/restore-local-ci.mjs
+      - name: Upload sanitized restore evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-restore-evidence
+          path: |
+            ${{ runner.temp }}/livio-integrated-artifacts/ci-prebuilt-supabase-*.json
+            ${{ runner.temp }}/livio-integrated-artifacts/restore-rehearsal.json
+            ${{ runner.temp }}/livio-integrated-artifacts/source-archive-toc.txt
+            ${{ runner.temp }}/livio-integrated-artifacts/schema-filtered-archive-toc.txt
+          if-no-files-found: ignore
+      - name: Stop only this disposable Supabase project
+        if: always()
+        run: npx supabase stop --project-id livio-legal-crm --no-backup > /dev/null 2>&1 || true
