@@ -1,91 +1,57 @@
 # Contexto do projeto Lívio
 
-Atualizado em 22/11/2026. Este arquivo registra o estado atual. Históricos extensos e resultados de execução ficam fora do código.
+Atualizado em 22/11/2026 (São Paulo). Este documento registra o estado atual; evidências brutas ficam fora do código.
 
-## Infraestrutura confirmada pelo proprietário
+## Publicação efetivada na Vercel
 
-O proprietário esclareceu que dispõe somente de Vercel e Supabase, sem outro servidor. Não assumir um host Docker/Dokploy disponível nem tratar sua contratação como requisito já aceito. O pacote Compose abaixo foi validado em CI, mas sua implantação proposta não corresponde à infraestrutura informada e não resolve sozinho a publicação.
+O proprietário autorizou organização, testes e publicação. A infraestrutura confirmada é somente Vercel e Supabase. O bloqueio ClamAV foi resolvido sem outro provedor, upgrade de plano, bypass de segurança ou migration no banco compartilhado.
 
-A Vercel oferece Container Runtime em beta e o plano consultado é Hobby. Foi criado o projeto `controle-livio-scanner` na mesma conta Vercel, sem upgrade nem outro provedor, com ClamAV real e gateway autenticado. O primeiro deployment `dpl_8nBQ9RMaf4SH5ReBWndwb9d6L2Qc` chegou a READY e foi promovido somente no projeto scanner: HTTPS hospedado aceitou arquivo sintético limpo, identificou EICAR e negou token incorreto (401). O cliente compilado da API aceitou limpo e rejeitou EICAR com 422. Chamadas iniciais levaram aproximadamente 13 segundos. Configuradas na API Production somente as chaves gateway/token/timeout necessárias, sem registrar seus valores. O redeploy da API e sua promoção ainda precisam ser concluídos.
+API, web e scanner chegaram a READY, foram verificados isoladamente e promovidos. A API Vercel confirmou que os três aliases apontam para os deployments esperados:
 
-Implementado Dockerfile próprio da Vercel, gateway reutilizável, listener HTTP atrás do TLS da plataforma e inicialização do engine. Definições reais são copiadas para scratch, com verificação do timestamp no cabeçalho CVD e recusa após 48 horas. Checagens de atualização são feitas sob demanda, parando o engine antes do load-test FreshClam e retomando a varredura depois; não carregar dois engines simultaneamente. Adicionada homologação CI com 2 GiB/uma CPU, raiz somente leitura e scratch limitado, incluindo ciclo de atualização; resultado ainda pendente. Quatro regressões de cabeçalho foram adicionadas e precisam passar. A recomendação oficial de 3–4 GiB exige comprovar consumo também nesse ciclo, não apenas a primeira varredura.
+| Serviço        | Endereço público                          | Deployment                       |
+| -------------- | ----------------------------------------- | -------------------------------- |
+| API NestJS     | https://controle-livio.vercel.app         | dpl_86K8FWST1RfT1PYeKWderX6JwTbH |
+| Web Next.js    | https://controle-livio-web.vercel.app     | dpl_3HyoJ3c1nLV5dnmPYpaEmUgpDZ3o |
+| Scanner ClamAV | https://controle-livio-scanner.vercel.app | dpl_2xXJ61LHo3NrJa6yh4Wxrr97erhM |
 
-Referências consultadas: [Container Runtime Vercel](https://vercel.com/docs/functions/runtimes/container), [limites Functions](https://vercel.com/docs/functions/limitations), [ClamAV Docker](https://docs.clamav.net/manual/Installing/Docker.html) e [limites Edge Functions Supabase](https://supabase.com/docs/guides/functions/limits). A publicação final da API/web ainda não foi concluída; o scanner hospedado já tem prova real inicial. Nenhuma proteção de arquivos foi desativada. A proteção de login da Vercel foi removida apenas do novo projeto scanner, cujo acesso exige Bearer próprio; os projetos existentes não tiveram essa proteção alterada.
+Após promoção: API live/ready 200, clients sem login 401; web, reset-password e sw.js 200; preflight API 204 com origem pública da web correta. Chrome real em 360/1280 px: formulário carregado, foco por teclado, zero overflow e zero erros JavaScript. Esses probes não executam operações de negócio com dados reais.
 
-## Pacote Compose ClamAV — validado somente em CI
+As fontes publicadas de API/web são as de dcdcbdf; o scanner é fc4bbac. Comparação Git confirmou igualdade das respectivas fontes executáveis com 7da4a69, que alterou somente a ferramenta CI depois de fc4bbac. Branch ativa fix/runtime-security-20261122; PR #4 permanece aberto; main não foi alterada nesta etapa.
 
-O proprietário pediu incluir o antivírus na versão que será atualizada pelo Git. Incluídos Compose com ClamAV 1.5.4/FreshClam, gateway Node 24 e HTTPS Caddy; imagens oficiais fixadas por digest, default de publicação em loopback e nenhuma porta pública clamd/8080. O pacote precisa de host Docker e DNS próprios; não é executado automaticamente pela Vercel.
+## Scanner no plano atual
 
-A API Vercel passa a executar `release:environment` após compilar: configuração incompleta impede um build READY e preserva o alias anterior. A validação exige runtime Production, destino staging/production remoto e scanner; erros são sanitizados para não expor credenciais. Quatro regressões locais passaram, incluindo ausência de scanner, bypass local rejeitado e erro com URL secreta.
+Criado o projeto controle-livio-scanner na mesma conta Vercel Hobby, usando Container Runtime beta. Dockerfile.vercel combina imagens oficiais fixadas de Node 24 e ClamAV 1.5.4. O gateway exige Bearer próprio; TLS é terminado pela Vercel e clamd escuta apenas no loopback do container. A proteção de login Vercel foi removida somente desse novo projeto para permitir chamadas autenticadas da API; as proteções dos projetos existentes foram preservadas.
 
-A workflow dedicada Scanner deployment package testa a composição em Linux descartável com TLS real de CA privada de teste, ClamAV/EICAR reais, limites, autenticação, cliente compilado da API e pausa/retomada do daemon. Não toca banco, infraestrutura persistente ou destinatários externos. Gates locais completos PASS: formato, lint, release check, TypeScript, 491 Vitest, Prisma, builds e 215 testes Node.
+Configuradas no secret manager API Production as chaves CLAMAV_GATEWAY_URL, CLAMAV_GATEWAY_TOKEN e CLAMAV_TIMEOUT_MS. Nenhum valor ou segredo é registrado aqui. O build mantém release:environment obrigatório.
 
-Candidata final do código: `482650af4bffcdecb43b6e222df94b35eb8dbb5f`. Quality [45078508272](https://github.com/steveejobs/controle-livio/actions/runs/45078508272) 4/4 PASS, recovery [45078508226](https://github.com/steveejobs/controle-livio/actions/runs/45078508226) PASS e pacote scanner [45078508364](https://github.com/steveejobs/controle-livio/actions/runs/45078508364) PASS: oito grupos de checks reais, ClamAV 1.5.4, TLS, EICAR, cliente da API, falha fechada e retomada. `/tmp` e `/var/tmp` do scanner usam tmpfs; core dumps desativados. Recursos próprios CI parados ao concluir. A primeira candidata 038159a também aprovou o pacote; seus runs Quality/recovery foram cancelados em favor da versão final.
+A raiz pode ser somente leitura; assinaturas são copiadas para scratch. Cabeçalhos CVD inválidos, excessivamente futuros ou mais antigos que 48 horas são recusados. FreshClam verifica atualizações sob demanda com intervalo de seis horas; o engine anterior é parado antes do load-test da base e reiniciado em seguida. Um sinal operacional local permite verificar o mesmo ciclo na CI, sem expor endpoint de manutenção. Rede/TLS/timeout/base inválida/veredito inválido continuam bloqueando arquivos. Não há serviço externo recebendo documentos.
 
-O novo gate foi confirmado na própria Vercel: deployment `dpl_J3nsi54tvjgDwPz2qrdbQDAXhNgQ` rejeitou o build em `release:environment`, exclusivamente por configuração ClamAV ausente, em vez de chegar a READY com startup quebrado. Esse gate e a configuração API não mudaram entre 038159a e 482650a. Nenhum alias público foi promovido; web e API ready anteriores continuam 200 nas verificações anteriores. O endpoint Dokploy consultado repetiu timeout; o proprietário esclareceu depois que não dispõe de outro servidor. A proposta anterior de hospedagem externa não está aprovada. Nenhuma hospedagem paga foi contratada, migration aplicada ou proteção desativada.
+HTTPS hospedado aceitou limpo, identificou EICAR, negou token incorreto (401), método incorreto (404) e tamanho excedido (413). O cliente compilado da API aceitou limpo e lançou 422 para EICAR. A versão ajustada respondeu em aproximadamente 0,4–0,7 s nas chamadas verificadas; inicialização fria isolada levou aproximadamente 12 s. Essas medições não garantem latência universal.
 
-## Produto e arquitetura
+Scanner deployment package [45092197283](https://github.com/steveejobs/controle-livio/actions/runs/45092197283): PASS. Compose HTTPS original aprovado e container Vercel aprovado com 2 GiB, uma CPU, sem swap adicional, raiz somente leitura e scratch limitado a 512 MiB. Testou EICAR real, autenticação, tamanho e ciclo FreshClam/reinicialização, sem alterar as bases do fornecedor. Pico medido: 1.220.866.048 bytes; recursos próprios CI parados ao concluir. Quatro regressões de cabeçalho passaram.
 
-CRM jurídico e controle financeiro multiempresa em monorepo TypeScript estrito:
+O Compose anterior é uma opção separada de host Docker; não é a implantação usada. O projeto scanner não tem deploy automático Git conectado: alterações nele exigem deploy específico. Supabase permanece responsável por Database, Auth e Storage.
 
-- `apps/web`: Next.js, sessão Supabase SSR, interface e tema centralizado.
-- `apps/api`: NestJS, autorização por organização/permissão, operações críticas e auditoria.
-- `packages/shared`: contratos, validação e regras financeiras puras.
-- `packages/db`: Prisma 7.10.1, adapter-pg e pool PostgreSQL.
-- `packages/ui`: componentes compartilhados.
-- `supabase/migrations`: único histórico operacional de migrations.
-- `tools/<domínio>`: ferramentas de manutenção e validação, fora do runtime.
+## Arquitetura e regras
 
-Node >=24.15 <25; versão validada 24.22.3. Valores monetários usam Decimal/string. O schema não foi migrado no banco compartilhado nesta etapa.
+Monorepo TypeScript estrito: apps/web (Next.js/SSR/tema), apps/api (NestJS/autorização/auditoria), packages/shared (contratos/regras), packages/db (Prisma 7.10.1/adapter-pg), packages/ui e tools por domínio. Node validado 24.22.3, requisito >=24.15 <25. Dinheiro usa Decimal/string. Toda operação de negócio exige organização autenticada e permissão. Não executar migrations, reset ou testes de escrita genéricos no banco compartilhado sob autorização de deploy.
 
-## Organização do repositório
+Preservadas correções anteriores de precisão Decimal, SQLSTATE/unique, retry serializável limitado, descarte de conexão após rollback e confiança TLS Supabase. A guarda release:check impede que .vercelignore exclua módulos versionados, incluindo relatórios. Nenhuma regra financeira ou asserção de isolamento foi relaxada para aprovar testes.
 
-A pasta principal é `controle-livio`, origin `steveejobs/controle-livio`. As duas worktrees antigas foram arquivadas fora de Documents/GitHub. A pasta principal e seus pacotes foram verificados após a operação.
+## Validação
 
-Nesta etapa, o proprietário autorizou limpar o projeto e publicar a versão final na Vercel. A autorização de deploy substitui as restrições históricas de publicação; não autoriza reset/migrations destrutivas ou testes de negócio no banco compartilhado.
+Gates locais completos PASS: formato, lint, release check, TypeScript, 491 Vitest, Prisma, builds API/web e 219 testes Node. Formato/lint foram repetidos após o último ajuste da ferramenta de ensaio.
 
-Relatórios de auditorias antigas, CSVs/JSONs gerados, prompts históricos e dois geradores dependentes desses inventários foram arquivados fora do repositório. Os testes ativos, fixtures, decisões de arquitetura, ferramentas atuais, logos/ícones e migrations foram preservados.
+Versão validada 7da4a69c137718ed5a8c9a1078f406ad37e24f79: Quality [45092197197](https://github.com/steveejobs/controle-livio/actions/runs/45092197197) 4/4 PASS, recuperação [45092197219](https://github.com/steveejobs/controle-livio/actions/runs/45092197219) PASS e scanner [45092197283](https://github.com/steveejobs/controle-livio/actions/runs/45092197283) PASS. Os seis jobs passaram na mesma versão. A execução anterior fc4bbac também aprovou Quality 4/4 e recuperação; as duas falhas anteriores no ensaio auxiliar scanner foram corrigidas sem relaxar suas verificações. Todos esses jobs usam ambientes próprios e dados sintéticos.
 
-Arquivo privado desta organização: `%LOCALAPPDATA%/LivioBackups/release-cleanup-20261122T211617`. Contém os históricos, snapshots dos documentos substituídos e resultados locais anteriores. O Git também preserva os arquivos anteriormente versionados.
+A homologação funcional anterior comprovou 42 testes de interface simulada, 17 jornadas reais, financeiro 312, identidade/operação 43, escopo de cliente 10 e recuperação 58. Storage teve 64 requisições aprovadas e oito células não executadas. Contagens se sobrepõem e não são percentual de cobertura. Ver docs/HOMOLOGACAO_2026_11_22.md para evidências e limites.
 
-## Validação comprovada
+## Organização e evidências
 
-Candidata funcional `2f29ae9c18895edd7dce08b54036dbc807cb7d40`, merge sintético executado `86773b917eebd9a315329e519b07b53932d5a3a7`:
+Principal: controle-livio, origin steveejobs/controle-livio. Duas worktrees antigas foram arquivadas fora de Documents/GitHub. Históricos, prints e resultados gerados foram retirados da árvore ativa; fontes, fixtures, assets necessários e migrations foram preservados. Arquivo privado: %LOCALAPPDATA%/LivioBackups/release-cleanup-20261122T211617. Novas evidências e referência de rollback ficam em pasta temporária privada fora do repositório; nenhum segredo foi publicado em artefatos.
 
-- Quality [45039096039](https://github.com/steveejobs/controle-livio/actions/runs/45039096039): quatro jobs PASS.
-- Recovery [45039095937](https://github.com/steveejobs/controle-livio/actions/runs/45039095937): PASS.
-- 491 Vitest, 208 testes Node, 42 testes de interface simulada e 17 jornadas reais de navegador.
-- Financeiro 312/312, identidade/operação 43/43, escopo de cliente 10/10, recuperação 58/58.
-- Storage: 64 requisições PASS; oito células não executadas não contam como aprovação.
-- Recuperação coordenada COMPLETE, com 68 objetos físicos, login e API restaurados.
-- PostgreSQL nativo: 15 casos PASS nas mesmas fontes de aplicação/banco.
-- Formato, lint, TypeScript, Prisma, builds, OCR compilado e bundle aprovados; auditoria sem vulnerabilidades conhecidas.
+## Limites remanescentes
 
-Após a organização, passaram novamente formato, lint, TypeScript, 491 Vitest, Prisma Validate, builds API/web e 208 testes Node das ferramentas. Os links Markdown locais também foram conferidos sem destino quebrado. A árvore versionada passou de 602 para 514 arquivos e de 8.434.596 para aproximadamente 4.025.427 bytes. Contagens se sobrepõem e não representam cobertura universal.
-
-## Publicação preparada — bloqueio de infraestrutura
-
-Candidata executável final `b2a8b88a820aeedc0d895c1dc3a45ec06c86ba1a`. Quality [45073129619](https://github.com/steveejobs/controle-livio/actions/runs/45073129619) 4/4 PASS e recovery [45073129613](https://github.com/steveejobs/controle-livio/actions/runs/45073129613) 1/1 PASS. Merge CI `31acc7959c62825a399bcbb180e9952190baf094` e candidata têm a mesma árvore Git `8b9bbcdc508c6c9de98c912956e5c8f97840b5bd`. A nova guarda de upload acrescenta três testes aos 208 existentes e preserva 474 fontes versionadas. A árvore final tem 517 arquivos; 514 era o estado após a limpeza inicial, antes da guarda.
-
-Os dois deployments Production foram preparados com `--skip-domain`: API `dpl_6yzAidzz8i7Vd1ny2kyxbEcy8fiq` e web `dpl_HEFVgHkPY6NHh5sskU2sL7K5ZrE8`, ambos READY de build. A web preparada respondeu 200 em `/`, `/reset-password` e `/sw.js`. A API preparada retornou 500 em live/ready; o log confirmou ZodError por ClamAV ausente, sem erro de módulo. Não houve promoção aos aliases públicos nem merge em main. Web pública e API ready anteriores seguem 200; clients sem login retorna 401.
-
-A publicação final depende de resolver a execução do scanner na infraestrutura disponível e testá-lo hospedado. A busca anterior nas conexões não encontrou um scanner utilizável; o proprietário esclareceu que possui somente Vercel e Supabase. A hipótese de recuperar um servidor Dokploy não deve ser tratada como infraestrutura confirmada. Nenhum serviço novo pago foi contratado. Não contornar a validação nem apontar o scanner para endereço fictício.
-
-A primeira preparação Vercel do commit de limpeza 6bea0db revelou uma exclusão indevida: `reports/` sem âncora retirava também os módulos API/web de relatórios. Nenhum alias público foi promovido. Regras corrigidas para `/reports/` e demais pastas de artefatos na raiz; `release:check` verifica as fontes versionadas contra `.vercelignore` isoladamente, com três regressões Git reais e execução na CI. O código dos módulos permaneceu intacto.
-
-Busca de infraestrutura existente: Vercel sem variáveis scanner, ambiente local sem scanner, Cloudflare sem zonas e sem Worker relacionado, servidor Dokploy sem resposta nas portas de administração/HTTPS verificadas. Nenhum serviço ClamAV existente foi identificado nas conexões disponíveis; nenhum recurso pago novo foi criado.
-
-Vercel acessível, autenticada, com dois projetos existentes em Node 24:
-
-- API: `controle-livio`, raiz `apps/api`.
-- Web: `controle-livio-web`, raiz `apps/web`.
-
-A API Production não lista CLAMAV_HOST nem CLAMAV_GATEWAY_URL/TOKEN; ausência confirmada pelos metadados da API Vercel (33 variáveis, sem exportar valores). A candidata exige scanner em staging/production; publicar sem configurá-lo impede sua inicialização. Informações sobre um serviço existente foram solicitadas. Segredos protegidos da Vercel não são presumidos ausentes porque o CLI não os exporta. Não há configuração scanner no ambiente local; o endpoint de infraestrutura existente repetiu timeout.
-
-A candidata ainda não foi promovida aos aliases públicos. Builds preparados devem usar produção sem atribuição automática de domínio, seguidos de verificação antes da promoção. Não desativar o scanner para liberar deploy.
-
-## Limites de homologação
-
-SMTP/scanner/schedulers hospedados ainda precisam de prova operacional. Dokploy repetiu timeout. Push físico, câmera, Safari/iOS e recorrência automática da agenda não foram homologados. O ensaio sintético não restaura backup histórico protegido, configurações hospedadas ou segredos.
+Os probes hospedados não substituem jornada autenticada completa com dados reais nem ensaio de carga contínua. SMTP externo, push físico, câmera, Safari/iOS e recorrência automática da agenda não foram homologados. O ensaio de recuperação sintético não restaura backup histórico protegido, segredos ou configuração hospedada. Container Runtime ainda é beta e o consumo deve ser monitorado conforme as bases crescem. Não prometer ausência universal de defeitos.
 
 Ver [documentação](docs/README.md), [homologação](docs/HOMOLOGACAO_2026_11_22.md) e [publicação](docs/DEPLOYMENT.md).

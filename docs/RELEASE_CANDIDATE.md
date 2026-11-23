@@ -6,7 +6,9 @@ O proprietário autorizou a organização e publicação na Vercel em 22/11/2026
 
 A candidata funcional anterior passou os cinco jobs de CI e os seis gates locais. A organização remove históricos e artefatos da árvore ativa, preservando o runtime e os testes. As fontes de aplicação e banco não foram alteradas nesta limpeza.
 
-A API Production está sem configuração de scanner listada na Vercel. A candidata exige ClamAV por rede privada ou gateway HTTPS autenticado. Esse bloqueio precisa ser resolvido antes de promover a API.
+O bloqueio ClamAV foi resolvido com Container Runtime no projeto controle-livio-scanner, na mesma Vercel Hobby. Gateway/token/timeout foram configurados na API Production; o build passou. Scanner, API e web foram promovidos, e os três aliases públicos foram conferidos contra os deployments esperados. Não houve outro provedor, upgrade ou migration no banco compartilhado.
+
+Probes públicos: API live/ready 200, clients sem login 401, web/reset/worker 200 e CORS 204. Chrome real validou formulário, teclado e ausência de overflow em 360/1280 px, sem erros JavaScript. Scanner HTTPS aceitou limpo, detectou EICAR e recusou autenticação/tamanho/método inválidos. O cliente compilado da API rejeitou o infectado com 422. A CI aprovou atualização FreshClam/reinicialização sob 2 GiB, com pico de aproximadamente 1,14 GiB.
 
 ## Critérios
 

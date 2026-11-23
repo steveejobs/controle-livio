@@ -1,13 +1,14 @@
 # Publicação
 
-A web e a API são dois projetos Vercel do mesmo monorepo. Supabase é o destino persistente e não é recriado durante o deploy.
+A web, a API e o scanner são projetos Vercel do mesmo monorepo. Supabase é o destino persistente e não é recriado durante o deploy.
 
 ## Projetos
 
-| Serviço     | Projeto            | Root Directory | Runtime   |
-| ----------- | ------------------ | -------------- | --------- |
-| API NestJS  | controle-livio     | apps/api       | Node 24.x |
-| Web Next.js | controle-livio-web | apps/web       | Node 24.x |
+| Serviço     | Projeto                | Root Directory | Runtime             |
+| ----------- | ---------------------- | -------------- | ------------------- |
+| API NestJS  | controle-livio         | apps/api       | Node 24.x           |
+| Web Next.js | controle-livio-web     | apps/web       | Node 24.x           |
+| ClamAV HTTP | controle-livio-scanner | tools/scanner  | Container / Node 24 |
 
 Requisitos do código: Node >=24.15 <25; homologação em 24.22.3. Habilite fontes externas à Root Directory. Build/install vêm dos respectivos `vercel.json`. A API usa preset NestJS, Fluid compute e região `cle1`; a web usa o adaptador Next.js nativo.
 
@@ -29,9 +30,10 @@ O proprietário confirmou infraestrutura somente Vercel e Supabase. O pacote
 requer um host Docker próprio e não é uma implantação validada nessa infraestrutura.
 A versão para [Container Runtime Vercel](https://vercel.com/docs/functions/runtimes/container)
 usa `tools/scanner/Dockerfile.vercel` no projeto separado `controle-livio-scanner`,
-na mesma conta. O primeiro serviço hospedado já aceitou limpo, identificou EICAR e
-negou token incorreto; homologação de atualização e redeploy da API ainda estão
-em andamento. Veja o [procedimento do scanner](../tools/scanner/README.md).
+na mesma conta. O serviço hospedado aceitou limpo, identificou EICAR e negou token
+incorreto. A CI também aprovou FreshClam/reinicialização com limite de 2 GiB.
+API, web e scanner foram promovidos e os aliases públicos conferidos.
+Veja o [procedimento do scanner](../tools/scanner/README.md).
 Não presumir outro servidor nem contratar hospedagem como consequência do deploy. O build Vercel
 executa `release:environment` e falha se faltar configuração obrigatória, antes de
 substituir a versão pública. Valores das credenciais não são impressos.
@@ -89,4 +91,4 @@ Em falha de inicialização ou de fluxos críticos, mantenha o alias anterior. S
 
 ## Estado atual
 
-Publicação autorizada em 22/11/2026. Scanner hospedado na Vercel com prova inicial real e configuração de gateway cadastrada na API Production. O redeploy da API/web e a homologação final ainda estão pendentes; não considerar a publicação concluída só por configurar variáveis. Não desativar o scanner para contornar o gate.
+Publicação autorizada e efetivada em 22/11/2026. API, web e scanner chegaram a READY e foram promovidos aos domínios públicos. API live/ready 200, clients sem login 401, web/reset/worker 200 e CORS 204; o navegador real verificou o formulário em 360/1280 px sem overflow ou erros JavaScript. Identidades dos deployments e limites da homologação estão em [PROJECT_CONTEXT.md](../PROJECT_CONTEXT.md). A jornada autenticada com dados reais não foi executada nesta publicação; as jornadas completas de negócio usam CI isolada. Não desativar o scanner para contornar um gate futuro.

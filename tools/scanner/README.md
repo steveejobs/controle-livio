@@ -1,6 +1,6 @@
 # Serviço de varredura
 
-O pacote Compose inclui ClamAV 1.5.4, gateway Node 24 e proxy HTTPS Caddy. Imagens oficiais têm digest fixado. Sua execução foi validada em CI Linux com Docker; não foi validada na Vercel ou no Supabase. O proprietário confirmou que dispõe somente dessas duas plataformas, sem host Docker adicional. Os passos abaixo descrevem a opção de host dedicado e não uma infraestrutura existente ou contratação autorizada.
+O scanner está hospedado na Vercel com ClamAV 1.5.4 e gateway Node 24, em imagens oficiais fixadas por digest. Supabase continua responsável por banco, autenticação e arquivos; não foi contratado outro servidor. Há também um pacote Compose com Caddy para host dedicado, validado separadamente em CI e não usado nesta publicação.
 
 A implantação na Vercel usa `Dockerfile.vercel` e `vercel.json`, separadamente do Compose. O [Container Runtime em beta](https://vercel.com/docs/functions/runtimes/container) segue os limites de Functions.
 
@@ -10,9 +10,11 @@ O projeto `controle-livio-scanner` usa esta pasta como raiz, preset Container e 
 
 Na raiz desta pasta, selecione explicitamente o projeto scanner e faça `vercel deploy --prod --skip-domain --yes`. Teste com credencial válida, token incorreto, arquivo sintético limpo e EICAR; confirme que o cliente compilado da API lança 422 para o infectado. Só então promova o scanner. Configure `CLAMAV_GATEWAY_URL` com `/scan`, `CLAMAV_GATEWAY_TOKEN` e um `CLAMAV_TIMEOUT_MS` que comporte a inicialização fria, respeitando o limite do schema da API. Faça o redeploy da API depois dessa configuração.
 
-As definições incluídas na imagem são copiadas para `/tmp/clamav`; a raiz pode ser somente leitura. O cabeçalho CVD precisa identificar uma base ClamAV válida e atualizada nas últimas 48 horas. Após seis horas, a próxima varredura verifica atualizações usando FreshClam; o engine anterior é parado antes de testar a base e reiniciado em seguida para evitar dois engines simultâneos. Erros, base vencida e timeout bloqueiam o arquivo. Não há envio dos documentos para serviço de terceiros.
+As definições incluídas na imagem são copiadas para `/tmp/clamav`; a raiz pode ser somente leitura. O cabeçalho CVD precisa identificar uma base ClamAV válida e atualizada nas últimas 48 horas. Após seis horas, a próxima varredura verifica atualizações usando FreshClam; checagens bem-sucedidas são espaçadas para evitar recarregar a base em todo arquivo. O engine anterior é parado antes de testar a base e reiniciado em seguida para evitar dois engines simultâneos. Erros, base vencida e timeout bloqueiam o arquivo. Não há envio dos documentos para serviço de terceiros.
 
 `verify-vercel-ci.mjs` verifica o container real com 2 GiB de memória, sem swap adicional, uma CPU, raiz somente leitura e scratch de 512 MiB. Inclui varredura real e ciclo de FreshClam/reinicialização. Não confundir essa prova isolada com homologação completa da API publicada. O projeto scanner não foi conectado a deploy automático Git nesta etapa; alterações exigem novo deploy específico.
+
+A execução [45092197283](https://github.com/steveejobs/controle-livio/actions/runs/45092197283) passou, com pico de 1.220.866.048 bytes e inicialização fria de aproximadamente 12 s. HTTPS hospedado e cliente compilado da API também foram testados com limpo/EICAR. A verificação inicial do cabeçalho não substitui a validação criptográfica das bases pelo ClamAV/FreshClam.
 
 ## Servidor
 

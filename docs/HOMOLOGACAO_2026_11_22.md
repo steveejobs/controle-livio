@@ -8,6 +8,16 @@ A candidata funcional `2f29ae9c18895edd7dce08b54036dbc807cb7d40` passou os cinco
 
 ## Resultados
 
+### Publicação Vercel
+
+O erro de configuração ClamAV foi resolvido. API, web e scanner foram promovidos e seus aliases conferidos. API live/ready 200, clients sem login 401, web/reset/worker 200 e CORS 204. Chrome real em 360/1280 px verificou formulário e foco por teclado, sem overflow ou erros JavaScript. Esses probes não gravam negócios no banco compartilhado.
+
+O scanner HTTPS hospedado aceitou limpo e identificou EICAR; o cliente compilado da API lançou 422 para infectado. Autenticação incorreta 401, método inválido 404 e arquivo excedido 413. [Pacote scanner 45092197283](https://github.com/steveejobs/controle-livio/actions/runs/45092197283) PASS, incluindo Compose/TLS e container Vercel sob 2 GiB/uma CPU/raiz somente leitura/scratch limitado, FreshClam e reinicialização. Pico de memória: 1.220.866.048 bytes. Gates locais repetidos com 491 Vitest e 219 testes Node aprovados. Ver [contexto](../PROJECT_CONTEXT.md) para identidades e CI atual.
+
+Versão final de código 7da4a69: [Quality 45092197197](https://github.com/steveejobs/controle-livio/actions/runs/45092197197) 4/4 PASS, [recuperação 45092197219](https://github.com/steveejobs/controle-livio/actions/runs/45092197219) PASS e pacote scanner PASS: seis jobs aprovados na mesma versão. As fontes executáveis dos deployments publicados foram comparadas com essa versão sem diferenças.
+
+### Homologação funcional anterior
+
 | Verificação                                        | Resultado                                        |
 | -------------------------------------------------- | ------------------------------------------------ |
 | Instalação e auditoria de dependências             | PASS; zero vulnerabilidades conhecidas           |
@@ -36,8 +46,8 @@ O ensaio coordenado restaurou SQL/Auth e 68 objetos físicos, comparou catálogo
 
 ## Limites
 
-- A candidata precisa de homologação própria após implantação. A versão pública anterior respondeu aos cinco probes de disponibilidade; isso não comprova a candidata.
-- Scanner, SMTP externo e schedulers hospedados continuam pendentes; a API Vercel está sem configuração de scanner listada.
+- A publicação teve probes hospedados e prova real do scanner; a jornada autenticada completa com dados reais não foi executada. As jornadas de negócio completas usam infraestrutura CI isolada.
+- SMTP externo e schedulers hospedados continuam pendentes. O scanner já está configurado e hospedado; crescimento das bases, cotas e execução contínua precisam de monitoramento.
 - Câmera, push físico e Safari/iOS não foram homologados. Recorrência automática da agenda não foi comprovada.
 - As oito células Storage não executadas não contam como PASS.
 - O ensaio sintético não restaura backup histórico protegido, segredos ou configuração hospedada. O restore SQL mantém exclusões declaradas.
