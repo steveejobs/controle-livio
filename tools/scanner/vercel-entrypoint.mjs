@@ -53,6 +53,12 @@ function ping() {
 }
 
 let daemon;
+let lastVendorCheck = 0;
+let refreshRequested = false;
+// Operational refresh is local to the process; it is never an HTTP/client option.
+process.on('SIGUSR1', () => {
+  refreshRequested = true;
+});
 const maintenanceStops = new WeakSet();
 async function startDaemon() {
   daemon = run('clamd', ['--config-file=/app/clamd-vercel.conf', '--foreground']);
@@ -90,16 +96,15 @@ async function updateDefinitions() {
   ]);
   if (result !== 0) throw new Error('Scanner database update failed');
   await definitionsFresh();
+  lastVendorCheck = Date.now();
 }
 
 let ready = (async () => {
   await mkdir('/tmp/clamav', { recursive: true });
   await cp('/var/lib/clamav', '/tmp/clamav', { recursive: true });
-  try {
-    await definitionsFresh();
-  } catch {
-    await updateDefinitions();
-  }
+  const age = await definitionsFresh().catch(() => Infinity);
+  if (age > 6 * 3600_000) await updateDefinitions();
+  else lastVendorCheck = Date.now();
   await startDaemon();
   console.log(JSON.stringify({ scanner: 'ready', startupMs: Date.now() - started }));
 })();
@@ -117,8 +122,20 @@ const server = createScannerServer({
     try {
       const check = async () => {
         await ready;
-        if ((await definitionsFresh()) > 6 * 3600_000) {
-          ready = updateDefinitions().then(startDaemon);
+        const age = await definitionsFresh().catch(() => Infinity);
+        if (
+          refreshRequested ||
+          age === Infinity ||
+          (age > 6 * 3600_000 && Date.now() - lastVendorCheck > 6 * 3600_000)
+        ) {
+          refreshRequested = false;
+          ready = updateDefinitions()
+            .then(startDaemon)
+            .catch((error) => {
+              process.exitCode = 1;
+              stop();
+              throw error;
+            });
           await ready;
         }
       };

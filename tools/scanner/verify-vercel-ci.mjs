@@ -109,19 +109,14 @@ try {
   assert.equal((await scan('synthetic', 'incorrect')).status, 401);
   assert.equal((await scan(Buffer.alloc(4 * 1024 * 1024 + 1))).status, 413);
   check('real ClamAV detects EICAR and accepts clean files; auth and size enforced');
-  // Reload actual signatures with freshclam while the old engine is stopped.
-  const update = docker([
-    'exec',
-    name,
-    'node',
-    '-e',
-    `const {readFileSync,writeFileSync}=require('fs');for(const name of ['daily.cld','daily.cvd']){try{const p='/tmp/clamav/'+name;const d=readFileSync(p);const h=d.subarray(0,512).toString('ascii').split(':');h[8]=String(Math.floor(Date.now()/1000)-7*3600);const out=Buffer.from(h.join(':').padEnd(512,' '));out.copy(d,0,0,512);writeFileSync(p,d);break;}catch{}}`,
-  ]);
-  assert.equal(update, '');
+  // Exercise the operational refresh without modifying signed vendor databases.
+  const pid = docker(['exec', name, 'pgrep', '-x', 'clamd']);
+  docker(['kill', '--signal', 'USR1', name]);
   const afterUpdate = await readyScan();
   assert.deepEqual(afterUpdate.body, { verdict: 'clean' });
   assert.deepEqual((await scan(eicar)).body, { verdict: 'infected' });
-  check('real vendor signature update and engine restart remain within the memory limit');
+  assert.notEqual(docker(['exec', name, 'pgrep', '-x', 'clamd']), pid);
+  check('real FreshClam check and engine restart remain within the memory limit');
   report.peakMemoryBytes = Number(docker(['exec', name, 'cat', '/sys/fs/cgroup/memory.peak']));
   assert(report.peakMemoryBytes > 0 && report.peakMemoryBytes <= report.memoryLimitBytes);
   assert.equal(JSON.parse(docker(['inspect', name]))[0].State.OOMKilled, false);
