@@ -119,7 +119,7 @@ try {
       name,
       'node',
       '-e',
-      `const fs=require('node:fs');const pid=fs.readdirSync('/proc').find(p=>{if(!/^\d+$/.test(p))return false;try{return fs.readFileSync('/proc/'+p+'/comm','utf8').trim()==='clamd';}catch{return false;}});if(!pid)throw Error('Engine process missing');process.stdout.write(pid);`,
+      `const fs=require('node:fs');const pid=fs.readdirSync('/proc').find(p=>{if(!/^[0-9]+$/.test(p))return false;try{return fs.readFileSync('/proc/'+p+'/comm','utf8').trim()==='clamd';}catch{return false;}});if(!pid)throw Error('Engine process missing');process.stdout.write(pid);`,
     ]);
   const pid = enginePid();
   docker(['kill', '--signal', 'USR1', name]);
