@@ -24,9 +24,15 @@ Para scanner, configure um dos transportes:
 
 Não exponha o TCP clamd publicamente. Veja [o gateway](../tools/scanner/README.md). Timeout, indisponibilidade ou veredito inválido devem bloquear o arquivo.
 
-O pacote `tools/scanner/compose.yaml` inclui ClamAV/FreshClam, gateway e proxy HTTPS.
-Ele precisa ser executado num host Docker com DNS; não é iniciado por um push do Git
-na Vercel. Após subir o serviço, configure URL/token no projeto API. O build Vercel
+O proprietário confirmou infraestrutura somente Vercel e Supabase. O pacote
+`tools/scanner/compose.yaml` inclui ClamAV/FreshClam, gateway e proxy HTTPS, mas
+requer um host Docker próprio e não é uma implantação validada nessa infraestrutura.
+A versão para [Container Runtime Vercel](https://vercel.com/docs/functions/runtimes/container)
+usa `tools/scanner/Dockerfile.vercel` no projeto separado `controle-livio-scanner`,
+na mesma conta. O primeiro serviço hospedado já aceitou limpo, identificou EICAR e
+negou token incorreto; homologação de atualização e redeploy da API ainda estão
+em andamento. Veja o [procedimento do scanner](../tools/scanner/README.md).
+Não presumir outro servidor nem contratar hospedagem como consequência do deploy. O build Vercel
 executa `release:environment` e falha se faltar configuração obrigatória, antes de
 substituir a versão pública. Valores das credenciais não são impressos.
 
@@ -83,4 +89,4 @@ Em falha de inicialização ou de fluxos críticos, mantenha o alias anterior. S
 
 ## Estado atual
 
-Publicação autorizada em 22/11/2026. A API Production não lista configuração ClamAV; a candidata não deve ser promovida sem resolver e testar essa dependência. Não desativar o scanner para contornar o gate.
+Publicação autorizada em 22/11/2026. Scanner hospedado na Vercel com prova inicial real e configuração de gateway cadastrada na API Production. O redeploy da API/web e a homologação final ainda estão pendentes; não considerar a publicação concluída só por configurar variáveis. Não desativar o scanner para contornar o gate.
